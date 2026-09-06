@@ -1,5 +1,4 @@
 "use client";
-import { createClient } from "@/lib/supabase/client";
 import {
   localGetAll,
   localPutMany,
@@ -11,11 +10,19 @@ import {
 /**
  * Reference sync engine, demonstrated on `employees`. Read path: instant local read,
  * then background pull + patch. Write path: optimistic local write, queued outbox,
- * flushed to Supabase in the background (and retried on reconnect).
+ * flushed to the server in the background (and retried on reconnect).
+ *
+ * IMPORTANT: `employees` (and any other staff-authenticated tenant data) is intentionally
+ * NOT queryable directly from the browser's Supabase client — its RLS policy only allows
+ * Super Admin access (see ARCHITECTURE.md and supabase/migrations/0001_init.sql). Staff PIN
+ * sessions are our own HMAC-signed cookie, not a Supabase Auth session, so a direct browser
+ * query would silently return zero rows under RLS rather than erroring. Both the pull and
+ * push paths below go through Next.js API routes (/api/employees) that verify the signed
+ * cookie server-side and use the service-role client — never straight to Supabase.
  *
  * To port another module (inventory, sales, ...): add its name to SYNCABLE_STORES in
- * lib/offline-db.ts, add a matching branch in flushOutbox()'s switch, and call
- * pullAndCache(store, restaurantId) the same way employees does below.
+ * lib/offline-db.ts, add its own /api/<module> route following app/api/employees/route.ts,
+ * and add a matching branch in pullAndCache()/flushOutbox() below.
  */
 
 export async function readFast<T>(store: "employees", restaurantId: string): Promise<T[]> {
@@ -23,13 +30,14 @@ export async function readFast<T>(store: "employees", restaurantId: string): Pro
 }
 
 export async function pullAndCache(store: "employees", restaurantId: string): Promise<void> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from(store)
-    .select("*")
-    .eq("restaurant_id", restaurantId);
-  if (error || !data) return; // offline or RLS-denied — local cache stays as the source of truth for now
-  await localPutMany(store, data);
+  try {
+    const res = await fetch(`/api/${store}`, { credentials: "include" });
+    if (!res.ok) return; // offline, or session no longer valid — local cache stays as-is
+    const { employees } = await res.json();
+    if (Array.isArray(employees)) await localPutMany(store, employees);
+  } catch {
+    // offline — local cache (already rendered) is the fallback, nothing else to do here
+  }
 }
 
 export async function writeOptimistic(
@@ -48,18 +56,19 @@ export async function flushOutbox(): Promise<void> {
   if (flushing) return;
   flushing = true;
   try {
-    const supabase = createClient();
     const entries = await readOutbox();
     for (const entry of entries) {
       try {
-        if (entry.op === "delete") {
-          await supabase.from(entry.store).update({ deleted_at: new Date().toISOString() }).eq("id", entry.row.id);
-        } else {
-          await supabase.from(entry.store).upsert(entry.row);
-        }
+        const res = await fetch(`/api/${entry.store}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ op: entry.op, row: entry.row }),
+        });
+        if (!res.ok) break; // stop on first failure (likely offline/expired session) — retry next flush
         await clearOutboxEntry(entry.outboxId);
       } catch {
-        break; // stop on first failure (likely offline) — remaining entries retry next flush
+        break;
       }
     }
   } finally {
@@ -67,28 +76,25 @@ export async function flushOutbox(): Promise<void> {
   }
 }
 
-/** Call once from a layout/page effect: retries the outbox on reconnect and periodically. */
+/** Call once from a layout/page effect: retries the outbox on reconnect and polls
+ *  periodically. (No Supabase Realtime subscription here — Realtime respects the same RLS
+ *  as normal queries, so it has the identical "silently empty" problem for staff-only tables
+ *  as a direct browser query would. A cross-terminal near-real-time update would need a
+ *  small server-sent-events or broadcast-channel proxy; the 30s poll below is the simple,
+ *  correct-under-RLS stand-in for now.) */
 export function startBackgroundSync(store: "employees", restaurantId: string) {
   const interval = setInterval(() => {
     flushOutbox();
     pullAndCache(store, restaurantId);
   }, 30_000);
-  const onOnline = () => flushOutbox();
+  const onOnline = () => {
+    flushOutbox();
+    pullAndCache(store, restaurantId);
+  };
   window.addEventListener("online", onOnline);
-
-  const supabase = createClient();
-  const channel = supabase
-    .channel(`${store}-${restaurantId}`)
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: store, filter: `restaurant_id=eq.${restaurantId}` },
-      () => pullAndCache(store, restaurantId)
-    )
-    .subscribe();
 
   return () => {
     clearInterval(interval);
     window.removeEventListener("online", onOnline);
-    supabase.removeChannel(channel);
   };
 }
