@@ -18,6 +18,7 @@ export function computeStatus(sub: Pick<SubscriptionRow, "current_period_end" | 
   if (sub.status === "cancelled") return "cancelled" as const;
   const periodEnd = new Date(sub.current_period_end);
   const grace = new Date(sub.grace_until);
+  if (sub.status === "trialing") return "active" as const;
   if (now <= periodEnd) return "active" as const;
   if (now <= grace) return "grace" as const;
   return "expired" as const;
@@ -25,5 +26,5 @@ export function computeStatus(sub: Pick<SubscriptionRow, "current_period_end" | 
 
 /** true = restaurant app may be used (active or within grace); false = must be blocked. */
 export function isUsable(status: ReturnType<typeof computeStatus>): boolean {
-  return status === "active" || status === "grace" || status === "trialing";
+  return status === "active" || status === "grace";
 }
