@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --chili-500: #D9481F;
+}
+body {
+  font-family: 'Public Sans', system-ui, sans-serif;
+}
