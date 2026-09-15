@@ -1,0 +1,118 @@
+"use client";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+
+type Employee = { id: string; name: string };
+type Entry = { id: string; type: string; amount: number; note: string | null; txn_date: string; employees?: { name: string } | null };
+
+export function EmployeeLedgerClient() {
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [employeeId, setEmployeeId] = useState("");
+  const [type, setType] = useState("salary");
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function loadAll() {
+    const [empRes, entryRes] = await Promise.all([fetch("/api/employees"), fetch("/api/employee-ledger")]);
+    const empData = await empRes.json();
+    const entryData = await entryRes.json();
+    if (empRes.ok) setEmployees(empData.employees ?? []);
+    if (entryRes.ok) setEntries(entryData.entries ?? []);
+  }
+  useEffect(() => {
+    loadAll();
+  }, []);
+
+  async function logPayment() {
+    if (!employeeId || !amount) return;
+    setSaving(true);
+    setError("");
+    const res = await fetch("/api/employee-ledger", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ employeeId, type, amount: Number(amount), note: note.trim() || undefined }),
+    });
+    setSaving(false);
+    if (!res.ok) {
+      setError((await res.json()).error);
+      return;
+    }
+    setAmount("");
+    setNote("");
+    loadAll();
+  }
+
+  return (
+    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8 max-w-3xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="font-display text-2xl font-semibold">Employee Ledger</h1>
+        <Link href="/dashboard" className="text-xs text-ink-mid underline hover:text-ink-strong">
+          ← Dashboard
+        </Link>
+      </div>
+
+      <div className="rounded-xl border border-line bg-surface p-5 mb-6">
+        <h2 className="font-display font-semibold mb-3">Log payment</h2>
+        {error && <p className="text-crimson-400 text-sm mb-2">{error}</p>}
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
+            <option value="">Choose employee…</option>
+            {employees.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name}
+              </option>
+            ))}
+          </select>
+          <select value={type} onChange={(e) => setType(e.target.value)} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
+            <option value="salary">Salary</option>
+            <option value="advance">Advance</option>
+            <option value="bonus">Bonus</option>
+            <option value="deduction">Deduction</option>
+          </select>
+        </div>
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" placeholder="Amount" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
+        </div>
+        <button onClick={logPayment} disabled={saving} className="rounded-md bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2">
+          {saving ? "Saving…" : "Log payment"}
+        </button>
+      </div>
+
+      <div className="rounded-xl border border-line bg-surface overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-raised/50 text-ink-mid text-xs uppercase">
+            <tr>
+              <th className="text-left p-3">Date</th>
+              <th className="text-left p-3">Employee</th>
+              <th className="text-left p-3">Type</th>
+              <th className="text-left p-3">Amount</th>
+              <th className="text-left p-3">Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((e) => (
+              <tr key={e.id} className="border-t border-line">
+                <td className="p-3 text-ink-mid">{e.txn_date}</td>
+                <td className="p-3 font-medium">{e.employees?.name}</td>
+                <td className="p-3 text-ink-mid capitalize">{e.type}</td>
+                <td className="p-3 font-mono">Rs {e.amount}</td>
+                <td className="p-3 text-ink-faint">{e.note ?? "—"}</td>
+              </tr>
+            ))}
+            {entries.length === 0 && (
+              <tr>
+                <td colSpan={5} className="p-6 text-center text-ink-faint">
+                  No payments logged yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </main>
+  );
+}

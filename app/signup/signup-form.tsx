@@ -23,9 +23,9 @@ export function SignupForm({ plans }: { plans: Plan[] }) {
 
   if (state.success) {
     return (
-      <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-6 text-center">
+      <div className="rounded-xl border border-line bg-surface p-6 text-center">
         <p className="text-lg font-semibold mb-2">Request received 🎉</p>
-        <p className="text-neutral-400 text-sm">
+        <p className="text-ink-mid text-sm">
           A Restro Pro platform admin will review and activate your restaurant shortly. You'll be
           able to log in with the owner email/password you just set once that happens — the
           4-digit PIN you chose becomes your admin staff PIN at that point.
@@ -35,7 +35,7 @@ export function SignupForm({ plans }: { plans: Plan[] }) {
   }
 
   return (
-    <form action={formAction} className="space-y-4 rounded-xl border border-neutral-800 bg-neutral-900 p-6">
+    <form action={formAction} className="space-y-4 rounded-xl border border-line bg-surface p-6">
       <div className="grid grid-cols-2 gap-3">
         <Field label="Restaurant name" name="restaurantName" required />
         <Field label="Owner name" name="ownerName" required />
@@ -48,8 +48,8 @@ export function SignupForm({ plans }: { plans: Plan[] }) {
         <Field label="Phone" name="phone" />
         <Field label="City" name="city" />
       </div>
-      <div className="border-t border-neutral-800 pt-4">
-        <p className="text-xs uppercase tracking-wide text-neutral-500 mb-3">
+      <div className="border-t border-line pt-4">
+        <p className="text-xs uppercase tracking-wide text-ink-faint mb-3">
           Admin staff login (used once your account is activated)
         </p>
         <div className="grid grid-cols-2 gap-3">
@@ -60,8 +60,8 @@ export function SignupForm({ plans }: { plans: Plan[] }) {
       {plans.length > 0 && (
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
-            <span className="text-xs uppercase tracking-wide text-neutral-500">Plan</span>
-            <select name="planId" className="mt-1 w-full rounded-md bg-neutral-800 border border-neutral-700 px-3 py-2">
+            <span className="text-xs uppercase tracking-wide text-ink-faint">Plan</span>
+            <select name="planId" className="mt-1 w-full rounded-md bg-raised border border-line px-3 py-2">
               {plans.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} — Rs {p.monthly_price}/mo
@@ -70,8 +70,8 @@ export function SignupForm({ plans }: { plans: Plan[] }) {
             </select>
           </label>
           <label className="block">
-            <span className="text-xs uppercase tracking-wide text-neutral-500">Billing cycle</span>
-            <select name="billingCycle" className="mt-1 w-full rounded-md bg-neutral-800 border border-neutral-700 px-3 py-2">
+            <span className="text-xs uppercase tracking-wide text-ink-faint">Billing cycle</span>
+            <select name="billingCycle" className="mt-1 w-full rounded-md bg-raised border border-line px-3 py-2">
               <option value="monthly">Monthly</option>
               <option value="yearly">Yearly</option>
             </select>
@@ -95,10 +95,10 @@ function Field(props: {
   const { label, ...rest } = props;
   return (
     <label className="block">
-      <span className="text-xs uppercase tracking-wide text-neutral-500">{label}</span>
+      <span className="text-xs uppercase tracking-wide text-ink-faint">{label}</span>
       <input
         {...rest}
-        className="mt-1 w-full rounded-md bg-neutral-800 border border-neutral-700 px-3 py-2"
+        className="mt-1 w-full rounded-md bg-raised border border-line px-3 py-2"
       />
     </label>
   );

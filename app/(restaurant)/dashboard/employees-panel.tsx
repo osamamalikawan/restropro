@@ -35,21 +35,21 @@ export function EmployeesPanel({ restaurantId }: { restaurantId: string }) {
   }, [restaurantId]);
 
   return (
-    <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-6">
+    <div className="rounded-xl border border-line bg-surface p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="font-display text-lg font-semibold">Employees</h2>
-        {syncing && <span className="text-xs text-neutral-500">syncing…</span>}
+        <h2 className="font-display text-lg font-semibold text-ink-strong">Employees</h2>
+        {syncing && <span className="text-xs text-ink-faint">syncing…</span>}
       </div>
       {employees === null ? (
-        <p className="text-neutral-500 text-sm">Loading from local cache…</p>
+        <p className="text-ink-faint text-sm">Loading from local cache…</p>
       ) : employees.length === 0 ? (
-        <p className="text-neutral-500 text-sm">No employees cached yet — will populate once online.</p>
+        <p className="text-ink-faint text-sm">No employees cached yet — will populate once online.</p>
       ) : (
         <ul className="space-y-2">
           {employees.map((e) => (
-            <li key={e.id} className="flex justify-between text-sm border-b border-neutral-800 pb-2">
+            <li key={e.id} className="flex justify-between text-sm border-b border-line-soft pb-2">
               <span>{e.name}</span>
-              <span className="text-neutral-500 uppercase text-xs">{e.role}</span>
+              <span className="text-ink-faint uppercase text-xs">{e.role}</span>
             </li>
           ))}
         </ul>

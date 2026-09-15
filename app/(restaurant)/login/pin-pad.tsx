@@ -1,8 +1,8 @@
 "use client";
 import { useState } from "react";
 
-/** The PIN pad from the original HTML prototype: dot indicators showing how many digits have
- *  been entered, plus a 4x3 number grid (1-9, Clear, 0, Go) — not a masked text input. */
+/** Dot indicators showing how many digits have been entered, plus a 4x3 number grid
+ *  (1-9, Clear, 0, Go) — matching the original HTML prototype's PIN pad. */
 export function PinPad({
   onSubmit,
   loading,
@@ -39,7 +39,7 @@ export function PinPad({
           <div
             key={i}
             className={`w-3.5 h-3.5 rounded-full border-2 transition-colors ${
-              i < pin.length ? "bg-chili-500 border-chili-500" : "border-neutral-700"
+              i < pin.length ? "bg-chili-500 border-chili-500" : "border-line"
             }`}
           />
         ))}
@@ -51,10 +51,10 @@ export function PinPad({
             type="button"
             disabled={loading}
             onClick={() => press(k)}
-            className={`aspect-square rounded-full flex items-center justify-center text-lg font-semibold border border-neutral-700 transition-colors disabled:opacity-40 ${
+            className={`aspect-square rounded-full flex items-center justify-center font-display text-lg font-semibold border border-line transition-colors disabled:opacity-40 ${
               k === "clr" || k === "ok"
-                ? "text-neutral-400 text-xs bg-neutral-800 hover:bg-neutral-700"
-                : "bg-neutral-800 hover:bg-neutral-700 text-neutral-50"
+                ? "text-ink-faint text-xs font-body bg-raised hover:bg-hover"
+                : "bg-raised hover:bg-hover text-ink-strong"
             }`}
           >
             {k === "clr" ? "Clear" : k === "ok" ? "Go" : k}

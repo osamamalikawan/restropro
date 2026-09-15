@@ -1,0 +1,89 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --chili-600:#B8391A; --chili-500:#D9481F; --chili-400:#E86B3E;
+  --basil-600:#2E5A41; --basil-500:#3F6E52; --basil-400:#5C9273;
+  --turmeric-500:#C99A3E; --crimson-500:#B7383F; --crimson-400:#D25861;
+  --bg-canvas:#161310; --bg-sunken:#100E0C; --bg-surface:#1E1A16; --bg-raised:#26211C; --bg-hover:#2E2721;
+  --line:#38312A; --line-soft:#2A2420; --ink-strong:#F6F0E6; --ink-mid:#CBC0B0; --ink-faint:#8C8072;
+  --accent:var(--chili-500); --accent-soft:rgba(217,72,31,.16); --positive:var(--basil-500); --positive-soft:rgba(63,110,82,.18);
+  --warn:var(--turmeric-500); --danger:var(--crimson-500); --danger-soft:rgba(183,56,63,.18);
+  --shadow-card:0 1px 0 rgba(255,255,255,.02) inset,0 16px 40px -22px rgba(0,0,0,.7);
+}
+
+* { box-sizing:border-box; }
+html { background:var(--bg-canvas); }
+body { margin:0; background:var(--bg-canvas); color:var(--ink-strong); font-family:'Public Sans',system-ui,sans-serif; }
+button, input, select, textarea { font:inherit; }
+button { cursor:pointer; }
+button:disabled { cursor:not-allowed; }
+input, select, textarea { color:var(--ink-strong); }
+input::placeholder, textarea::placeholder { color:var(--ink-faint); }
+input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent)!important; box-shadow:0 0 0 3px var(--accent-soft); }
+
+/* Bridge the existing React utility classes to the prototype's kitchen-ticket design system. */
+.bg-neutral-950 { background-color:var(--bg-canvas)!important; }
+.bg-neutral-900 { background-color:var(--bg-surface)!important; }
+.bg-neutral-800 { background-color:var(--bg-raised)!important; }
+.bg-neutral-700 { background-color:var(--bg-hover)!important; }
+.border-neutral-800 { border-color:var(--line-soft)!important; }
+.border-neutral-700 { border-color:var(--line)!important; }
+.text-neutral-50 { color:var(--ink-strong)!important; }
+.text-neutral-400 { color:var(--ink-mid)!important; }
+.text-neutral-500,.text-neutral-600 { color:var(--ink-faint)!important; }
+.hover\:bg-neutral-800:hover,.hover\:bg-neutral-700:hover { background-color:var(--bg-hover)!important; }
+.hover\:text-neutral-200:hover,.hover\:text-neutral-300:hover,.hover\:text-neutral-100:hover { color:var(--ink-strong)!important; }
+.font-display { font-family:'Fraunces',serif!important; letter-spacing:-.01em; }
+.font-mono { font-family:'IBM Plex Mono',monospace!important; }
+.rounded-xl { border-radius:18px!important; box-shadow:var(--shadow-card); }
+.rounded-lg { border-radius:12px!important; }
+.rounded-md { border-radius:8px!important; }
+.bg-chili-500 { background-color:var(--accent)!important; box-shadow:0 10px 22px -12px rgba(217,72,31,.7); }
+.hover\:bg-chili-600:hover { background-color:var(--chili-600)!important; }
+.text-chili-400 { color:var(--chili-400)!important; }
+.text-basil-400 { color:var(--basil-400)!important; }
+.text-turmeric-400 { color:#E0B662!important; }
+.text-crimson-400 { color:var(--crimson-400)!important; }
+
+/* Shared detail polish for every current and future back-office screen. */
+main > div > .rounded-xl, main > .rounded-xl, .grid > .rounded-xl { box-shadow:var(--shadow-card); }
+table { width:100%; border-collapse:collapse; }
+th { color:var(--ink-faint); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; }
+td, th { border-color:var(--line-soft)!important; }
+
+.app-sidebar { width:252px; background:var(--bg-sunken); border-right:1px solid var(--line-soft); padding:20px 14px; }
+.brand-row { display:flex; align-items:center; gap:11px; padding:4px 8px 20px; border-bottom:1px solid var(--line-soft); margin-bottom:18px; }
+.brand-mark { width:36px; height:36px; border-radius:10px; background:linear-gradient(155deg,var(--chili-400),var(--chili-600)); display:grid; place-items:center; color:white; font-family:'Fraunces',serif; font-style:italic; font-weight:700; box-shadow:0 8px 20px -8px rgba(217,72,31,.6); }
+.brand-name { display:block; font-family:'Fraunces',serif; font-size:16.5px; font-weight:600; line-height:1.15; }
+.brand-kicker { display:block; font-size:10px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.08em; }
+.nav-label { font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:var(--ink-faint); font-weight:600; padding:0 10px; margin-bottom:8px; }
+.nav-item { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px; color:var(--ink-mid); font-size:13.5px; font-weight:500; margin-bottom:2px; transition:.15s; }
+.nav-item:hover { background:var(--bg-hover); color:var(--ink-strong); }
+.nav-item.active { background:var(--accent-soft); color:var(--accent); }
+.nav-dot { width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.75; }
+.sidebar-foot { margin-top:auto; padding:14px 8px 0; border-top:1px solid var(--line-soft); }
+.shift-pill { font-size:11px; color:var(--ink-mid); border:1px solid var(--line); border-radius:12px; background:var(--bg-raised); padding:9px 11px; }
+.shift-pill i { display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:var(--positive); box-shadow:0 0 0 3px var(--positive-soft); }
+.topbar { height:66px; border-bottom:1px solid var(--line-soft); background:var(--bg-canvas); padding:0 28px; }
+.restaurant-title { font-family:'Fraunces',serif; font-size:20px; font-weight:600; }
+.user-chip { display:flex; align-items:center; gap:9px; padding:5px 12px 5px 5px; border-radius:999px; background:var(--bg-raised); border:1px solid var(--line); }
+.user-avatar { width:27px; height:27px; border-radius:50%; background:linear-gradient(155deg,var(--basil-400),var(--basil-600)); color:#fff; display:grid; place-items:center; font-size:10px; font-weight:700; }
+.logout-button { border:1px solid var(--line); border-radius:8px; color:var(--ink-faint); padding:7px 10px; transition:.15s; }
+.logout-button:hover { border-color:var(--danger); color:var(--crimson-400); }
+.page-wrap { padding:28px; max-width:1440px; width:100%; margin:0 auto; }
+.page-heading { font-family:'Fraunces',serif; font-size:23px; font-weight:600; letter-spacing:-.01em; }
+.page-subtitle { color:var(--ink-faint); font-size:12.5px; margin-top:3px; }
+.login-glow { position:absolute; inset:0; pointer-events:none; background:radial-gradient(650px 420px at 12% 8%,var(--accent-soft),transparent 60%),radial-gradient(520px 400px at 88% 92%,rgba(63,110,82,.10),transparent 60%); }
+.login-mark { width:58px; height:58px; margin:0 auto 16px; border-radius:16px; background:linear-gradient(155deg,var(--chili-400),var(--chili-600)); display:grid; place-items:center; font-family:'Fraunces',serif; font-weight:700; font-style:italic; font-size:23px; color:#fff; box-shadow:0 14px 34px -10px rgba(217,72,31,.6); }
+
+/* POS keeps its intentionally denser workflow while using the same material vocabulary. */
+.pos-shell { background:var(--bg-canvas); }
+.pos-product { background:var(--bg-surface); border-color:var(--line)!important; box-shadow:var(--shadow-card); }
+.pos-product:hover { border-color:var(--accent)!important; transform:translateY(-2px); }
+.pos-order { background:var(--bg-sunken); border-color:var(--line-soft)!important; }
+
+@media (max-width:767px) { .page-wrap{padding:20px 16px;} .topbar{padding:0 16px;} }
