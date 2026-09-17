@@ -4,7 +4,7 @@ import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-
 import { SettingsClient } from "./settings-client";
 
 export default async function SettingsPage() {
-  const token = cookies().get(STAFF_SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
   const session = await verifyStaffSessionToken(token);
   if (!session) redirect("/login");
   if (session.role !== "admin") redirect("/dashboard");

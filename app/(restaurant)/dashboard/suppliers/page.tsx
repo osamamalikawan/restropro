@@ -4,7 +4,7 @@ import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-
 import { SuppliersClient } from "./suppliers-client";
 
 export default async function SuppliersPage() {
-  const token = cookies().get(STAFF_SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
   const session = await verifyStaffSessionToken(token);
   if (!session) redirect("/login");
   if (!["admin", "manager", "inventory"].includes(session.role)) redirect("/dashboard");
