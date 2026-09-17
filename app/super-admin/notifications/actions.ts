@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { revalidatePath } from "next/cache";
 
 async function assertSuperAdmin() {
-  const supabase = createServerSupabase();
+  const supabase = await createServerSupabase();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth.user) throw new Error("Not signed in");
   const { data } = await supabase.from("super_admins").select("user_id").eq("user_id", auth.user.id).single();

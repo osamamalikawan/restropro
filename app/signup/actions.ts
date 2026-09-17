@@ -77,7 +77,7 @@ export async function signupRestaurant(_prev: SignupState, formData: FormData): 
 }
 
 export async function getActivePlans() {
-  const supabase = createServerSupabase();
+  const supabase = await createServerSupabase();
   const { data } = await supabase
     .from("subscription_plans")
     .select("id, name, monthly_price, yearly_price, features")
