@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { initials, colorForId } from "@/lib/avatar";
 import { getPageMeta } from "./nav-config";
+import NotificationBell from '@/components/notification-bell';
 
 /**
  * Matches the prototype's #topbar 1:1: hamburger (sidebar toggle) + view title/subtitle on
@@ -61,6 +62,7 @@ export function Topbar({
       <div className="flex items-center gap-3 md:gap-4 shrink-0">
         <span className="text-xs text-ink-faint font-mono hidden sm:inline">{time}</span>
         <ThemeToggle />
+        <NotificationBell />
         <div className="flex items-center gap-2.5">
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center font-display font-bold text-[11px] text-white shrink-0"

@@ -18,6 +18,7 @@ import {
   MapPin,
   Settings,
   ShieldCheck,
+  Bell,
   type LucideIcon,
 } from "lucide-react";
 
@@ -69,6 +70,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "System",
     items: [
+      { href: "/dashboard/notifications", label: "Notifications", icon: Bell, perm: "Notifications"},
       { href: "/dashboard/settings", label: "Settings", icon: Settings, perm: "settings" },
       { href: "/dashboard/permissions", label: "Users & Permissions", icon: ShieldCheck, perm: "admin" },
     ],
