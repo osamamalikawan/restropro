@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { resolveStaffContext } from "@/lib/auth/require-staff";
-import { Sidebar } from "./sidebar";
-import { Topbar } from "./topbar";
+import { DashboardShell } from "./shell";
 
 /**
  * Wraps every /dashboard/* page with the persistent sidebar + topbar that were missing —
@@ -19,12 +18,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (!ctx) redirect("/login");
 
   return (
-    <div className="min-h-screen bg-canvas text-ink-strong flex">
-      <Sidebar role={ctx.employee.role} />
-      <div className="flex-1 flex flex-col min-w-0">
-        <Topbar restaurantName={ctx.restaurant.name} employeeName={ctx.employee.name} role={ctx.employee.role} subStatus={ctx.subStatus} />
-        <div className="flex-1 overflow-y-auto">{children}</div>
-      </div>
-    </div>
+    <DashboardShell
+      role={ctx.employee.role}
+      restaurantName={ctx.restaurant.name}
+      employeeName={ctx.employee.name}
+      employeeId={ctx.employee.id}
+      subStatus={ctx.subStatus}
+    >
+      {children}
+    </DashboardShell>
   );
 }
