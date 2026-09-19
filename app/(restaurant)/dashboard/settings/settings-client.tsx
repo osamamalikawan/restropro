@@ -23,12 +23,24 @@ type Settings = {
 };
 
 type PaymentMethod = { id: string; name: string };
+type Table = { id: string; number: string; seats: number };
+type Area = { id: string; name: string; delivery_fee: number };
 
-/** Matches the prototype's view-settings + view-paymentMethods: the four original Settings
- *  panels plus a Payment Methods panel folded in here rather than its own page, since it's
- *  just one panel (list + add row) — see app/(restaurant)/dashboard/payment-methods/page.tsx,
- *  which now only redirects here. Each panel still POSTs independently. */
-export function SettingsClient() {
+/** Matches the prototype's view-settings + view-paymentMethods + view-tablesDelivery: the
+ *  four original Settings panels, Payment Methods, and Tables & Delivery Areas all folded
+ *  into this one page (see app/(restaurant)/dashboard/payment-methods/page.tsx and
+ *  .../tables-delivery/page.tsx, which now only redirect here). Which sections render is
+ *  controlled by the props the server page passes down — see settings/page.tsx for how
+ *  those map to the "settings" and "tables" module permissions. */
+export function SettingsClient({
+  canSettings,
+  canTables,
+  canManageTables,
+}: {
+  canSettings: boolean;
+  canTables: boolean;
+  canManageTables: boolean;
+}) {
   const [loading, setLoading] = useState(true);
   const [restName, setRestName] = useState("");
   const [address, setAddress] = useState("");
@@ -40,22 +52,39 @@ export function SettingsClient() {
   const [newMethod, setNewMethod] = useState("");
   const [methodError, setMethodError] = useState("");
 
+  const [tables, setTables] = useState<Table[]>([]);
+  const [tableNo, setTableNo] = useState("");
+  const [tableSeats, setTableSeats] = useState("4");
+  const [areas, setAreas] = useState<Area[]>([]);
+  const [areaName, setAreaName] = useState("");
+  const [areaFee, setAreaFee] = useState("0");
+  const [tablesError, setTablesError] = useState("");
+
   useEffect(() => {
     (async () => {
-      const res = await fetch("/api/settings");
-      const data = await res.json();
-      if (res.ok) {
-        if (data.restaurant) {
-          setRestName(data.restaurant.name ?? "");
-          setAddress(data.restaurant.address ?? "");
-          setPhone(data.restaurant.phone ?? "");
-        }
-        setS(data.settings);
+      const tasks: Promise<void>[] = [];
+
+      if (canSettings) {
+        tasks.push(
+          fetch("/api/settings")
+            .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+              if (ok) {
+                if (data.restaurant) {
+                  setRestName(data.restaurant.name ?? "");
+                  setAddress(data.restaurant.address ?? "");
+                  setPhone(data.restaurant.phone ?? "");
+                }
+                setS(data.settings);
+              }
+            })
+        );
+        tasks.push(loadMethods());
       }
+      if (canTables) tasks.push(loadTables(), loadAreas());
+
+      await Promise.all(tasks);
       setLoading(false);
-      const methodsRes = await fetch("/api/payment-methods");
-      const methodsData = await methodsRes.json();
-      if (methodsRes.ok) setMethods(methodsData.methods ?? []);
     })();
   }, []);
 
@@ -63,6 +92,68 @@ export function SettingsClient() {
     const res = await fetch("/api/payment-methods");
     const data = await res.json();
     if (res.ok) setMethods(data.methods ?? []);
+  }
+
+  async function loadTables() {
+    const res = await fetch("/api/tables");
+    const data = await res.json();
+    if (res.ok) setTables(data.tables ?? []);
+  }
+  async function loadAreas() {
+    const res = await fetch("/api/delivery-areas");
+    const data = await res.json();
+    if (res.ok) setAreas(data.areas ?? []);
+  }
+
+  async function addTable() {
+    if (!tableNo.trim()) return;
+    setTablesError("");
+    const res = await fetch("/api/tables", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "insert", row: { number: tableNo.trim(), seats: Number(tableSeats), is_active: true } }),
+    });
+    if (!res.ok) {
+      setTablesError((await res.json()).error);
+      return;
+    }
+    setTableNo("");
+    loadTables();
+  }
+  async function removeTable(id: string) {
+    setTablesError("");
+    const res = await fetch("/api/tables", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "delete", row: { id } }) });
+    if (!res.ok) {
+      setTablesError((await res.json()).error);
+      return;
+    }
+    loadTables();
+  }
+
+  async function addArea() {
+    if (!areaName.trim()) return;
+    setTablesError("");
+    const res = await fetch("/api/delivery-areas", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "insert", row: { name: areaName.trim(), delivery_fee: Number(areaFee), is_active: true } }),
+    });
+    if (!res.ok) {
+      setTablesError((await res.json()).error);
+      return;
+    }
+    setAreaName("");
+    setAreaFee("0");
+    loadAreas();
+  }
+  async function removeArea(id: string) {
+    setTablesError("");
+    const res = await fetch("/api/delivery-areas", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "delete", row: { id } }) });
+    if (!res.ok) {
+      setTablesError((await res.json()).error);
+      return;
+    }
+    loadAreas();
   }
 
   async function addMethod() {
@@ -125,7 +216,7 @@ export function SettingsClient() {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  if (loading || !s) {
+  if (loading) {
     return (
       <main className="p-6 md:p-8">
         <p className="text-ink-faint text-sm">Loading settings…</p>
@@ -134,11 +225,20 @@ export function SettingsClient() {
   }
 
   const SECTIONS = [
-    { id: "profile", label: "Restaurant profile" },
-    { id: "payment-methods", label: "Payment methods" },
-    { id: "pos-tax", label: "POS & Tax" },
-    { id: "printer", label: "Printer & receipt" },
-    { id: "fbr", label: "FBR invoicing" },
+    ...(canSettings
+      ? [
+          { id: "profile", label: "Restaurant profile" },
+          { id: "payment-methods", label: "Payment methods" },
+        ]
+      : []),
+    ...(canTables ? [{ id: "tables", label: "Tables & Delivery" }] : []),
+    ...(canSettings
+      ? [
+          { id: "pos-tax", label: "POS & Tax" },
+          { id: "printer", label: "Printer & receipt" },
+          { id: "fbr", label: "FBR invoicing" },
+        ]
+      : []),
   ];
 
   return (
@@ -159,6 +259,8 @@ export function SettingsClient() {
       {msg && <p className={`text-sm mb-4 ${msg.error ? "text-crimson-400" : "text-basil-400"}`}>{msg.text}</p>}
 
       <div className="grid md:grid-cols-2 gap-6 items-stretch">
+        {canSettings && s && (
+          <>
         {/* Restaurant profile */}
         <div id="profile" className="scroll-mt-20">
           <Panel
@@ -228,7 +330,103 @@ export function SettingsClient() {
             </div>
           </Panel>
         </div>
+          </>
+        )}
 
+        {/* Tables & Delivery Areas — moved here from its own page */}
+        {canTables && (
+          <div id="tables" className="scroll-mt-20 md:col-span-2 grid md:grid-cols-2 gap-6">
+            <Panel
+              title="Tables"
+              subtitle="Dine-in table numbers and seat counts"
+              footer={
+                canManageTables && (
+                  <div className="flex gap-2">
+                    <input
+                      value={tableNo}
+                      onChange={(e) => setTableNo(e.target.value)}
+                      placeholder="e.g. 12"
+                      className="flex-1 rounded-lg bg-raised border border-line px-3 py-2 text-sm"
+                    />
+                    <input
+                      value={tableSeats}
+                      onChange={(e) => setTableSeats(e.target.value)}
+                      type="number"
+                      placeholder="Seats"
+                      className="w-20 rounded-lg bg-raised border border-line px-3 py-2 text-sm"
+                    />
+                    <button onClick={addTable} className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-4 shrink-0">
+                      Add
+                    </button>
+                  </div>
+                )
+              }
+            >
+              {tablesError && <p className="text-xs text-crimson-400 mb-2">{tablesError}</p>}
+              <div className="space-y-1.5">
+                {tables.map((t) => (
+                  <div key={t.id} className="flex items-center justify-between rounded-lg bg-raised px-3 py-2 text-sm">
+                    <span>
+                      Table {t.number} <span className="text-ink-faint">({t.seats} seats)</span>
+                    </span>
+                    {canManageTables && (
+                      <button onClick={() => removeTable(t.id)} className="text-ink-faint hover:text-crimson-400 text-xs">
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {tables.length === 0 && <p className="text-xs text-ink-faint">No tables yet.</p>}
+              </div>
+            </Panel>
+
+            <Panel
+              title="Delivery areas"
+              subtitle="Coverage areas and delivery fees"
+              footer={
+                canManageTables && (
+                  <div className="flex gap-2">
+                    <input
+                      value={areaName}
+                      onChange={(e) => setAreaName(e.target.value)}
+                      placeholder="e.g. Gulgasht Colony"
+                      className="flex-1 rounded-lg bg-raised border border-line px-3 py-2 text-sm"
+                    />
+                    <input
+                      value={areaFee}
+                      onChange={(e) => setAreaFee(e.target.value)}
+                      type="number"
+                      placeholder="Fee"
+                      className="w-20 rounded-lg bg-raised border border-line px-3 py-2 text-sm"
+                    />
+                    <button onClick={addArea} className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-4 shrink-0">
+                      Add
+                    </button>
+                  </div>
+                )
+              }
+            >
+              <div className="space-y-1.5">
+                {areas.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between rounded-lg bg-raised px-3 py-2 text-sm">
+                    <span>
+                      {a.name} <span className="text-ink-faint">— fee Rs {a.delivery_fee}</span>
+                    </span>
+                    {canManageTables && (
+                      <button onClick={() => removeArea(a.id)} className="text-ink-faint hover:text-crimson-400 text-xs">
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {areas.length === 0 && <p className="text-xs text-ink-faint">No areas yet.</p>}
+              </div>
+            </Panel>
+          </div>
+        )}
+
+        {canSettings && s && (
+          <>
         {/* POS, Tax & Invoicing controls */}
         <div id="pos-tax" className="scroll-mt-20">
           <Panel
@@ -398,6 +596,8 @@ export function SettingsClient() {
             </div>
           </Panel>
         </div>
+          </>
+        )}
       </div>
 
       <style jsx>{`
