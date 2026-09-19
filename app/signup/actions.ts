@@ -2,13 +2,18 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient as createServerSupabase } from "@/lib/supabase/server";
 import { hashPin } from "@/lib/auth/pin";
+import { hashPassword } from "@/lib/auth/password";
 
 export type SignupState = { error?: string; success?: boolean };
 
 /** Restaurant signup. Creates:
- *  1. A real Supabase Auth user for the OWNER (email/password) — this is who can log into
- *     the (future) owner portal and see billing/subscription status.
- *  2. A `restaurants` row with status='pending' and the admin PIN hashed but NOT yet turned
+ *  1. A real Supabase Auth user for the OWNER (email/password) — kept around for any future
+ *     owner-portal/Supabase-managed-password-reset use, even though it's no longer what
+ *     resolve-restaurant checks day to day.
+ *  2. A `password_hash` on the `restaurants` row itself (bcrypt, see lib/auth/password.ts)
+ *     — this is what /api/staff/resolve-restaurant actually verifies against now, so the
+ *     staff-login owner step works without an extra Supabase Auth round trip.
+ *  3. A `restaurants` row with status='pending' and the admin PIN hashed but NOT yet turned
  *     into an `employees` row — that only happens when Super Admin activates the tenant.
  *  Nothing here lets the tenant be used yet; middleware + staff login both check status. */
 export async function signupRestaurant(_prev: SignupState, formData: FormData): Promise<SignupState> {
@@ -47,6 +52,10 @@ export async function signupRestaurant(_prev: SignupState, formData: FormData): 
   // 2. Hash the admin PIN now; it's only turned into a real employees row at activation.
   const pendingPinHash = await hashPin(adminPin);
 
+  // 3. Hash the owner's password for direct verification against `restaurants.password_hash`
+  //    (see /api/staff/resolve-restaurant) — independent of the Supabase Auth user above.
+  const ownerPasswordHash = await hashPassword(password);
+
   const slug = restaurantName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -58,6 +67,7 @@ export async function signupRestaurant(_prev: SignupState, formData: FormData): 
     owner_user_id: authUser.user.id,
     owner_name: ownerName,
     email,
+    password_hash: ownerPasswordHash,
     phone,
     city,
     status: "pending",

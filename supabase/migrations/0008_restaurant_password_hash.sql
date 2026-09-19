@@ -1,0 +1,11 @@
+-- =====================================================================
+-- RESTRO PRO — Supabase migration 0008
+-- Adds the restaurants.password_hash column that app/api/staff/resolve-restaurant/route.ts
+-- already queries (bcrypt via lib/auth/password.ts) but which no prior migration created —
+-- that mismatch is why every owner login was failing with "Incorrect email or password"
+-- regardless of the password entered. See app/signup/actions.ts for where this now gets
+-- populated at signup, alongside the Supabase Auth user (kept for backward compatibility —
+-- restaurants that signed up before this migration have owner_user_id but no
+-- password_hash yet; resolve-restaurant falls back to Supabase Auth for those).
+-- =====================================================================
+alter table restaurants add column password_hash text;
