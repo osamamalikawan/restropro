@@ -183,7 +183,7 @@ export default function StaffPickerPage() {
         </h1>
 
         <p className="text-ink-faint text-sm mt-2">
-          Select your name on staff to clock in
+          Select your name to continue
         </p>
       </div>
 
