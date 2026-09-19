@@ -2,17 +2,22 @@ import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
+  const url = new URL(req.url);
+  const limit = Number(url.searchParams.get("limit") ?? 50);
+  const supplierId = url.searchParams.get("supplierId");
   const admin = createAdminClient();
-  const { data, error } = await admin
+  let query = admin
     .from("supplier_ledger")
-    .select("id, amount, method, note, txn_date, suppliers(name)")
+    .select("id, supplier_id, amount, method, note, txn_date, suppliers(name)")
     .eq("restaurant_id", session.restaurantId)
     .order("txn_date", { ascending: false })
-    .limit(50);
+    .limit(limit);
+  if (supplierId) query = query.eq("supplier_id", supplierId);
+  const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ entries: data });
 }

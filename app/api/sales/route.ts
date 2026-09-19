@@ -6,14 +6,18 @@ export async function GET(req: Request) {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const limit = Number(new URL(req.url).searchParams.get("limit") ?? 20);
+  const url = new URL(req.url);
+  const limit = Number(url.searchParams.get("limit") ?? 20);
+  const customerId = url.searchParams.get("customerId");
   const admin = createAdminClient();
-  const { data, error } = await admin
+  let query = admin
     .from("sales")
-    .select("id, order_no, order_type, subtotal, tax, total, delivery_charge, status, created_at, sale_items(name, unit_price, quantity), sale_payments(method, amount)")
+    .select("id, order_no, order_type, customer_id, subtotal, tax, total, delivery_charge, status, created_at, sale_items(name, unit_price, quantity), sale_payments(method, amount)")
     .eq("restaurant_id", session.restaurantId)
     .order("created_at", { ascending: false })
     .limit(limit);
+  if (customerId) query = query.eq("customer_id", customerId);
+  const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ sales: data });
 }

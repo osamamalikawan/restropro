@@ -1,8 +1,9 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-session";
 import { hasModuleAccess } from "@/lib/permissions";
-import { ComingSoon } from "../coming-soon";
+import { RecipesProductionClient } from "./recipes-production-client";
 
 export default async function RecipesProductionPage() {
   const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
@@ -11,9 +12,8 @@ export default async function RecipesProductionPage() {
   if (!(await hasModuleAccess(session.restaurantId, session.role, "recipes"))) redirect("/dashboard");
 
   return (
-    <ComingSoon
-      title="Recipes & Production"
-      note="The recipe engine and self-made item production log isn't wired up yet — it'll live here, matching the prototype's three tabs."
-    />
+    <Suspense>
+      <RecipesProductionClient />
+    </Suspense>
   );
 }

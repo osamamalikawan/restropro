@@ -2,17 +2,18 @@ import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
+  const limit = Number(new URL(req.url).searchParams.get("limit") ?? 30);
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("stock_purchases")
-    .select("id, quantity, unit_cost, total_cost, purchased_at, inventory_items(name, unit), suppliers(name)")
+    .select("id, inventory_item_id, quantity, unit_cost, total_cost, purchased_at, inventory_items(name, unit), suppliers(name)")
     .eq("restaurant_id", session.restaurantId)
     .order("purchased_at", { ascending: false })
-    .limit(30);
+    .limit(limit);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ purchases: data });
 }

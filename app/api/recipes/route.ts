@@ -10,9 +10,19 @@ export async function GET(req: Request) {
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const productId = new URL(req.url).searchParams.get("productId");
-  if (!productId) return NextResponse.json({ error: "productId is required" }, { status: 400 });
-
   const admin = createAdminClient();
+
+  if (!productId) {
+    // Bulk mode — every recipe line for this tenant's products, used to compute cost/margin
+    // on the Products page without an N+1 fetch per row.
+    const { data, error } = await admin
+      .from("recipe_items")
+      .select("id, product_id, inventory_item_id, quantity, inventory_items!inner(name, unit, cost, restaurant_id)")
+      .eq("inventory_items.restaurant_id", session.restaurantId);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ recipeItems: data });
+  }
+
   // ownership check: the product must belong to this session's restaurant
   const { data: product } = await admin.from("products").select("id").eq("id", productId).eq("restaurant_id", session.restaurantId).single();
   if (!product) return NextResponse.json({ error: "Product not found" }, { status: 404 });

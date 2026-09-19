@@ -1,20 +1,38 @@
 "use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { X, Pencil } from "lucide-react";
+import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+import { Panel, PanelHead, addBtnCls } from "@/components/ui/panel";
+import { fmtMoney } from "@/lib/format";
 import { RecipeModal } from "./recipe-modal";
 
 type Category = { id: string; name: string; sort_order: number; is_active: boolean };
-type Product = { id: string; name: string; price: number; category_id: string | null; is_available: boolean; menu_categories?: { name: string } | null };
+type Product = {
+  id: string;
+  name: string;
+  price: number;
+  category_id: string | null;
+  image_url: string | null;
+  is_available: boolean;
+  menu_categories?: { name: string } | null;
+};
 
 export function MenuClient() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
   const [newCatName, setNewCatName] = useState("");
-  const [newProdName, setNewProdName] = useState("");
-  const [newProdPrice, setNewProdPrice] = useState("");
-  const [newProdCategory, setNewProdCategory] = useState("");
+  const [catError, setCatError] = useState("");
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [fName, setFName] = useState("");
+  const [fCategoryId, setFCategoryId] = useState("");
+  const [fPrice, setFPrice] = useState("");
+  const [fImageUrl, setFImageUrl] = useState("");
+  const [fAvailable, setFAvailable] = useState(true);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   async function loadAll() {
     const [catRes, prodRes] = await Promise.all([fetch("/api/menu-categories"), fetch("/api/products")]);
@@ -29,20 +47,26 @@ export function MenuClient() {
 
   async function addCategory() {
     if (!newCatName.trim()) return;
-    setError("");
+    setCatError("");
     const res = await fetch("/api/menu-categories", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ op: "insert", row: { name: newCatName.trim(), sort_order: categories.length } }),
     });
     if (!res.ok) {
-      setError((await res.json()).error);
+      setCatError((await res.json()).error);
       return;
     }
     setNewCatName("");
     loadAll();
   }
   async function removeCategory(id: string) {
+    const inUse = products.some((p) => p.category_id === id);
+    if (inUse) {
+      setCatError("Move or remove items in this category first");
+      return;
+    }
+    setCatError("");
     await fetch("/api/menu-categories", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -51,34 +75,64 @@ export function MenuClient() {
     loadAll();
   }
 
-  async function addProduct() {
-    if (!newProdName.trim() || !newProdPrice) return;
+  function openAdd() {
+    setEditingId(null);
+    setFName("");
+    setFCategoryId(categories[0]?.id ?? "");
+    setFPrice("0");
+    setFImageUrl("");
+    setFAvailable(true);
+    setError("");
+    setModalOpen(true);
+  }
+  function openEdit(p: Product) {
+    setEditingId(p.id);
+    setFName(p.name);
+    setFCategoryId(p.category_id ?? "");
+    setFPrice(String(p.price));
+    setFImageUrl(p.image_url ?? "");
+    setFAvailable(p.is_available);
+    setError("");
+    setModalOpen(true);
+  }
+
+  async function saveProduct() {
+    if (!fName.trim()) {
+      setError("Item name is required");
+      return;
+    }
+    if (categories.length === 0) {
+      setError("Add a menu category first");
+      return;
+    }
+    setSaving(true);
     setError("");
     const res = await fetch("/api/products", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        op: "insert",
-        row: { name: newProdName.trim(), price: Number(newProdPrice), category_id: newProdCategory || null, is_available: true },
+        op: editingId ? "update" : "insert",
+        row: {
+          id: editingId ?? undefined,
+          name: fName.trim(),
+          category_id: fCategoryId || null,
+          price: Number(fPrice) || 0,
+          image_url: fImageUrl.trim() || null,
+          is_available: fAvailable,
+        },
       }),
     });
+    setSaving(false);
     if (!res.ok) {
       setError((await res.json()).error);
       return;
     }
-    setNewProdName("");
-    setNewProdPrice("");
+    setModalOpen(false);
     loadAll();
   }
-  async function toggleAvailable(p: Product) {
-    await fetch("/api/products", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "update", row: { id: p.id, is_available: !p.is_available } }),
-    });
-    loadAll();
-  }
+
   async function removeProduct(id: string) {
+    if (!confirm("Remove this menu item? Its recipe will also be deleted. This cannot be undone.")) return;
     await fetch("/api/products", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -88,111 +142,137 @@ export function MenuClient() {
   }
 
   return (
-    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="font-display text-2xl font-semibold">Menu</h1>
-        <Link href="/dashboard" className="text-xs text-ink-mid underline hover:text-ink-strong">
-          ← Dashboard
-        </Link>
-      </div>
-      {error && <p className="text-crimson-400 text-sm mb-4">{error}</p>}
-
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="rounded-xl border border-line bg-surface p-5">
-          <h2 className="font-display font-semibold mb-3">Categories</h2>
-          <div className="space-y-2 mb-4">
-            {categories.map((c) => (
-              <div key={c.id} className="flex items-center justify-between text-sm border-b border-line pb-2">
-                <span>{c.name}</span>
-                <button onClick={() => removeCategory(c.id)} className="text-ink-faint hover:text-crimson-400 text-xs">
-                  Remove
-                </button>
-              </div>
-            ))}
-            {categories.length === 0 && <p className="text-ink-faint text-sm">No categories yet.</p>}
+    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
+        <Panel>
+          <PanelHead title="Menu categories" subtitle="Used to group items in POS" />
+          <div className="px-5 py-3 space-y-1">
+            {catError && <p className="mb-2 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{catError}</p>}
+            {categories.map((c) => {
+              const inUse = products.filter((p) => p.category_id === c.id).length;
+              return (
+                <div key={c.id} className="flex items-center justify-between py-1.5 text-sm">
+                  <span>
+                    {c.name} {inUse > 0 && <span className="text-xs text-ink-mid">({inUse} items)</span>}
+                  </span>
+                  <button onClick={() => removeCategory(c.id)} className="text-ink-faint hover:text-crimson-400" title="Remove category">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+            {categories.length === 0 && <p className="text-xs text-ink-faint py-2">No categories yet — add one below.</p>}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 px-5 pb-4">
             <input
               value={newCatName}
               onChange={(e) => setNewCatName(e.target.value)}
-              placeholder="e.g. Burgers"
-              className="flex-1 rounded-md bg-raised border border-line px-3 py-2 text-sm"
+              onKeyDown={(e) => e.key === "Enter" && addCategory()}
+              placeholder="e.g. Combos"
+              className={`${inputCls} flex-1`}
             />
-            <button onClick={addCategory} className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-3">
+            <button onClick={addCategory} className={btnPrimary}>
               Add
             </button>
           </div>
-        </div>
+        </Panel>
 
-        <div className="rounded-xl border border-line bg-surface p-5">
-          <h2 className="font-display font-semibold mb-3">Products</h2>
-          <div className="space-y-2 mb-4 max-h-80 overflow-y-auto">
+        <Panel>
+          <PanelHead title="Menu products" subtitle="Image-first cards shown to cashiers in POS">
+            <button onClick={openAdd} className={addBtnCls}>
+              + Add product
+            </button>
+          </PanelHead>
+          <div className="p-5 grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(155px, 1fr))" }}>
             {products.map((p) => (
-              <div key={p.id} className="flex items-center justify-between text-sm border-b border-line pb-2">
-                <div>
-                  <div>{p.name}</div>
-                  <div className="text-ink-faint text-xs">
-                    Rs {p.price} · {p.menu_categories?.name ?? "Uncategorized"}
-                  </div>
+              <div
+                key={p.id}
+                className={`group relative overflow-hidden rounded-lg border border-line transition hover:-translate-y-0.5 hover:border-chili-500 ${
+                  !p.is_available ? "opacity-40" : ""
+                }`}
+              >
+                <div className="h-24 w-full bg-raised bg-cover bg-center" style={p.image_url ? { backgroundImage: `url('${p.image_url}')` } : undefined} />
+                <div className="p-3">
+                  <div className="mb-1.5 text-[13px] font-bold leading-tight">{p.name}</div>
+                  <div className="font-mono text-[13px] font-bold text-basil-400">{fmtMoney(p.price)}</div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => toggleAvailable(p)}
-                    className={`text-xs px-2 py-1 rounded-full ${p.is_available ? "bg-basil-500/20 text-basil-400" : "bg-raised text-ink-faint"}`}
-                  >
-                    {p.is_available ? "Available" : "Hidden"}
-                  </button>
-                  <button onClick={() => setRecipeProduct(p)} className="text-ink-faint hover:text-turmeric-400 text-xs">
-                    Recipe
-                  </button>
-                  <button onClick={() => removeProduct(p.id)} className="text-ink-faint hover:text-crimson-400 text-xs">
-                    Remove
-                  </button>
-                </div>
+                <button
+                  onClick={() => openEdit(p)}
+                  title="Edit"
+                  className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg bg-surface/90 border border-line opacity-0 transition group-hover:opacity-100 hover:bg-raised"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
               </div>
             ))}
-            {products.length === 0 && <p className="text-ink-faint text-sm">No products yet.</p>}
+            {products.length === 0 && <p className="col-span-full py-10 text-center text-sm text-ink-faint">No products yet — add one above.</p>}
           </div>
-          <div className="space-y-2">
-            <div className="flex gap-2">
-              <input
-                value={newProdName}
-                onChange={(e) => setNewProdName(e.target.value)}
-                placeholder="Product name"
-                className="flex-1 rounded-md bg-raised border border-line px-3 py-2 text-sm"
-              />
-              <input
-                value={newProdPrice}
-                onChange={(e) => setNewProdPrice(e.target.value)}
-                placeholder="Price"
-                type="number"
-                className="w-24 rounded-md bg-raised border border-line px-3 py-2 text-sm"
-              />
-            </div>
-            <div className="flex gap-2">
-              <select
-                value={newProdCategory}
-                onChange={(e) => setNewProdCategory(e.target.value)}
-                className="flex-1 rounded-md bg-raised border border-line px-3 py-2 text-sm"
-              >
-                <option value="">No category</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <button onClick={addProduct} className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-3">
-                Add
-              </button>
-            </div>
-          </div>
-        </div>
+        </Panel>
       </div>
 
-      {recipeProduct && (
-        <RecipeModal productId={recipeProduct.id} productName={recipeProduct.name} onClose={() => setRecipeProduct(null)} />
-      )}
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editingId ? "Edit menu item" : "Add menu item"}
+        footer={
+          <>
+            {editingId && (
+              <button
+                onClick={() => {
+                  setModalOpen(false);
+                  removeProduct(editingId);
+                }}
+                className="mr-auto text-xs text-crimson-400 hover:underline"
+              >
+                Remove item
+              </button>
+            )}
+            <button onClick={() => setModalOpen(false)} className={btnGhost}>
+              Cancel
+            </button>
+            <button onClick={saveProduct} disabled={saving} className={btnPrimary}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </>
+        }
+      >
+        {error && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}
+        <Field label="Name">
+          <input value={fName} onChange={(e) => setFName(e.target.value)} className={inputCls} placeholder="Item name" />
+        </Field>
+        <Field label="Category">
+          <select value={fCategoryId} onChange={(e) => setFCategoryId(e.target.value)} className={inputCls}>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Price">
+          <input value={fPrice} onChange={(e) => setFPrice(e.target.value)} type="number" min="0" step="0.01" className={inputCls} />
+        </Field>
+        <Field label="Image URL">
+          <input value={fImageUrl} onChange={(e) => setFImageUrl(e.target.value)} className={inputCls} placeholder="https://…" />
+        </Field>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={fAvailable} onChange={(e) => setFAvailable(e.target.checked)} />
+          Available on the menu
+        </label>
+        {editingId && (
+          <button
+            onClick={() => {
+              const p = products.find((x) => x.id === editingId);
+              if (p) setRecipeProduct(p);
+            }}
+            className="text-xs font-medium text-chili-500 hover:underline"
+          >
+            Edit recipe & cost →
+          </button>
+        )}
+      </Modal>
+
+      {recipeProduct && <RecipeModal productId={recipeProduct.id} productName={recipeProduct.name} onClose={() => setRecipeProduct(null)} />}
     </main>
   );
 }

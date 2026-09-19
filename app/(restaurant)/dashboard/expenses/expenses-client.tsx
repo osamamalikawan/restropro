@@ -1,6 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
+import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, addBtnCls } from "@/components/ui/panel";
+import { fmtMoney, todayISO } from "@/lib/format";
 
+type ExpenseCategory = { id: string; name: string };
+type PaymentMethod = { id: string; name: string };
 type Expense = {
   id: string;
   category: string;
@@ -14,139 +19,169 @@ type Expense = {
 
 export function ExpensesClient() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [category, setCategory] = useState("");
-  const [expenseType, setExpenseType] = useState<"regular" | "recurring">("regular");
-  const [amount, setAmount] = useState("");
-  const [vendor, setVendor] = useState("");
-  const [description, setDescription] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("Cash");
+  const [categories, setCategories] = useState<ExpenseCategory[]>([]);
+  const [methods, setMethods] = useState<PaymentMethod[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [fDate, setFDate] = useState(todayISO());
+  const [fType, setFType] = useState<"regular" | "recurring">("regular");
+  const [fCategory, setFCategory] = useState("");
+  const [fVendor, setFVendor] = useState("");
+  const [fDesc, setFDesc] = useState("");
+  const [fAmount, setFAmount] = useState("");
+  const [fMethod, setFMethod] = useState("Cash");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    const res = await fetch("/api/expenses");
-    const data = await res.json();
-    if (res.ok) setExpenses(data.expenses ?? []);
+    setLoading(true);
+    const [eRes, cRes, mRes] = await Promise.all([fetch("/api/expenses"), fetch("/api/expense-categories"), fetch("/api/payment-methods")]);
+    const [e, c, m] = await Promise.all([eRes.json(), cRes.json(), mRes.json()]);
+    setExpenses(e.expenses ?? []);
+    setCategories(c.categories ?? []);
+    setMethods(m.methods ?? []);
+    setLoading(false);
+    return { c, m };
   }
   useEffect(() => {
     load();
-    (async () => {
-      const res = await fetch("/api/expense-categories");
-      const data = await res.json();
-      if (res.ok) {
-        const names = (data.categories ?? []).map((c: { name: string }) => c.name);
-        setCategories(names);
-        setCategory((prev) => prev || names[0] || "");
-      }
-    })();
   }, []);
 
-  const totalThisList = expenses.reduce((s, e) => s + e.amount, 0);
+  function openAdd() {
+    setFDate(todayISO());
+    setFType("regular");
+    setFCategory(categories[0]?.name ?? "");
+    setFVendor("");
+    setFDesc("");
+    setFAmount("");
+    setFMethod(methods[0]?.name ?? "Cash");
+    setError("");
+    setModalOpen(true);
+  }
 
-  async function addExpense() {
-    if (!category || !amount) return;
+  async function save() {
+    if (!fAmount || Number(fAmount) <= 0) {
+      setError("Enter an amount");
+      return;
+    }
     setSaving(true);
     setError("");
     const res = await fetch("/api/expenses", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        category,
-        expenseType,
-        amount: Number(amount),
-        vendor: vendor.trim() || undefined,
-        description: description.trim() || undefined,
-        paymentMethod,
+        category: fCategory || categories[0]?.name || "Other",
+        expenseType: fType,
+        amount: Number(fAmount),
+        vendor: fVendor.trim() || undefined,
+        description: fDesc.trim() || undefined,
+        paymentMethod: fMethod,
       }),
     });
     setSaving(false);
     if (!res.ok) {
-      setError((await res.json()).error);
+      setError((await res.json()).error ?? "Could not log expense");
       return;
     }
-    setAmount("");
-    setVendor("");
-    setDescription("");
-    load();
+    setModalOpen(false);
+    await load();
   }
 
   return (
-    <main className="p-6 md:p-8 max-w-3xl">
-      <div className="rounded-xl border border-line bg-surface p-4 mb-6">
-        <div className="text-xs text-ink-faint uppercase">Total (last 50 entries)</div>
-        <div className="text-crimson-400 font-semibold text-lg">Rs {totalThisList}</div>
-      </div>
+    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      <Panel>
+        <PanelHead title="Expenses" subtitle="Regular and recurring restaurant expenses">
+          <button onClick={openAdd} className={addBtnCls}>
+            + Add expense
+          </button>
+        </PanelHead>
+        <TableScroll>
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-line">
+                <Th>Date</Th>
+                <Th>Type</Th>
+                <Th>Category</Th>
+                <Th>Vendor</Th>
+                <Th>Description</Th>
+                <Th>Amount</Th>
+                <Th>Method</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {expenses.map((e) => (
+                <tr key={e.id} className="border-b border-line last:border-0">
+                  <Td className="text-ink-mid">{e.txn_date}</Td>
+                  <Td>
+                    <Badge tone={e.expense_type === "recurring" ? "turmeric" : "steel"}>{e.expense_type === "recurring" ? "Recurring" : "Regular"}</Badge>
+                  </Td>
+                  <Td>{e.category}</Td>
+                  <Td className="text-ink-mid">{e.vendor || "—"}</Td>
+                  <Td className="text-ink-mid">{e.description || "—"}</Td>
+                  <Td className="font-mono font-medium">{fmtMoney(e.amount)}</Td>
+                  <Td className="text-ink-mid">{e.payment_method}</Td>
+                </tr>
+              ))}
+              {!loading && expenses.length === 0 && <EmptyRow colSpan={7} label="No expenses logged yet." />}
+            </tbody>
+          </table>
+        </TableScroll>
+      </Panel>
 
-      <div className="rounded-xl border border-line bg-surface p-5 mb-6">
-        <h2 className="font-display font-semibold mb-3">Log expense</h2>
-        {error && <p className="text-crimson-400 text-sm mb-2">{error}</p>}
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <select value={category} onChange={(e) => setCategory(e.target.value)} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
-            {categories.map((c) => (
-              <option key={c}>{c}</option>
-            ))}
-          </select>
-          <select value={expenseType} onChange={(e) => setExpenseType(e.target.value as "regular" | "recurring")} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Add expense"
+        footer={
+          <>
+            <button onClick={() => setModalOpen(false)} className={btnGhost}>
+              Cancel
+            </button>
+            <button onClick={save} disabled={saving} className={btnPrimary}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </>
+        }
+      >
+        {error && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}
+        <Field label="Date">
+          <input type="date" value={fDate} onChange={(e) => setFDate(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label="Type">
+          <select value={fType} onChange={(e) => setFType(e.target.value as "regular" | "recurring")} className={inputCls}>
             <option value="regular">Regular</option>
             <option value="recurring">Recurring</option>
           </select>
-        </div>
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" placeholder="Amount" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-          <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
-            <option>Cash</option>
-            <option>Card</option>
-            <option>Bank Transfer</option>
-          </select>
-        </div>
-        <div className="grid grid-cols-2 gap-2 mb-3">
-          <input value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Vendor (optional)" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-          <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (optional)" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-        </div>
-        <button onClick={addExpense} disabled={saving} className="rounded-md bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2">
-          {saving ? "Saving…" : "Log expense"}
-        </button>
-      </div>
-
-      <div className="rounded-xl border border-line bg-surface overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-raised/50 text-ink-mid text-xs uppercase">
-            <tr>
-              <th className="text-left p-3">Date</th>
-              <th className="text-left p-3">Category</th>
-              <th className="text-left p-3">Vendor</th>
-              <th className="text-left p-3">Type</th>
-              <th className="text-left p-3">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {expenses.map((e) => (
-              <tr key={e.id} className="border-t border-line">
-                <td className="p-3 text-ink-mid">{e.txn_date}</td>
-                <td className="p-3 font-medium">
-                  {e.category}
-                  {e.description ? <div className="text-xs text-ink-faint">{e.description}</div> : null}
-                </td>
-                <td className="p-3 text-ink-mid">{e.vendor ?? "—"}</td>
-                <td className="p-3">
-                  <span className={`text-xs px-2 py-1 rounded-full ${e.expense_type === "recurring" ? "bg-turmeric-500/20 text-turmeric-400" : "bg-raised text-ink-faint"}`}>
-                    {e.expense_type}
-                  </span>
-                </td>
-                <td className="p-3 font-mono text-crimson-400">Rs {e.amount}</td>
-              </tr>
+        </Field>
+        <Field label="Category">
+          <select value={fCategory} onChange={(e) => setFCategory(e.target.value)} className={inputCls}>
+            {categories.map((c) => (
+              <option key={c.id} value={c.name}>
+                {c.name}
+              </option>
             ))}
-            {expenses.length === 0 && (
-              <tr>
-                <td colSpan={5} className="p-6 text-center text-ink-faint">
-                  No expenses logged yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+          </select>
+        </Field>
+        <Field label="Vendor (optional)">
+          <input value={fVendor} onChange={(e) => setFVendor(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label="Description (optional)">
+          <input value={fDesc} onChange={(e) => setFDesc(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label="Amount">
+          <input value={fAmount} onChange={(e) => setFAmount(e.target.value)} type="number" min="0" step="0.01" className={inputCls} />
+        </Field>
+        <Field label="Payment method">
+          <select value={fMethod} onChange={(e) => setFMethod(e.target.value)} className={inputCls}>
+            {methods.map((m) => (
+              <option key={m.id} value={m.name}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </Modal>
     </main>
   );
 }

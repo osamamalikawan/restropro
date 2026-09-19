@@ -1,33 +1,42 @@
 "use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
+import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/components/ui/panel";
+import { fmtMoney, todayISO } from "@/lib/format";
 
 type Supplier = { id: string; name: string };
-type Entry = { id: string; amount: number; method: string; note: string | null; txn_date: string; suppliers?: { name: string } | null };
+type PaymentMethod = { id: string; name: string };
+type LedgerEntry = { id: string; amount: number; method: string; note: string | null; txn_date: string; suppliers?: { name: string } | null };
 
 export function SupplierLedgerClient() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [entries, setEntries] = useState<Entry[]>([]);
+  const [methods, setMethods] = useState<PaymentMethod[]>([]);
+  const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [supplierId, setSupplierId] = useState("");
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("Cash");
+  const [date, setDate] = useState(todayISO());
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
-  async function loadAll() {
-    const [supRes, entryRes] = await Promise.all([fetch("/api/suppliers"), fetch("/api/supplier-ledger")]);
-    const supData = await supRes.json();
-    const entryData = await entryRes.json();
-    if (supRes.ok) setSuppliers(supData.suppliers ?? []);
-    if (entryRes.ok) setEntries(entryData.entries ?? []);
+  async function load() {
+    const [sRes, mRes, eRes] = await Promise.all([fetch("/api/suppliers"), fetch("/api/payment-methods"), fetch("/api/supplier-ledger")]);
+    const [s, m, e] = await Promise.all([sRes.json(), mRes.json(), eRes.json()]);
+    setSuppliers(s.suppliers ?? []);
+    setMethods(m.paymentMethods ?? m.methods ?? []);
+    setEntries(e.entries ?? []);
+    if (!supplierId && s.suppliers?.[0]) setSupplierId(s.suppliers[0].id);
   }
   useEffect(() => {
-    loadAll();
+    load();
   }, []);
 
-  async function logPayment() {
-    if (!supplierId || !amount) return;
+  async function submit() {
+    if (!supplierId || !amount || Number(amount) <= 0) {
+      setError("Select a supplier and enter an amount");
+      return;
+    }
     setSaving(true);
     setError("");
     const res = await fetch("/api/supplier-ledger", {
@@ -37,80 +46,84 @@ export function SupplierLedgerClient() {
     });
     setSaving(false);
     if (!res.ok) {
-      setError((await res.json()).error);
+      setError((await res.json()).error ?? "Could not log payment");
       return;
     }
     setAmount("");
     setNote("");
-    loadAll();
+    await load();
   }
 
   return (
-    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="font-display text-2xl font-semibold">Supplier Ledger</h1>
-        <Link href="/dashboard" className="text-xs text-ink-mid underline hover:text-ink-strong">
-          ← Dashboard
-        </Link>
-      </div>
-
-      <div className="rounded-xl border border-line bg-surface p-5 mb-6">
-        <h2 className="font-display font-semibold mb-3">Log payment</h2>
-        {error && <p className="text-crimson-400 text-sm mb-2">{error}</p>}
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
-            <option value="">Choose supplier…</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <select value={method} onChange={(e) => setMethod(e.target.value)} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
-            <option>Cash</option>
-            <option>Card</option>
-            <option>Bank Transfer</option>
-          </select>
+    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">
+        <div className="rounded-xl border border-line bg-surface p-5">
+          <h3 className="font-display text-lg font-semibold mb-4">Log a payment</h3>
+          {error && <p className="mb-3 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}
+          <div className="space-y-3">
+            <Field label="Supplier">
+              <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={inputCls}>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Amount">
+              <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" min="0" step="0.01" className={inputCls} placeholder="0.00" />
+            </Field>
+            <Field label="Method">
+              <select value={method} onChange={(e) => setMethod(e.target.value)} className={inputCls}>
+                {methods.map((m) => (
+                  <option key={m.id} value={m.name}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Date">
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={inputCls} />
+            </Field>
+            <Field label="Note (optional)">
+              <input value={note} onChange={(e) => setNote(e.target.value)} className={inputCls} placeholder="e.g. Partial payment for June" />
+            </Field>
+            <button onClick={submit} disabled={saving} className={`${btnPrimary} w-full justify-center`}>
+              {saving ? "Saving…" : "Log payment"}
+            </button>
+          </div>
         </div>
-        <div className="grid grid-cols-2 gap-2 mb-3">
-          <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" placeholder="Amount" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-        </div>
-        <button onClick={logPayment} disabled={saving} className="rounded-md bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2">
-          {saving ? "Saving…" : "Log payment"}
-        </button>
-      </div>
 
-      <div className="rounded-xl border border-line bg-surface overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-raised/50 text-ink-mid text-xs uppercase">
-            <tr>
-              <th className="text-left p-3">Date</th>
-              <th className="text-left p-3">Supplier</th>
-              <th className="text-left p-3">Method</th>
-              <th className="text-left p-3">Amount</th>
-              <th className="text-left p-3">Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((e) => (
-              <tr key={e.id} className="border-t border-line">
-                <td className="p-3 text-ink-mid">{e.txn_date}</td>
-                <td className="p-3 font-medium">{e.suppliers?.name}</td>
-                <td className="p-3 text-ink-mid">{e.method}</td>
-                <td className="p-3 font-mono">Rs {e.amount}</td>
-                <td className="p-3 text-ink-faint">{e.note ?? "—"}</td>
-              </tr>
-            ))}
-            {entries.length === 0 && (
-              <tr>
-                <td colSpan={5} className="p-6 text-center text-ink-faint">
-                  No payments logged yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <Panel>
+          <PanelHead title="Payment history" />
+          <TableScroll>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-line">
+                  <Th>Date</Th>
+                  <Th>Supplier</Th>
+                  <Th>Amount</Th>
+                  <Th>Method</Th>
+                  <Th>Note</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((l) => (
+                  <tr key={l.id} className="border-b border-line last:border-0">
+                    <Td className="text-ink-mid">{l.txn_date}</Td>
+                    <Td className="font-medium text-ink-strong">{l.suppliers?.name ?? "—"}</Td>
+                    <Td className="font-mono font-medium">{fmtMoney(l.amount)}</Td>
+                    <Td>
+                      <Badge>{l.method}</Badge>
+                    </Td>
+                    <Td className="text-ink-mid">{l.note || "—"}</Td>
+                  </tr>
+                ))}
+                {entries.length === 0 && <EmptyRow colSpan={5} label="No payments logged yet." />}
+              </tbody>
+            </table>
+          </TableScroll>
+        </Panel>
       </div>
     </main>
   );

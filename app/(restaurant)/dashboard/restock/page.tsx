@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-session";
 import { RestockClient } from "./restock-client";
 
@@ -9,5 +10,9 @@ export default async function RestockPage() {
   if (!session) redirect("/login");
   if (!["admin", "manager", "inventory"].includes(session.role)) redirect("/dashboard");
 
-  return <RestockClient />;
+  return (
+    <Suspense>
+      <RestockClient />
+    </Suspense>
+  );
 }

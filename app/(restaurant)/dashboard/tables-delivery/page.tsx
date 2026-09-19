@@ -1,7 +1,13 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-session";
+import { TablesDeliveryClient } from "./tables-delivery-client";
 
-/** Tables & Delivery Areas moved into the Settings page as two panels (see
- *  settings-client.tsx) — this redirect just keeps old links/bookmarks working. */
-export default function TablesDeliveryRedirect() {
-  redirect("/dashboard/settings#tables");
+export default async function TablesDeliveryPage() {
+  const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
+  const session = await verifyStaffSessionToken(token);
+  if (!session) redirect("/login");
+  if (session.role !== "admin" && session.role !== "manager") redirect("/dashboard");
+
+  return <TablesDeliveryClient />;
 }

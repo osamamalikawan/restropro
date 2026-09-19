@@ -1,126 +1,246 @@
 "use client";
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { IdCard, Pencil, ArrowLeft } from "lucide-react";
+import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
+import { fmtMoney } from "@/lib/format";
 
 type Supplier = { id: string; name: string; contact_person: string | null; phone: string | null; category: string | null; payment_terms: string | null };
+type Purchase = { supplier_id: string | null; total_cost: number; inventory_items?: { name: string; unit: string } | null; unit_cost: number };
+type LedgerEntry = { id: string; supplier_id: string; amount: number; method: string; note: string | null; txn_date: string };
 
 export function SuppliersClient() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [name, setName] = useState("");
-  const [contact, setContact] = useState("");
-  const [phone, setPhone] = useState("");
-  const [category, setCategory] = useState("");
-  const [terms, setTerms] = useState("Net 15");
+  const [purchases, setPurchases] = useState<Purchase[]>([]);
+  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [fName, setFName] = useState("");
+  const [fContact, setFContact] = useState("");
+  const [fPhone, setFPhone] = useState("");
+  const [fCategory, setFCategory] = useState("");
+  const [fTerms, setFTerms] = useState("");
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const [profileId, setProfileId] = useState<string | null>(null);
 
   async function load() {
-    const res = await fetch("/api/suppliers");
-    const data = await res.json();
-    if (res.ok) setSuppliers(data.suppliers ?? []);
+    setLoading(true);
+    const [sRes, pRes, lRes] = await Promise.all([fetch("/api/suppliers"), fetch("/api/restock?limit=1000"), fetch("/api/supplier-ledger?limit=1000")]);
+    const [s, p, l] = await Promise.all([sRes.json(), pRes.json(), lRes.json()]);
+    setSuppliers(s.suppliers ?? []);
+    setPurchases(p.purchases ?? []);
+    setLedger(l.entries ?? []);
+    setLoading(false);
   }
   useEffect(() => {
     load();
   }, []);
 
-  async function addSupplier() {
-    if (!name.trim()) return;
+  function openAdd() {
+    setEditingId(null);
+    setFName("");
+    setFContact("");
+    setFPhone("");
+    setFCategory("");
+    setFTerms("");
+    setError("");
+    setModalOpen(true);
+  }
+  function openEdit(s: Supplier) {
+    setEditingId(s.id);
+    setFName(s.name);
+    setFContact(s.contact_person ?? "");
+    setFPhone(s.phone ?? "");
+    setFCategory(s.category ?? "");
+    setFTerms(s.payment_terms ?? "");
+    setError("");
+    setModalOpen(true);
+  }
+  async function save() {
+    if (!fName.trim()) {
+      setError("Company name is required");
+      return;
+    }
+    setSaving(true);
     setError("");
     const res = await fetch("/api/suppliers", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        op: "insert",
-        row: { name: name.trim(), contact_person: contact.trim() || null, phone: phone.trim() || null, category: category.trim() || null, payment_terms: terms },
+        op: editingId ? "update" : "insert",
+        row: { id: editingId ?? undefined, name: fName.trim(), contact_person: fContact.trim() || null, phone: fPhone.trim() || null, category: fCategory.trim() || null, payment_terms: fTerms.trim() || null },
       }),
     });
+    setSaving(false);
     if (!res.ok) {
-      setError((await res.json()).error);
+      setError((await res.json()).error ?? "Could not save supplier");
       return;
     }
-    setName("");
-    setContact("");
-    setPhone("");
-    setCategory("");
-    load();
+    setModalOpen(false);
+    await load();
   }
-  async function removeSupplier(id: string) {
-    await fetch("/api/suppliers", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "delete", row: { id } }),
-    });
-    load();
+
+  const profile = profileId ? suppliers.find((s) => s.id === profileId) : null;
+
+  if (profile) {
+    const payments = ledger.filter((l) => l.supplier_id === profile.id);
+    const totalPaid = payments.reduce((s, l) => s + Number(l.amount), 0);
+    const supplierPurchases = purchases.filter((p) => p.supplier_id === profile.id);
+    const totalPurchased = supplierPurchases.reduce((s, p) => s + Number(p.total_cost), 0);
+    const itemsLinked = new Set(supplierPurchases.map((p) => p.inventory_items?.name)).size;
+
+    return (
+      <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+        <button onClick={() => setProfileId(null)} className="mb-4 inline-flex items-center gap-1.5 text-xs text-ink-mid hover:text-ink-strong">
+          <ArrowLeft className="h-3.5 w-3.5" /> Back to suppliers
+        </button>
+        <div className="flex items-center gap-4 mb-6">
+          <Avatar id={profile.id} name={profile.name} size={56} />
+          <div>
+            <h1 className="font-display text-2xl font-semibold">{profile.name}</h1>
+            <div className="flex gap-2 mt-1">
+              {profile.category && <Badge tone="turmeric">{profile.category}</Badge>}
+              {profile.payment_terms && <Badge>{profile.payment_terms}</Badge>}
+            </div>
+            <div className="text-sm text-ink-mid mt-1">
+              {profile.contact_person || "—"} · {profile.phone || "—"}
+            </div>
+          </div>
+          <button onClick={() => openEdit(profile)} className={`${btnGhost} ml-auto`}>
+            <Pencil className="h-3.5 w-3.5" /> Edit
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+          <KpiCard label="Total paid" value={fmtMoney(totalPaid)} />
+          <KpiCard label="Items linked" value={itemsLinked} />
+          <KpiCard label="Total purchased" value={fmtMoney(totalPurchased)} />
+          <KpiCard label="Outstanding payable" value={fmtMoney(Math.max(0, totalPurchased - totalPaid))} />
+        </div>
+
+        <Panel>
+          <PanelHead title="Payment history" />
+          <TableScroll>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-line">
+                  <Th>Date</Th>
+                  <Th>Amount</Th>
+                  <Th>Method</Th>
+                  <Th>Note</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map((l) => (
+                  <tr key={l.id} className="border-b border-line last:border-0">
+                    <Td className="text-ink-mid">{l.txn_date}</Td>
+                    <Td className="font-mono font-medium">{fmtMoney(l.amount)}</Td>
+                    <Td>
+                      <Badge>{l.method}</Badge>
+                    </Td>
+                    <Td className="text-ink-mid">{l.note || "—"}</Td>
+                  </tr>
+                ))}
+                {payments.length === 0 && <EmptyRow colSpan={4} label="No payments logged yet." />}
+              </tbody>
+            </table>
+          </TableScroll>
+        </Panel>
+
+        {renderModal()}
+      </main>
+    );
+  }
+
+  function renderModal() {
+    return (
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editingId ? "Edit supplier" : "Add supplier"}
+        footer={
+          <>
+            <button onClick={() => setModalOpen(false)} className={btnGhost}>
+              Cancel
+            </button>
+            <button onClick={save} disabled={saving} className={btnPrimary}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </>
+        }
+      >
+        {error && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}
+        <Field label="Company name">
+          <input value={fName} onChange={(e) => setFName(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label="Contact person">
+          <input value={fContact} onChange={(e) => setFContact(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label="Phone">
+          <input value={fPhone} onChange={(e) => setFPhone(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label="Category">
+          <input value={fCategory} onChange={(e) => setFCategory(e.target.value)} className={inputCls} placeholder="e.g. Meat, Dairy…" />
+        </Field>
+        <Field label="Payment terms">
+          <input value={fTerms} onChange={(e) => setFTerms(e.target.value)} className={inputCls} placeholder="e.g. Net 15" />
+        </Field>
+      </Modal>
+    );
   }
 
   return (
-    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="font-display text-2xl font-semibold">Suppliers</h1>
-        <Link href="/dashboard" className="text-xs text-ink-mid underline hover:text-ink-strong">
-          ← Dashboard
-        </Link>
-      </div>
-      {error && <p className="text-crimson-400 text-sm mb-4">{error}</p>}
-
-      <div className="rounded-xl border border-line bg-surface overflow-hidden mb-6">
-        <table className="w-full text-sm">
-          <thead className="bg-raised/50 text-ink-mid text-xs uppercase">
-            <tr>
-              <th className="text-left p-3">Supplier</th>
-              <th className="text-left p-3">Contact</th>
-              <th className="text-left p-3">Category</th>
-              <th className="text-left p-3">Terms</th>
-              <th className="text-left p-3"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {suppliers.map((s) => (
-              <tr key={s.id} className="border-t border-line">
-                <td className="p-3 font-medium">{s.name}</td>
-                <td className="p-3 text-ink-mid">
-                  {s.contact_person}
-                  {s.phone ? <div className="text-xs text-ink-faint">{s.phone}</div> : null}
-                </td>
-                <td className="p-3 text-ink-mid">{s.category}</td>
-                <td className="p-3 text-ink-mid">{s.payment_terms}</td>
-                <td className="p-3">
-                  <button onClick={() => removeSupplier(s.id)} className="text-ink-faint hover:text-crimson-400 text-xs">
-                    Remove
-                  </button>
-                </td>
+    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      <Panel>
+        <PanelHead title="Suppliers" subtitle="Vendors supplying stock and ingredients">
+          <button onClick={openAdd} className={addBtnCls}>
+            + Add supplier
+          </button>
+        </PanelHead>
+        <TableScroll>
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-line">
+                <Th>Supplier</Th>
+                <Th>Contact</Th>
+                <Th>Category</Th>
+                <Th>Terms</Th>
+                <Th />
               </tr>
-            ))}
-            {suppliers.length === 0 && (
-              <tr>
-                <td colSpan={5} className="p-6 text-center text-ink-faint">
-                  No suppliers yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {suppliers.map((s) => (
+                <tr key={s.id} className="border-b border-line last:border-0">
+                  <Td className="font-medium text-ink-strong">{s.name}</Td>
+                  <Td>
+                    {s.contact_person || "—"}
+                    <div className="text-xs text-ink-mid">{s.phone}</div>
+                  </Td>
+                  <Td>{s.category && <Badge tone="turmeric">{s.category}</Badge>}</Td>
+                  <Td className="text-ink-mid">{s.payment_terms || "—"}</Td>
+                  <Td>
+                    <div className="flex items-center gap-1.5">
+                      <IconBtn title="View profile" onClick={() => setProfileId(s.id)}>
+                        <IdCard className="h-3.5 w-3.5" />
+                      </IconBtn>
+                      <IconBtn title="Edit" onClick={() => openEdit(s)}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </IconBtn>
+                    </div>
+                  </Td>
+                </tr>
+              ))}
+              {!loading && suppliers.length === 0 && <EmptyRow colSpan={5} label="No suppliers yet." />}
+            </tbody>
+          </table>
+        </TableScroll>
+      </Panel>
 
-      <div className="rounded-xl border border-line bg-surface p-5">
-        <h2 className="font-display font-semibold mb-3">Add supplier</h2>
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Company name" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-          <input value={contact} onChange={(e) => setContact(e.target.value)} placeholder="Contact person" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-        </div>
-        <div className="grid grid-cols-3 gap-2 mb-3">
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-          <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Category" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-          <select value={terms} onChange={(e) => setTerms(e.target.value)} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
-            <option>Net 7</option>
-            <option>Net 15</option>
-            <option>Net 30</option>
-            <option>Cash on delivery</option>
-          </select>
-        </div>
-        <button onClick={addSupplier} className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-4 py-2">
-          Add supplier
-        </button>
-      </div>
+      {renderModal()}
     </main>
   );
 }
