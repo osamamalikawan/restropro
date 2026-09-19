@@ -27,7 +27,9 @@ export async function GET() {
   const session = await requireStaffSession()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data, error } = await supabaseAdmin
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
     .from('notification_recipients')
     .select(
       'id, read_at, read_by, notifications ( id, title, body, audience, created_at )'
@@ -42,7 +44,7 @@ export async function GET() {
   const readerIds = Array.from(new Set(rows.map((r) => r.read_by).filter(Boolean))) as string[]
   const names = new Map<string, string>()
   if (readerIds.length) {
-    const { data: emps } = await supabaseAdmin
+    const { data: emps } = await admin
       .from('employees')
       .select('id, name')
       .in('id', readerIds)
@@ -87,7 +89,9 @@ export async function POST(req: Request) {
 
   const { action, recipientId } = await req.json().catch(() => ({} as any))
 
-  const base = supabaseAdmin
+  const admin = createAdminClient()
+
+  const base = admin
     .from('notification_recipients')
     .update(
       action === 'markUnread'
