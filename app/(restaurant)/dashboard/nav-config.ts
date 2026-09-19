@@ -59,13 +59,13 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/expenses", label: "Expenses", icon: CreditCard, perm: "expenses" },
     ],
   },
-  {
-    label: "Configure",
-    items: [
-      { href: "/dashboard/tables-delivery", label: "Tables & Delivery", icon: MapPin, perm: "tables" },
-      { href: "/dashboard/payment-methods", label: "Payment Methods", icon: CreditCard, perm: "settings" },
-    ],
-  },
+  // {
+  //   label: "Configure",
+  //   items: [
+  //     { href: "/dashboard/tables-delivery", label: "Tables & Delivery", icon: MapPin, perm: "tables" },
+  //     { href: "/dashboard/settings#payment-methods", label: "Payment Methods", icon: CreditCard, perm: "settings" },
+  //   ],
+  // },
   {
     label: "System",
     items: [
@@ -108,7 +108,6 @@ export const VIEW_META: Record<string, { title: string; subtitle: string }> = {
   "/dashboard/accounts": { title: "Accounts", subtitle: "Income & expense ledger" },
   "/dashboard/expenses": { title: "Expenses", subtitle: "Regular and recurring restaurant expenses" },
   "/dashboard/tables-delivery": { title: "Tables & Delivery", subtitle: "Dine-in tables and delivery coverage areas" },
-  "/dashboard/payment-methods": { title: "Payment Methods", subtitle: "Options customers can split payment across" },
   "/dashboard/settings": { title: "Settings", subtitle: "Restaurant profile & printer configuration" },
   "/dashboard/permissions": { title: "Users & Permissions", subtitle: "Roles, permission matrix & shift timing" },
 };
