@@ -1,171 +1,277 @@
 "use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
 
-type Employee = { id: string; name: string; role: string; status: string };
+type Role = "admin" | "manager" | "cashier" | "inventory";
+type Matrix = Record<Role, Record<string, boolean>>;
+type Category = { id: string; name: string };
 
-const ROLES = ["admin", "manager", "cashier", "inventory"] as const;
-
-// Static reference — this codebase enforces these via a hardcoded allow-list check in each
-// app/api/<module>/route.ts, not a dynamic permissions table (see the "Users & Permissions UI"
-// section of the porting prompt in README.md for why that's a deliberate scoping choice).
-const ROLE_ACCESS: Record<string, string[]> = {
-  admin: ["Everything, including Settings and this page"],
-  manager: ["POS", "Menu", "Inventory", "Suppliers", "Restock", "Accounts", "Customers", "Employee/Supplier Ledger", "Expenses", "Tables & Delivery"],
-  cashier: ["POS", "Customers (search/add only)"],
-  inventory: ["POS", "Inventory", "Restock", "Suppliers"],
+const ROLE_META: Record<Role, { label: string; color: string }> = {
+  admin: { label: "Admin", color: "#D9481F" },
+  manager: { label: "Manager", color: "#3F6E52" },
+  cashier: { label: "Cashier", color: "#4C7EA8" },
+  inventory: { label: "Inventory Manager", color: "#C99A3E" },
 };
 
-export function PermissionsClient() {
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [name, setName] = useState("");
-  const [role, setRole] = useState<(typeof ROLES)[number]>("cashier");
-  const [pin, setPin] = useState("");
-  const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
+const MODULE_LABELS: Record<string, string> = {
+  dashboard: "Dashboard",
+  pos: "POS",
+  sales: "Sales",
+  customers: "Customers",
+  inventory: "Inventory",
+  restock: "Restock",
+  products: "Products",
+  recipes: "Recipes",
+  suppliers: "Suppliers",
+  supplierLedger: "Supplier Ledger",
+  employees: "Employees",
+  employeeLedger: "Employee Ledger",
+  accounts: "Accounts",
+  expenses: "Expenses",
+  menu: "Menu",
+  tables: "Tables",
+  settings: "Settings",
+  admin: "Admin",
+};
 
-  async function load() {
-    const res = await fetch("/api/employees");
-    const data = await res.json();
-    if (res.ok) setEmployees(data.employees ?? []);
-  }
+/** Matches the prototype's view-admin ("Users & Permissions") 1:1: the role permission
+ *  matrix (togglePerm() in the prototype), default shift timings (saveShift()), and
+ *  expense categories (addExpenseCategory()/removeExpenseCategory()) — each panel backed by
+ *  a real endpoint now (see lib/permissions.ts) instead of the prototype's in-memory tenant
+ *  object, so toggling a cell here actually changes what that role can reach. */
+export function PermissionsClient() {
+  const [modules, setModules] = useState<string[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [matrix, setMatrix] = useState<Matrix | null>(null);
+  const [permMsg, setPermMsg] = useState("");
+
+  const [shiftStart, setShiftStart] = useState("14:00");
+  const [shiftEnd, setShiftEnd] = useState("02:00");
+  const [shiftMsg, setShiftMsg] = useState("");
+
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [newCat, setNewCat] = useState("");
+  const [catError, setCatError] = useState("");
+
   useEffect(() => {
-    load();
+    (async () => {
+      const [permRes, settingsRes, catRes] = await Promise.all([
+        fetch("/api/permissions"),
+        fetch("/api/settings"),
+        fetch("/api/expense-categories"),
+      ]);
+      const permData = await permRes.json();
+      if (permRes.ok) {
+        setMatrix(permData.matrix);
+        setModules(permData.modules);
+        setRoles(permData.roles);
+      }
+      const settingsData = await settingsRes.json();
+      if (settingsRes.ok && settingsData.settings) {
+        setShiftStart(settingsData.settings.shift_start?.slice(0, 5) ?? "14:00");
+        setShiftEnd(settingsData.settings.shift_end?.slice(0, 5) ?? "02:00");
+      }
+      const catData = await catRes.json();
+      if (catRes.ok) setCategories(catData.categories ?? []);
+    })();
   }, []);
 
-  async function changeRole(emp: Employee, newRole: string) {
-    setError("");
-    const res = await fetch("/api/employees", {
+  async function togglePerm(role: Role, module: string, canView: boolean) {
+    if (role === "admin") return;
+    setMatrix((prev) => (prev ? { ...prev, [role]: { ...prev[role], [module]: canView } } : prev));
+    setPermMsg("");
+    const res = await fetch("/api/permissions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "update", row: { id: emp.id, role: newRole } }),
+      body: JSON.stringify({ role, module, canView }),
     });
     if (!res.ok) {
-      setError((await res.json()).error);
+      const data = await res.json();
+      setPermMsg(data.error || "Could not save");
+      // revert on failure
+      setMatrix((prev) => (prev ? { ...prev, [role]: { ...prev[role], [module]: !canView } } : prev));
       return;
     }
-    load();
-  }
-  async function toggleStatus(emp: Employee) {
-    setError("");
-    const res = await fetch("/api/employees", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "update", row: { id: emp.id, status: emp.status === "active" ? "inactive" : "active" } }),
-    });
-    if (!res.ok) {
-      setError((await res.json()).error);
-      return;
-    }
-    load();
+    setPermMsg(`Permission updated for ${ROLE_META[role].label}`);
+    setTimeout(() => setPermMsg(""), 2000);
   }
 
-  async function addEmployee() {
-    if (!name.trim() || !/^\d{4}$/.test(pin)) {
-      setError("Name and a 4-digit PIN are required");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    const res = await fetch("/api/employees", {
+  async function saveShift() {
+    setShiftMsg("");
+    const res = await fetch("/api/settings", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "insert", row: { name: name.trim(), role, status: "active", pin } }),
+      body: JSON.stringify({ shiftStart, shiftEnd }),
     });
-    setSaving(false);
     if (!res.ok) {
-      setError((await res.json()).error);
+      setShiftMsg((await res.json()).error || "Could not save");
       return;
     }
-    setName("");
-    setPin("");
-    load();
+    setShiftMsg("Default shift timing saved");
+    setTimeout(() => setShiftMsg(""), 2500);
+  }
+
+  async function addCategory() {
+    const name = newCat.trim();
+    if (!name) {
+      setCatError("Enter a category name");
+      return;
+    }
+    setCatError("");
+    const res = await fetch("/api/expense-categories", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "insert", row: { name } }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setCatError(data.error);
+      return;
+    }
+    setNewCat("");
+    const res2 = await fetch("/api/expense-categories");
+    setCategories((await res2.json()).categories ?? []);
+  }
+
+  async function removeCategory(cat: Category) {
+    setCatError("");
+    const res = await fetch("/api/expense-categories", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "delete", row: { id: cat.id } }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setCatError(data.error);
+      return;
+    }
+    setCategories((prev) => prev.filter((c) => c.id !== cat.id));
   }
 
   return (
-    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="font-display text-2xl font-semibold">Users &amp; Permissions</h1>
-        <Link href="/dashboard" className="text-xs text-ink-mid underline hover:text-ink-strong">
-          ← Dashboard
-        </Link>
-      </div>
-      {error && <p className="text-crimson-400 text-sm mb-4">{error}</p>}
-
-      <div className="rounded-xl border border-line bg-surface overflow-hidden mb-6">
-        <table className="w-full text-sm">
-          <thead className="bg-raised/50 text-ink-mid text-xs uppercase">
-            <tr>
-              <th className="text-left p-3">Name</th>
-              <th className="text-left p-3">Role</th>
-              <th className="text-left p-3">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {employees.map((e) => (
-              <tr key={e.id} className="border-t border-line">
-                <td className="p-3 font-medium">{e.name}</td>
-                <td className="p-3">
-                  <select
-                    value={e.role}
-                    onChange={(ev) => changeRole(e, ev.target.value)}
-                    className="rounded-md bg-raised border border-line px-2 py-1 text-sm"
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="p-3">
-                  <button
-                    onClick={() => toggleStatus(e)}
-                    className={`text-xs px-2 py-1 rounded-full ${e.status === "active" ? "bg-basil-500/20 text-basil-400" : "bg-raised text-ink-faint"}`}
-                  >
-                    {e.status}
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {employees.length === 0 && (
-              <tr>
-                <td colSpan={3} className="p-6 text-center text-ink-faint">
-                  No employees yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="rounded-xl border border-line bg-surface p-5 mb-6">
-        <h2 className="font-display font-semibold mb-3">Add employee</h2>
-        <div className="grid grid-cols-3 gap-2 mb-3">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
-          <select value={role} onChange={(e) => setRole(e.target.value as (typeof ROLES)[number])} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
-            {ROLES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-          <input value={pin} onChange={(e) => setPin(e.target.value)} placeholder="4-digit PIN" maxLength={4} inputMode="numeric" className="rounded-md bg-raised border border-line px-3 py-2 text-sm" />
+    <main className="p-6 md:p-8 space-y-5">
+      <div className="rounded-xl border border-line bg-surface p-6">
+        <div className="mb-4">
+          <h3 className="font-display font-semibold text-ink-strong text-[15px]">Role permissions</h3>
+          <div className="text-xs text-ink-faint mt-0.5">
+            Controls which modules each role can access. Admin always has full access.
+          </div>
         </div>
-        <button onClick={addEmployee} disabled={saving} className="rounded-md bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2">
-          {saving ? "Saving…" : "Add employee"}
-        </button>
+        {permMsg && <p className="text-xs text-basil-400 mb-3">{permMsg}</p>}
+        {!matrix ? (
+          <p className="text-ink-faint text-sm">Loading…</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="text-sm border-collapse min-w-[900px]">
+              <thead>
+                <tr>
+                  <th className="text-left p-2 sticky left-0 bg-surface">Role</th>
+                  {modules.map((m) => (
+                    <th key={m} className="text-center p-2 text-xs text-ink-faint font-medium whitespace-nowrap">
+                      {MODULE_LABELS[m] ?? m}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {roles.map((role) => (
+                  <tr key={role} className="border-t border-line-soft">
+                    <td className="p-2 sticky left-0 bg-surface">
+                      <span
+                        className="text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap"
+                        style={{ background: `${ROLE_META[role].color}22`, color: ROLE_META[role].color }}
+                      >
+                        {ROLE_META[role].label}
+                      </span>
+                    </td>
+                    {modules.map((m) => (
+                      <td key={m} className="text-center p-2">
+                        <input
+                          type="checkbox"
+                          checked={matrix[role][m]}
+                          disabled={role === "admin"}
+                          onChange={(e) => togglePerm(role, m, e.target.checked)}
+                          className="w-4 h-4 accent-chili-500 disabled:opacity-40"
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      <div className="rounded-xl border border-line bg-surface p-5">
-        <h2 className="font-display font-semibold mb-3">What each role can access</h2>
-        <div className="space-y-2 text-sm">
-          {ROLES.map((r) => (
-            <div key={r} className="flex gap-3">
-              <span className="w-20 shrink-0 font-semibold capitalize">{r}</span>
-              <span className="text-ink-mid">{ROLE_ACCESS[r].join(", ")}</span>
-            </div>
-          ))}
+      <div className="grid md:grid-cols-2 gap-5">
+        <div className="rounded-xl border border-line bg-surface p-6">
+          <div className="mb-4">
+            <h3 className="font-display font-semibold text-ink-strong text-[15px]">Default shift timings</h3>
+            <div className="text-xs text-ink-faint mt-0.5">Applied restaurant-wide, supports overnight shifts</div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-1">
+            <label className="block">
+              <span className="text-xs font-semibold text-ink-mid">Shift start</span>
+              <input
+                type="time"
+                value={shiftStart}
+                onChange={(e) => setShiftStart(e.target.value)}
+                className="w-full rounded-lg bg-raised border border-line px-3 py-2 text-sm mt-1"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-semibold text-ink-mid">Shift end</span>
+              <input
+                type="time"
+                value={shiftEnd}
+                onChange={(e) => setShiftEnd(e.target.value)}
+                className="w-full rounded-lg bg-raised border border-line px-3 py-2 text-sm mt-1"
+              />
+            </label>
+          </div>
+          <p className="text-xs text-ink-faint mb-3.5">
+            Overnight shifts are supported — end time may fall on the next day. Restock dates default to the current
+            shift&apos;s start date.
+          </p>
+          {shiftMsg && <p className="text-xs text-basil-400 mb-2">{shiftMsg}</p>}
+          <button
+            onClick={saveShift}
+            className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-4 py-2 transition-colors"
+          >
+            Save default shift
+          </button>
+        </div>
+
+        <div className="rounded-xl border border-line bg-surface p-6">
+          <div className="mb-4">
+            <h3 className="font-display font-semibold text-ink-strong text-[15px]">Expense categories</h3>
+            <div className="text-xs text-ink-faint mt-0.5">Used when logging expense ledger entries</div>
+          </div>
+          <div className="space-y-1.5 mb-3">
+            {categories.map((c) => (
+              <div key={c.id} className="flex items-center justify-between rounded-lg bg-raised px-3 py-2 text-sm">
+                <span>{c.name}</span>
+                <button onClick={() => removeCategory(c)} className="text-ink-faint hover:text-crimson-400 text-xs">
+                  ✕
+                </button>
+              </div>
+            ))}
+            {categories.length === 0 && <p className="text-xs text-ink-faint">No categories yet — add one below.</p>}
+          </div>
+          {catError && <p className="text-xs text-crimson-400 mb-2">{catError}</p>}
+          <div className="flex gap-2">
+            <input
+              value={newCat}
+              onChange={(e) => setNewCat(e.target.value)}
+              placeholder="e.g. Marketing"
+              className="flex-1 rounded-lg bg-raised border border-line px-3 py-2 text-sm"
+            />
+            <button
+              onClick={addCategory}
+              className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-4 py-2 transition-colors shrink-0"
+            >
+              Add
+            </button>
+          </div>
         </div>
       </div>
     </main>

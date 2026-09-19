@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { verifyStaffSessionToken, STAFF_SESSION_COOKIE, type StaffSessionPayload } from "./staff-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeStatus, isUsable } from "@/lib/subscription";
+import { getModuleAccess, type Role } from "@/lib/permissions";
 
 /** Shared re-verification used by every staff-facing API route: checks the signed cookie,
  *  then re-checks employees.status + session_version server-side (so a PIN reset / forced
@@ -57,5 +58,17 @@ export async function resolveStaffContext() {
   const subStatus = sub ? computeStatus(sub) : ("expired" as const);
   if (sub && !isUsable(subStatus)) return null;
 
-  return { session, employee, restaurant, subStatus };
+  const [modulePerms, { data: settings }] = await Promise.all([
+    getModuleAccess(restaurant.id, employee.role as Role),
+    admin.from("restaurant_settings").select("shift_start, shift_end").eq("restaurant_id", restaurant.id).single(),
+  ]);
+
+  return {
+    session,
+    employee,
+    restaurant,
+    subStatus,
+    modulePerms,
+    shift: settings ? { start: settings.shift_start as string, end: settings.shift_end as string } : null,
+  };
 }

@@ -10,6 +10,8 @@ export function DashboardShell({
   employeeName,
   employeeId,
   subStatus,
+  modulePerms,
+  shiftLabel,
   children,
 }: {
   role: Role;
@@ -17,6 +19,8 @@ export function DashboardShell({
   employeeName: string;
   employeeId: string;
   subStatus: string;
+  modulePerms: Record<string, boolean>;
+  shiftLabel: string | null;
   children: React.ReactNode;
 }) {
   // One boolean, same as the prototype's toggleSidebar(): false = the natural desktop
@@ -30,6 +34,8 @@ export function DashboardShell({
       <Sidebar
         role={role}
         restaurantName={restaurantName}
+        modulePerms={modulePerms}
+        shiftLabel={shiftLabel}
         navToggled={navToggled}
         onNavigate={() => setNavToggled(false)}
       />

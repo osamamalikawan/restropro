@@ -1,14 +1,14 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-session";
-import { canAccess } from "../nav-config";
+import { hasModuleAccess } from "@/lib/permissions";
 import { ComingSoon } from "../coming-soon";
 
 export default async function RecipesProductionPage() {
   const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
   const session = await verifyStaffSessionToken(token);
   if (!session) redirect("/login");
-  if (!canAccess(session.role, "recipes")) redirect("/dashboard");
+  if (!(await hasModuleAccess(session.restaurantId, session.role, "recipes"))) redirect("/dashboard");
 
   return (
     <ComingSoon

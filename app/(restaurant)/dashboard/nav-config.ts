@@ -76,27 +76,15 @@ export const NAV_GROUPS: NavGroup[] = [
 ];
 
 /**
- * Default view-access-by-role, ported from the prototype's seeded permission matrix
- * (scripts/data/seed-data.js — ADMIN/MANAGER/CASHIER/INVENTORY_PERMS). This schema only has
- * a plain `role` enum on `employees` (see 0001_init.sql), not a per-restaurant customizable
- * permission-matrix table yet, so this is the same fixed default the prototype ships with —
- * the /dashboard/permissions page (perm "admin") is where a real matrix would eventually
- * live if that becomes editable per tenant.
+ * View access is now per-tenant and editable (Users & Permissions page) — see
+ * lib/permissions.ts, which owns the defaults and the DB read/write. This file only keeps
+ * the static bits (labels, icons, routes, titles) plus a small pure helper for checking a
+ * resolved module-access map, since that's still needed in three places (Sidebar filtering,
+ * page-level guards, and the topbar) and shouldn't be reimplemented three times.
  */
-const ROLE_MODULES: Record<Role, Set<string> | "all"> = {
-  admin: "all",
-  manager: new Set([
-    "dashboard", "pos", "sales", "customers", "inventory", "restock", "suppliers",
-    "supplierLedger", "employees", "employeeLedger", "accounts", "expenses", "menu", "tables",
-  ]),
-  cashier: new Set(["dashboard", "pos", "sales", "customers", "tables"]),
-  inventory: new Set(["dashboard", "inventory", "restock", "suppliers"]),
-};
-
-export function canAccess(role: string, perm: string): boolean {
-  const modules = ROLE_MODULES[role as Role];
-  if (!modules) return false;
-  return modules === "all" || modules.has(perm);
+export function canAccess(role: string, modulePerms: Record<string, boolean> | undefined, perm: string): boolean {
+  if (role === "admin") return true;
+  return !!modulePerms?.[perm];
 }
 
 /** Per-page title + subtitle for the topbar, matching the prototype's RESTAURANT_VIEW_META

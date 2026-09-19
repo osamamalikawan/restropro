@@ -2,89 +2,33 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
- * Step 2 of staff login.
+ * Step 2 of staff login, matching the prototype's "pick your name on staff" screen:
+ * given the restaurant slug resolved in step 1 (owner credentials), return the active
+ * employees so the UI can render a picker. Only id/name/role are returned — never pin_hash.
  *
- * The restaurant has already authenticated in Step 1.
- *
- * Query:
- *   /api/staff/employees?restaurantId=<restaurant-id>
- *
- * The restaurantId comes from the successful restaurant login.
- *
- * Only active employees belonging to that restaurant are returned.
- *
- * IMPORTANT:
- * pin_hash is never returned to the client.
+ * Trust boundary is the same as /api/staff/login: knowing the slug is what scopes the
+ * request to a tenant (see ARCHITECTURE.md). The slug is only ever handed to the client
+ * after a successful password check in /api/staff/resolve-restaurant, and it never appears
+ * in a URL that would be logged or bookmarked — the client keeps it in sessionStorage.
  */
 export async function GET(req: Request) {
-  const restaurantId = new URL(req.url).searchParams.get(
-    "restaurantId"
-  );
-
-  if (!restaurantId) {
-    return NextResponse.json(
-      { error: "restaurantId is required" },
-      { status: 400 }
-    );
-  }
+  const slug = new URL(req.url).searchParams.get("slug");
+  if (!slug) return NextResponse.json({ error: "slug is required" }, { status: 400 });
 
   const admin = createAdminClient();
 
-  /*
-   * Find the restaurant using its exact ID.
-   */
-  const { data: restaurant, error: restaurantError } = await admin
-    .from("restaurants")
-    .select("id, name, status")
-    .eq("id", restaurantId)
-    .single();
-
-  if (restaurantError || !restaurant) {
-    return NextResponse.json(
-      { error: "Restaurant not found" },
-      { status: 404 }
-    );
-  }
-
-  /*
-   * Restaurant must still be active.
-   */
+  const { data: restaurant } = await admin.from("restaurants").select("id, name, status").eq("slug", slug).single();
+  if (!restaurant) return NextResponse.json({ error: "Restaurant not found" }, { status: 404 });
   if (restaurant.status !== "active") {
-    return NextResponse.json(
-      {
-        error: `This restaurant's account is ${restaurant.status}.`,
-      },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: `This restaurant's account is ${restaurant.status}.` }, { status: 403 });
   }
 
-  /*
-   * Get only active employees belonging to this restaurant.
-   *
-   * pin_hash is intentionally NOT selected.
-   */
-  const { data: employees, error: employeesError } = await admin
+  const { data: employees } = await admin
     .from("employees")
     .select("id, name, role")
     .eq("restaurant_id", restaurant.id)
     .eq("status", "active")
     .order("name", { ascending: true });
 
-  if (employeesError) {
-    console.error(
-      "Failed to load restaurant employees:",
-      employeesError
-    );
-
-    return NextResponse.json(
-      { error: "Could not load staff" },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json({
-    restaurantId: restaurant.id,
-    restaurantName: restaurant.name,
-    employees: employees ?? [],
-  });
+  return NextResponse.json({ restaurantName: restaurant.name, employees: employees ?? [] });
 }

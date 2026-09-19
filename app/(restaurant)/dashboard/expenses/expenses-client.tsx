@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
 
 type Expense = {
   id: string;
@@ -13,11 +12,10 @@ type Expense = {
   txn_date: string;
 };
 
-const DEFAULT_CATEGORIES = ["Utilities", "Rent", "Maintenance", "Marketing", "Salaries", "Other"];
-
 export function ExpensesClient() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [category, setCategory] = useState(DEFAULT_CATEGORIES[0]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [category, setCategory] = useState("");
   const [expenseType, setExpenseType] = useState<"regular" | "recurring">("regular");
   const [amount, setAmount] = useState("");
   const [vendor, setVendor] = useState("");
@@ -33,6 +31,15 @@ export function ExpensesClient() {
   }
   useEffect(() => {
     load();
+    (async () => {
+      const res = await fetch("/api/expense-categories");
+      const data = await res.json();
+      if (res.ok) {
+        const names = (data.categories ?? []).map((c: { name: string }) => c.name);
+        setCategories(names);
+        setCategory((prev) => prev || names[0] || "");
+      }
+    })();
   }, []);
 
   const totalThisList = expenses.reduce((s, e) => s + e.amount, 0);
@@ -65,14 +72,7 @@ export function ExpensesClient() {
   }
 
   return (
-    <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="font-display text-2xl font-semibold">Expenses</h1>
-        <Link href="/dashboard" className="text-xs text-ink-mid underline hover:text-ink-strong">
-          ← Dashboard
-        </Link>
-      </div>
-
+    <main className="p-6 md:p-8 max-w-3xl">
       <div className="rounded-xl border border-line bg-surface p-4 mb-6">
         <div className="text-xs text-ink-faint uppercase">Total (last 50 entries)</div>
         <div className="text-crimson-400 font-semibold text-lg">Rs {totalThisList}</div>
@@ -83,7 +83,7 @@ export function ExpensesClient() {
         {error && <p className="text-crimson-400 text-sm mb-2">{error}</p>}
         <div className="grid grid-cols-2 gap-2 mb-2">
           <select value={category} onChange={(e) => setCategory(e.target.value)} className="rounded-md bg-raised border border-line px-3 py-2 text-sm">
-            {DEFAULT_CATEGORIES.map((c) => (
+            {categories.map((c) => (
               <option key={c}>{c}</option>
             ))}
           </select>

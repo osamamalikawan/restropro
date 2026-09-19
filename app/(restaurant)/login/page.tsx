@@ -1,95 +1,49 @@
 "use client";
-
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ACTIVE_RESTAURANT_KEY } from "./staff/session-key";
 
 /**
- * Restaurant Login — Step 1
- *
- * Authenticates the restaurant using:
- *   restaurants.email
- *   restaurants.password_hash
- *
- * After successful authentication, the restaurant ID is stored in
- * sessionStorage and the user is sent to the employee login screen.
- *
- * Step 2:
- *   /login/staff
- *
- * The employee then authenticates using their PIN.
+ * Restaurant owner login — step 1 of the prototype's two-step flow (see
+ * app/(restaurant)/login/staff/page.tsx for step 2, the employee picker + PIN).
+ * Matches the HTML prototype's #ownerLoginScreen 1:1: same brand mark, tagline, copy and
+ * layout. The owner's real Supabase Auth email/password is checked once here purely to
+ * resolve which restaurant they belong to (see /api/staff/resolve-restaurant) — it does not
+ * leave a Supabase session on this shared till, matching the prototype's "PIN sessions only"
+ * model (ARCHITECTURE.md).
  */
 export default function OwnerLoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-
   const router = useRouter();
 
-  // If a restaurant has already been resolved during this browser session,
-  // skip the restaurant login and go directly to employee login.
+  // Mirrors the prototype's inline bootstrap script: if a restaurant was already resolved
+  // this session, skip straight to the staff picker instead of asking for the password again.
   useEffect(() => {
     if (sessionStorage.getItem(ACTIVE_RESTAURANT_KEY)) {
       router.replace("/login/staff");
     }
   }, [router]);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-
-    if (loading) return;
-
     setLoading(true);
     setError("");
-
-    try {
-      const res = await fetch("/api/staff/resolve-restaurant", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          email: email.trim().toLowerCase(),
-          password,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Incorrect email or password.");
-        return;
-      }
-
-      if (!data.restaurantId) {
-        setError("Restaurant information was not returned.");
-        return;
-      }
-
-      /*
-       * Store only the restaurant context.
-       *
-       * Do NOT store the restaurant password.
-       *
-       * Employee authentication happens in Step 2.
-       */
-      sessionStorage.setItem(
-        ACTIVE_RESTAURANT_KEY,
-        JSON.stringify({
-          restaurantId: data.restaurantId,
-          slug: data.slug,
-          name: data.name,
-        })
-      );
-
-      router.push("/login/staff");
-    } catch (err) {
-      console.error("Restaurant login error:", err);
-      setError("Unable to connect to the server. Please try again.");
-    } finally {
-      setLoading(false);
+    const res = await fetch("/api/staff/resolve-restaurant", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    setLoading(false);
+    if (!res.ok) {
+      setError(data.error || "Incorrect email or password.");
+      return;
     }
+    sessionStorage.setItem(ACTIVE_RESTAURANT_KEY, JSON.stringify({ slug: data.slug, name: data.name }));
+    router.push("/login/staff");
   }
 
   return (
@@ -104,22 +58,11 @@ export default function OwnerLoginPage() {
 
       <div className="text-center mb-9 relative z-10">
         <div className="w-[58px] h-[58px] mx-auto mb-4 rounded-2xl bg-gradient-to-br from-chili-400 to-chili-600 flex items-center justify-center shadow-[0_14px_34px_-10px_rgba(217,72,31,0.6)]">
-          <span className="font-display italic font-bold text-white text-[23px]">
-            RP
-          </span>
+          <span className="font-display italic font-bold text-white text-[23px]">RP</span>
         </div>
-
-        <h1 className="font-display text-[31px] font-semibold tracking-tight text-ink-strong">
-          Restro Pro
-        </h1>
-
-        <div className="text-ink-faint text-[12.5px] mt-1 tracking-wide">
-          Run Your Restaurant. Smarter.
-        </div>
-
-        <p className="text-ink-faint text-sm mt-3">
-          Sign in with your restaurant account to continue.
-        </p>
+        <h1 className="font-display text-[31px] font-semibold tracking-tight text-ink-strong">Restro Pro</h1>
+        <div className="text-ink-faint text-[12.5px] mt-1 tracking-wide">Run Your Restaurant. Smarter.</div>
+        <p className="text-ink-faint text-sm mt-3">Sign in with your restaurant account to continue.</p>
       </div>
 
       <form
@@ -127,10 +70,7 @@ export default function OwnerLoginPage() {
         className="w-full max-w-[360px] relative z-10 bg-surface border border-line rounded-2xl p-[26px] shadow-xl space-y-4"
       >
         <div>
-          <label className="block text-xs font-semibold text-ink-mid mb-1.5">
-            Restaurant email
-          </label>
-
+          <label className="block text-xs font-semibold text-ink-mid mb-1.5">Restaurant email</label>
           <input
             type="email"
             value={email}
@@ -138,31 +78,21 @@ export default function OwnerLoginPage() {
             placeholder="you@restaurant.com"
             required
             autoFocus
-            autoComplete="email"
             className="w-full rounded-lg bg-raised border border-line px-3.5 py-2.5 text-sm text-ink-strong placeholder:text-ink-faint focus:outline-none focus:border-chili-500"
           />
         </div>
-
         <div>
-          <label className="block text-xs font-semibold text-ink-mid mb-1.5">
-            Password
-          </label>
-
+          <label className="block text-xs font-semibold text-ink-mid mb-1.5">Password</label>
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
             required
-            autoComplete="current-password"
             className="w-full rounded-lg bg-raised border border-line px-3.5 py-2.5 text-sm text-ink-strong placeholder:text-ink-faint focus:outline-none focus:border-chili-500"
           />
         </div>
-
-        <p className="text-[11px] text-crimson-400 min-h-[14px]">
-          {error}
-        </p>
-
+        <p className="text-[11px] text-crimson-400 min-h-[14px]">{error}</p>
         <button
           type="submit"
           disabled={loading}
@@ -171,6 +101,13 @@ export default function OwnerLoginPage() {
           {loading ? "Checking…" : "Continue"}
         </button>
       </form>
+
+      <p className="text-[11px] text-ink-faint mt-[22px] text-center relative z-10 max-w-[420px] leading-relaxed">
+        Platform owner?{" "}
+        <a href="/super-admin/login" className="text-chili-400 font-bold hover:underline">
+          Go to Super Admin →
+        </a>
+      </p>
     </main>
   );
 }

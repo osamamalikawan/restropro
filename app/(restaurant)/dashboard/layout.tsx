@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { resolveStaffContext } from "@/lib/auth/require-staff";
+import { fmtTime } from "@/lib/format";
 import { DashboardShell } from "./shell";
 
 /**
@@ -24,6 +25,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
       employeeName={ctx.employee.name}
       employeeId={ctx.employee.id}
       subStatus={ctx.subStatus}
+      modulePerms={ctx.modulePerms}
+      shiftLabel={ctx.shift ? `${fmtTime(ctx.shift.start)} – ${fmtTime(ctx.shift.end)}` : null}
     >
       {children}
     </DashboardShell>

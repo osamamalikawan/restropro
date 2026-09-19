@@ -17,11 +17,15 @@ import { NAV_GROUPS, canAccess, type Role } from "./nav-config";
 export function Sidebar({
   role,
   restaurantName,
+  modulePerms,
+  shiftLabel,
   navToggled,
   onNavigate,
 }: {
   role: Role;
   restaurantName: string;
+  modulePerms: Record<string, boolean>;
+  shiftLabel: string | null;
   navToggled: boolean;
   onNavigate?: () => void;
 }) {
@@ -55,7 +59,7 @@ export function Sidebar({
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">
         {NAV_GROUPS.map((group) => {
-          const visibleItems = group.items.filter((i) => canAccess(role, i.perm));
+          const visibleItems = group.items.filter((i) => canAccess(role, modulePerms, i.perm));
           if (visibleItems.length === 0) return null;
           return (
             <div key={group.label} className="mb-5">
@@ -86,7 +90,13 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="p-3 border-t border-line-soft shrink-0">
+      <div className="p-3 border-t border-line-soft shrink-0 space-y-2">
+        {shiftLabel && (
+          <div className="flex items-center gap-2 rounded-lg border border-line bg-raised px-2.5 py-2 text-xs text-ink-mid">
+            <span className="w-1.5 h-1.5 rounded-full bg-basil-400 shrink-0" />
+            <span className="truncate">Shift: {shiftLabel}</span>
+          </div>
+        )}
         <button
           onClick={logout}
           disabled={loggingOut}
