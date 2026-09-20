@@ -6,18 +6,16 @@ export async function GET(req: Request) {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const url = new URL(req.url);
-  const limit = Number(url.searchParams.get("limit") ?? 20);
-  const customerId = url.searchParams.get("customerId");
+  const limit = Number(new URL(req.url).searchParams.get("limit") ?? 20);
   const admin = createAdminClient();
-  let query = admin
+  const { data, error } = await admin
     .from("sales")
-    .select("id, order_no, order_type, customer_id, subtotal, tax, total, delivery_charge, status, created_at, sale_items(name, unit_price, quantity), sale_payments(method, amount)")
+    .select(
+      "id, order_no, order_type, subtotal, tax, total, delivery_charge, status, kitchen_status, created_at, customers(name, phone), tables(number), sale_items(name, unit_price, quantity), sale_payments(method, amount)"
+    )
     .eq("restaurant_id", session.restaurantId)
     .order("created_at", { ascending: false })
     .limit(limit);
-  if (customerId) query = query.eq("customer_id", customerId);
-  const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ sales: data });
 }
@@ -53,7 +51,6 @@ export async function POST(req: Request) {
   };
   const { orderType = "takeaway", items, payments, tableId, areaId, deliveryCharge, customerId, customerName, customerPhone, customerAddress } = body;
   if (!items || items.length === 0) return NextResponse.json({ error: "Cart is empty" }, { status: 400 });
-  if (!payments || payments.length === 0) return NextResponse.json({ error: "At least one payment line is required" }, { status: 400 });
   if (orderType === "dine_in" && !tableId) return NextResponse.json({ error: "Select a table first" }, { status: 400 });
 
   const admin = createAdminClient();
@@ -70,7 +67,7 @@ export async function POST(req: Request) {
     p_cashier_employee_id: session.employeeId,
     p_order_type: orderType,
     p_items: items,
-    p_payments: payments,
+    p_payments: payments ?? [],
     p_tax_rate: taxRate,
     p_table_id: tableId || null,
     p_area_id: areaId || null,
@@ -83,5 +80,11 @@ export async function POST(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   const result = Array.isArray(data) ? data[0] : data;
-  return NextResponse.json({ success: true, orderNo: result.order_no, total: result.total });
+  return NextResponse.json({
+    success: true,
+    orderNo: result.order_no,
+    total: result.total,
+    status: result.status,
+    balance: result.balance,
+  });
 }

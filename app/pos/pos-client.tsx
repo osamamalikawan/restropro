@@ -29,6 +29,8 @@ export function PosClient({
   const [deliveryCharge, setDeliveryCharge] = useState(0);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("Cash");
+  const [paymentMethods, setPaymentMethods] = useState<string[]>(["Cash"]);
+  const [amountReceived, setAmountReceived] = useState("0");
   const [custSearch, setCustSearch] = useState("");
   const [custResults, setCustResults] = useState<{ id: string; name: string; phone: string }[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; phone: string } | null>(null);
@@ -36,7 +38,7 @@ export function PosClient({
   const [newCustPhone, setNewCustPhone] = useState("");
   const [showNewCustFields, setShowNewCustFields] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [lastReceipt, setLastReceipt] = useState<{ orderNo: number; total: number } | null>(null);
+  const [lastReceipt, setLastReceipt] = useState<{ orderNo: number; total: number; balance: number } | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -56,6 +58,13 @@ export function PosClient({
     fetch("/api/delivery-areas").then((r) => r.json()).then((d) => setAreas(d.areas ?? []));
     fetch("/api/settings").then((r) => r.json()).then((d) => {
       if (d.settings?.tax_rate != null) setTaxRate(Number(d.settings.tax_rate) / 100);
+    });
+    fetch("/api/payment-methods").then((r) => r.json()).then((d) => {
+      const names = (d.methods ?? []).map((m: { name: string }) => m.name);
+      if (names.length) {
+        setPaymentMethods(names);
+        setPaymentMethod(names[0]);
+      }
     });
 
     return () => {
@@ -119,6 +128,11 @@ export function PosClient({
       setError("Select a table first");
       return;
     }
+    const received = Number(amountReceived);
+    if (Number.isNaN(received) || received < 0) {
+      setError("Enter a valid amount received");
+      return;
+    }
     setSubmitting(true);
     setError("");
     const res = await fetch("/api/sales", {
@@ -127,7 +141,7 @@ export function PosClient({
       body: JSON.stringify({
         orderType,
         items: cart.map((l) => ({ productId: l.productId, name: l.name, price: l.price, qty: l.qty })),
-        payments: [{ method: paymentMethod, amount: total }],
+        payments: received > 0 ? [{ method: paymentMethod, amount: received }] : [],
         tableId: tableId || null,
         areaId: areaId || null,
         deliveryCharge: delivery,
@@ -142,7 +156,7 @@ export function PosClient({
       setError(data.error || "Checkout failed");
       return;
     }
-    setLastReceipt({ orderNo: data.orderNo, total: data.total });
+    setLastReceipt({ orderNo: data.orderNo, total: data.total, balance: data.balance ?? 0 });
     setCart([]);
     setCheckoutOpen(false);
     setSelectedCustomer(null);
@@ -275,7 +289,10 @@ export function PosClient({
         </div>
         <button
           disabled={cart.length === 0}
-          onClick={() => setCheckoutOpen(true)}
+          onClick={() => {
+            setAmountReceived(String(total));
+            setCheckoutOpen(true);
+          }}
           className="w-full rounded-lg bg-basil-500 hover:bg-basil-600 disabled:opacity-40 text-white font-semibold py-2.5"
         >
           Checkout
@@ -283,7 +300,8 @@ export function PosClient({
 
         {lastReceipt && (
           <p className="text-xs text-basil-400 mt-3 text-center">
-            Order #{lastReceipt.orderNo} completed — Rs {lastReceipt.total}
+            Order #{lastReceipt.orderNo} {lastReceipt.balance > 0 ? "saved" : "completed"} — Rs {lastReceipt.total}
+            {lastReceipt.balance > 0 && ` (Rs ${lastReceipt.balance} still due)`}
           </p>
         )}
       </div>
@@ -360,12 +378,25 @@ export function PosClient({
               onChange={(e) => setPaymentMethod(e.target.value)}
               className="w-full rounded-md bg-raised border border-line px-3 py-2"
             >
-              <option>Cash</option>
-              <option>Card</option>
-              <option>JazzCash</option>
-              <option>Easypaisa</option>
-              <option>Bank Transfer</option>
+              {paymentMethods.map((m) => (
+                <option key={m}>{m}</option>
+              ))}
             </select>
+            <div>
+              <label className="text-xs uppercase tracking-wide text-ink-faint">Amount received</label>
+              <input
+                type="number"
+                value={amountReceived}
+                onChange={(e) => setAmountReceived(e.target.value)}
+                className="w-full rounded-md bg-raised border border-line px-3 py-2 text-sm mt-1"
+              />
+              {Number(amountReceived) < total && (
+                <p className="text-xs text-turmeric-400 mt-1">
+                  Rs {Math.max(total - (Number(amountReceived) || 0), 0)} will be left as an unpaid balance — collectable
+                  later from Unpaid Orders.
+                </p>
+              )}
+            </div>
             {error && <p className="text-crimson-400 text-sm">{error}</p>}
             <div className="flex gap-2">
               <button

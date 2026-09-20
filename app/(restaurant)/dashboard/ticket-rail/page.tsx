@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-session";
 import { hasModuleAccess } from "@/lib/permissions";
-import { ComingSoon } from "../coming-soon";
+import { TicketRailClient } from "./ticket-rail-client";
 
 export default async function TicketRailPage() {
   const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
@@ -10,10 +10,5 @@ export default async function TicketRailPage() {
   if (!session) redirect("/login");
   if (!(await hasModuleAccess(session.restaurantId, session.role, "pos"))) redirect("/dashboard");
 
-  return (
-    <ComingSoon
-      title="Ticket Rail"
-      note="The kanban view of active and held kitchen tickets isn't wired up yet — it'll live here, matching the prototype's drag-between-columns board."
-    />
-  );
+  return <TicketRailClient canCancel={session.role === "admin" || session.role === "manager"} />;
 }
