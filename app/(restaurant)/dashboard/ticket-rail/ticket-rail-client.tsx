@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { EditOrderModal } from "@/components/edit-order-modal";
 
 type Sale = {
   id: string;
@@ -7,10 +8,12 @@ type Sale = {
   order_type: "dine_in" | "takeaway" | "delivery";
   status: "completed" | "unpaid" | "cancelled";
   kitchen_status: "New" | "Preparing" | "Completed";
+  delivery_charge: number;
   created_at: string;
   customers: { name: string } | null;
+  employees: { name: string } | null;
   tables: { number: string } | null;
-  sale_items: { name: string; quantity: number }[];
+  sale_items: { product_id: string; name: string; unit_price: number; quantity: number }[];
 };
 
 const COLUMNS: { key: Sale["kitchen_status"]; label: string; hint: string }[] = [
@@ -32,6 +35,8 @@ const TYPE_LABEL: Record<Sale["order_type"], string> = { dine_in: "Dine In", tak
 export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
   const [sales, setSales] = useState<Sale[]>([]);
   const [error, setError] = useState("");
+  const [taxRate, setTaxRate] = useState(0.05);
+  const [editingSale, setEditingSale] = useState<Sale | null>(null);
 
   async function load() {
     const res = await fetch("/api/sales?limit=60");
@@ -40,6 +45,9 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
   }
   useEffect(() => {
     load();
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((d) => d.settings?.tax_rate != null && setTaxRate(Number(d.settings.tax_rate) / 100));
     const id = setInterval(load, 5000);
     return () => clearInterval(id);
   }, []);
@@ -105,6 +113,7 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
                       {s.tables?.number && ` · Table ${s.tables.number}`}
                       {s.customers?.name && ` · ${s.customers.name}`}
                     </div>
+                    {s.employees?.name && <div className="text-[10px] text-ink-faint mb-1.5">{s.employees.name}</div>}
                     <div className="text-[11px] text-ink-faint space-y-0.5 mb-2">
                       {s.sale_items.slice(0, 4).map((it, i) => (
                         <div key={i}>
@@ -135,9 +144,14 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
                         )}
                       </div>
                       {canCancel && (
-                        <button onClick={() => cancelTicket(s.id, s.order_no)} className="text-[11px] text-ink-faint hover:text-crimson-400">
-                          Cancel
-                        </button>
+                        <div className="flex gap-2">
+                          <button onClick={() => setEditingSale(s)} className="text-[11px] text-ink-faint hover:text-chili-400">
+                            Edit
+                          </button>
+                          <button onClick={() => cancelTicket(s.id, s.order_no)} className="text-[11px] text-ink-faint hover:text-crimson-400">
+                            Cancel
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -147,6 +161,21 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
           );
         })}
       </div>
+
+      {editingSale && (
+        <EditOrderModal
+          saleId={editingSale.id}
+          orderNo={editingSale.order_no}
+          taxRate={taxRate}
+          deliveryCharge={editingSale.delivery_charge || 0}
+          initialItems={editingSale.sale_items}
+          onClose={() => setEditingSale(null)}
+          onSaved={() => {
+            setEditingSale(null);
+            load();
+          }}
+        />
+      )}
     </main>
   );
 }

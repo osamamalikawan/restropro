@@ -104,7 +104,7 @@ export default function StaffPickerPage() {
 
       {!loadError && employees !== null && employees.length > 0 && (
         <>
-          <div className="relative z-10 grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-3.5 max-w-[660px] w-full">
+          <div className="relative z-10 grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-3.5 max-w-[660px]">
             {employees.map((emp, i) => (
               <button
                 key={emp.id}

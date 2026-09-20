@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { DollarSign, TrendingUp, Receipt, Layers, AlertTriangle, Clock, Users } from "lucide-react";
+import { DollarSign, TrendingUp, Receipt, Layers, AlertTriangle, Clock, Users, Pencil, X } from "lucide-react";
+import { EditOrderModal } from "@/components/edit-order-modal";
 
 type Summary = {
   salesTotal: number;
@@ -21,10 +22,12 @@ type Sale = {
   order_no: number;
   order_type: string;
   total: number;
+  delivery_charge: number;
   status: string;
   created_at: string;
   customers: { name: string } | null;
-  sale_items: { name: string }[];
+  employees: { name: string } | null;
+  sale_items: { product_id: string; name: string; unit_price: number; quantity: number }[];
   sale_payments: { method: string }[];
 };
 
@@ -36,15 +39,35 @@ const TYPE_LABEL: Record<string, string> = { dine_in: "Dine In", takeaway: "Take
 export function DashboardHomeClient({ employeeName, role }: { employeeName: string; role: string }) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [recent, setRecent] = useState<Sale[]>([]);
+  const [taxRate, setTaxRate] = useState(0.05);
+  const [editingSale, setEditingSale] = useState<Sale | null>(null);
+  const canManage = role === "admin" || role === "manager";
 
-  useEffect(() => {
+  function reload() {
     fetch("/api/dashboard")
       .then((r) => r.json())
       .then((d) => setSummary(d.summary));
     fetch("/api/sales?limit=8")
       .then((r) => r.json())
       .then((d) => setRecent(d.sales ?? []));
+  }
+
+  useEffect(() => {
+    reload();
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((d) => d.settings?.tax_rate != null && setTaxRate(Number(d.settings.tax_rate) / 100));
   }, []);
+
+  async function cancelOrder(sale: Sale) {
+    if (!window.confirm(`Cancel order #${sale.order_no}? This restores stock and removes it from today's income.`)) return;
+    const res = await fetch("/api/sales/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ saleId: sale.id }),
+    });
+    if (res.ok) reload();
+  }
 
   if (!summary) {
     return (
@@ -117,6 +140,7 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
                 <tr key={s.id} className="border-t border-line-soft">
                   <td className="p-3 font-mono text-xs">#{s.order_no}</td>
                   <td className="p-3 text-xs text-ink-mid">{TYPE_LABEL[s.order_type] ?? s.order_type}</td>
+                  <td className="p-3 text-xs text-ink-mid">{s.employees?.name ?? "—"}</td>
                   <td className="p-3 text-xs text-ink-mid">{s.sale_items.length} item(s)</td>
                   <td className="p-3 text-xs text-ink-mid">{s.sale_payments.map((p) => p.method).join(", ") || "—"}</td>
                   <td className={`p-3 text-right font-mono text-xs ${s.status === "cancelled" ? "line-through text-ink-faint" : "font-semibold"}`}>
@@ -125,11 +149,33 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
                   <td className="p-3 text-right text-xs text-ink-faint">
                     {new Date(s.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
                   </td>
+                  <td className="p-3 text-right">
+                    {s.status === "cancelled" ? (
+                      <span className="text-[10px] uppercase font-bold text-crimson-400">Cancelled</span>
+                    ) : canManage ? (
+                      <div className="flex justify-end gap-1.5">
+                        <button
+                          onClick={() => setEditingSale(s)}
+                          className="w-7 h-7 rounded-lg bg-raised border border-line text-ink-mid flex items-center justify-center"
+                          title="Edit"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          onClick={() => cancelOrder(s)}
+                          className="w-7 h-7 rounded-lg bg-raised border border-line text-ink-mid flex items-center justify-center"
+                          title="Cancel"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ) : null}
+                  </td>
                 </tr>
               ))}
               {recent.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="p-6 text-center text-ink-faint text-sm">
+                  <td colSpan={8} className="p-6 text-center text-ink-faint text-sm">
                     No sales recorded yet.
                   </td>
                 </tr>
@@ -159,6 +205,21 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
           )}
         </div>
       </div>
+
+      {editingSale && (
+        <EditOrderModal
+          saleId={editingSale.id}
+          orderNo={editingSale.order_no}
+          taxRate={taxRate}
+          deliveryCharge={editingSale.delivery_charge || 0}
+          initialItems={editingSale.sale_items}
+          onClose={() => setEditingSale(null)}
+          onSaved={() => {
+            setEditingSale(null);
+            reload();
+          }}
+        />
+      )}
     </main>
   );
 }
