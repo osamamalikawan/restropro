@@ -5,7 +5,14 @@
  *  tiny (no dependency) — swap for `idb` from npm if you want a nicer promise API later. */
 
 const DB_NAME = "restropro_local";
-const DB_VERSION = 1;
+// Bump this whenever SYNCABLE_STORES changes — IndexedDB only runs onupgradeneeded (the
+// only place stores get created) when the requested version is HIGHER than what's already
+// on disk for this DB name. "products" was added to SYNCABLE_STORES without bumping this,
+// so anyone whose browser had already created the v1 DB (employees-only, before "products"
+// existed) kept that same v1 DB forever and got "object store not found" the moment POS
+// tried to read the products store. Bumping to 2 makes onupgradeneeded run once more for
+// those browsers and back-fill the missing store.
+const DB_VERSION = 2;
 export const SYNCABLE_STORES = ["employees", "products"] as const; // extend as you port more modules
 type StoreName = (typeof SYNCABLE_STORES)[number] | "_outbox";
 
