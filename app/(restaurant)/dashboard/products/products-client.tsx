@@ -175,9 +175,9 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
                     </Td>
                     <Td>
                       <div className="flex items-center gap-1.5">
-                        <IconBtn title="View recipe" onClick={() => router.push(`/dashboard/recipes-production?productId=${p.id}`)}>
+                        {/* <IconBtn title="View recipe" onClick={() => router.push(`/dashboard/recipes-production?productId=${p.id}`)}>
                           <NotebookText className="h-3.5 w-3.5" />
-                        </IconBtn>
+                        </IconBtn> */}
                         {canEdit && (
                           <IconBtn title="Edit" onClick={() => openEdit(p)}>
                             <Pencil className="h-3.5 w-3.5" />
