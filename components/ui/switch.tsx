@@ -12,7 +12,7 @@ export function Switch({ checked, onChange }: { checked: boolean; onChange: (v: 
       }`}
     >
       <span
-        className={`absolute top-[2px] h-[16px] w-[16px] rounded-full transition-transform ${
+        className={`absolute top-[2px] h-[16px] w-[16px] left-[2px] rounded-full transition-transform ${
           checked ? "translate-x-[18px] bg-basil-500" : "translate-x-[2px] bg-ink-faint"
         }`}
       />
