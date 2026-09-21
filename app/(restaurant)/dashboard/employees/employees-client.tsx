@@ -26,14 +26,21 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
   const [fPin, setFPin] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const [profileId, setProfileId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
+    setLoadError("");
     const [eRes, lRes, sRes] = await Promise.all([fetch("/api/employees"), fetch("/api/employee-ledger?limit=1000"), fetch("/api/sales?limit=1000")]);
     const [e, l, s] = await Promise.all([eRes.json(), lRes.json(), sRes.json()]);
-    setEmployees(e.employees ?? []);
+    if (!eRes.ok) {
+      setLoadError(e.error || "Could not load employees");
+      setEmployees([]);
+    } else {
+      setEmployees(e.employees ?? []);
+    }
     setLedger(l.entries ?? []);
     setSales(s.sales ?? []);
     setLoading(false);
@@ -201,6 +208,11 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      {loadError && (
+        <p className="mb-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-sm text-crimson-400">
+          Couldn't load employees: {loadError}
+        </p>
+      )}
       <Panel loading={loading}>
         <PanelHead title="Employees" subtitle="Staff who can sign in with a PIN">
           {canManage && (
