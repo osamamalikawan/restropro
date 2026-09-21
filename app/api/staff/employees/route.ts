@@ -28,6 +28,7 @@ export async function GET(req: Request) {
     .select("id, name, role")
     .eq("restaurant_id", restaurant.id)
     .eq("status", "active")
+    .not("pin_hash", "is", null)
     .order("name", { ascending: true });
 
   return NextResponse.json({ restaurantName: restaurant.name, employees: employees ?? [] });

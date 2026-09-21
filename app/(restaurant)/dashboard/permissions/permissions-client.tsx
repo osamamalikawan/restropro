@@ -1,9 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Avatar, Badge } from "@/components/ui/panel";
 
 type Role = "admin" | "manager" | "cashier" | "inventory";
 type Matrix = Record<Role, Record<string, boolean>>;
 type Category = { id: string; name: string };
+type Employee = { id: string; name: string; role: Role; status: "active" | "inactive"; is_user: boolean };
 
 const ROLE_META: Record<Role, { label: string; color: string }> = {
   admin: { label: "Admin", color: "#D9481F" },
@@ -52,12 +55,17 @@ export function PermissionsClient() {
   const [newCat, setNewCat] = useState("");
   const [catError, setCatError] = useState("");
 
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [usersError, setUsersError] = useState("");
+
   useEffect(() => {
     (async () => {
-      const [permRes, settingsRes, catRes] = await Promise.all([
+      const [permRes, settingsRes, catRes, empRes] = await Promise.all([
         fetch("/api/permissions"),
         fetch("/api/settings"),
         fetch("/api/expense-categories"),
+        fetch("/api/employees"),
       ]);
       const permData = await permRes.json();
       if (permRes.ok) {
@@ -72,6 +80,13 @@ export function PermissionsClient() {
       }
       const catData = await catRes.json();
       if (catRes.ok) setCategories(catData.categories ?? []);
+
+      const empData = await empRes.json();
+      // Users are just the subset of employees with login access (is_user) — see
+      // app/api/employees/route.ts. Every User is an Employee; not every Employee is a User.
+      if (empRes.ok) setEmployees(empData.employees ?? []);
+      else setUsersError(empData.error ?? `Could not load users (HTTP ${empRes.status})`);
+      setUsersLoading(false);
     })();
   }, []);
 
@@ -147,8 +162,53 @@ export function PermissionsClient() {
     setCategories((prev) => prev.filter((c) => c.id !== cat.id));
   }
 
+  const users = employees.filter((e) => e.is_user);
+
   return (
     <main className="p-6 md:p-8 space-y-5">
+      <div className="rounded-xl border border-line bg-surface p-6">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-display font-semibold text-ink-strong text-[15px]">Users</h3>
+            <div className="text-xs text-ink-faint mt-0.5">
+              Employees with login access. Every User is an employee — manage the full roster, including
+              employee-only staff, on the{" "}
+              <Link href="/dashboard/employees" className="text-chili-500 hover:underline">
+                Employees page
+              </Link>
+              .
+            </div>
+          </div>
+        </div>
+        {usersError && (
+          <p className="mb-3 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+            Couldn&apos;t load users: {usersError}
+          </p>
+        )}
+        {usersLoading ? (
+          <p className="text-ink-faint text-sm">Loading…</p>
+        ) : users.length === 0 ? (
+          <p className="text-ink-faint text-sm">
+            No users yet — grant an employee a PIN on the{" "}
+            <Link href="/dashboard/employees" className="text-chili-500 hover:underline">
+              Employees page
+            </Link>{" "}
+            to make them a User.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {users.map((u) => (
+              <div key={u.id} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2">
+                <Avatar id={u.id} name={u.name} size={28} />
+                <span className="text-sm font-medium text-ink-strong flex-1">{u.name}</span>
+                <Badge tone={ROLE_META[u.role].label === "Admin" ? "crimson" : "steel"}>{ROLE_META[u.role].label}</Badge>
+                <Badge tone={u.status === "active" ? "basil" : "steel"}>{u.status === "active" ? "Active" : "Inactive"}</Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="rounded-xl border border-line bg-surface p-6">
         <div className="mb-4">
           <h3 className="font-display font-semibold text-ink-strong text-[15px]">Role permissions</h3>

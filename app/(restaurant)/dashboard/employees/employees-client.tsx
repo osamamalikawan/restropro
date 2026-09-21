@@ -5,7 +5,7 @@ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/mo
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney } from "@/lib/format";
 
-type Employee = { id: string; name: string; role: "admin" | "manager" | "cashier" | "inventory"; status: "active" | "inactive" };
+type Employee = { id: string; name: string; role: "admin" | "manager" | "cashier" | "inventory"; status: "active" | "inactive"; is_user: boolean };
 type LedgerEntry = { id: string; employee_id: string; type: string; amount: number; note: string | null; txn_date: string };
 type Sale = { cashier_employee_id: string | null; status: string };
 
@@ -26,14 +26,23 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
   const [fPin, setFPin] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const [profileId, setProfileId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
+    setLoadError("");
     const [eRes, lRes, sRes] = await Promise.all([fetch("/api/employees"), fetch("/api/employee-ledger?limit=1000"), fetch("/api/sales?limit=1000")]);
     const [e, l, s] = await Promise.all([eRes.json(), lRes.json(), sRes.json()]);
-    setEmployees(e.employees ?? []);
+    if (!eRes.ok) {
+      // Surface the real reason instead of silently rendering an empty list — a 401/403/500
+      // here previously fell through to "No employees yet." with no indication anything failed.
+      setLoadError(e.error ?? `Could not load employees (HTTP ${eRes.status})`);
+      setEmployees([]);
+    } else {
+      setEmployees(e.employees ?? []);
+    }
     setLedger(l.entries ?? []);
     setSales(s.sales ?? []);
     setLoading(false);
@@ -65,8 +74,8 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
       setError("Name is required");
       return;
     }
-    if (!editingId && !/^\d{4}$/.test(fPin)) {
-      setError("A 4-digit PIN is required for a new employee");
+    if (fPin && !/^\d{4}$/.test(fPin)) {
+      setError("PIN must be exactly 4 digits");
       return;
     }
     setSaving(true);
@@ -107,6 +116,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
             <div className="flex gap-2 mt-1">
               <Badge tone={ROLE_COLORS[profile.role] as any}>{ROLE_LABELS[profile.role]}</Badge>
               <Badge tone={profile.status === "active" ? "basil" : "steel"}>{profile.status === "active" ? "Active" : "Inactive"}</Badge>
+              <Badge tone={profile.is_user ? "basil" : "steel"}>{profile.is_user ? "User" : "Employee only"}</Badge>
             </div>
           </div>
           {canManage && (
@@ -191,9 +201,20 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
             <option value="inactive">Inactive</option>
           </select>
         </Field>
-        <Field label={editingId ? "New 4-digit PIN (leave blank to keep current)" : "4-digit PIN"}>
+        <Field
+          label={
+            !editingId
+              ? "4-digit PIN (optional — leave blank to add as roster-only, no login)"
+              : employees.find((x) => x.id === editingId)?.is_user
+                ? "New 4-digit PIN (leave blank to keep current)"
+                : "Set a 4-digit PIN to grant login access"
+          }
+        >
           <input value={fPin} onChange={(e) => setFPin(e.target.value.replace(/\D/g, "").slice(0, 4))} className={inputCls} placeholder="••••" inputMode="numeric" />
         </Field>
+        <p className="text-xs text-ink-faint -mt-1">
+          Every User is an employee, but not every employee is a User — only employees with a PIN can sign in to POS/Dashboard.
+        </p>
       </Modal>
     );
   }
@@ -208,6 +229,11 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
             </button>
           )}
         </PanelHead>
+        {loadError && (
+          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+            Couldn&apos;t load employees: {loadError}
+          </p>
+        )}
         <TableScroll>
           <table className="w-full">
             <thead>
@@ -215,6 +241,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
                 <Th>Employee</Th>
                 <Th>Role</Th>
                 <Th>Status</Th>
+                <Th>Access</Th>
                 <Th />
               </tr>
             </thead>
@@ -234,6 +261,9 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
                     <Badge tone={e.status === "active" ? "basil" : "steel"}>{e.status === "active" ? "Active" : "Inactive"}</Badge>
                   </Td>
                   <Td>
+                    <Badge tone={e.is_user ? "basil" : "steel"}>{e.is_user ? "User" : "Employee only"}</Badge>
+                  </Td>
+                  <Td>
                     <div className="flex items-center gap-1.5">
                       <IconBtn title="View profile" onClick={() => setProfileId(e.id)}>
                         <IdCard className="h-3.5 w-3.5" />
@@ -247,7 +277,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
                   </Td>
                 </tr>
               ))}
-              {!loading && employees.length === 0 && <EmptyRow colSpan={4} label="No employees yet." />}
+              {!loading && !loadError && employees.length === 0 && <EmptyRow colSpan={5} label="No employees yet — add one above." />}
             </tbody>
           </table>
         </TableScroll>

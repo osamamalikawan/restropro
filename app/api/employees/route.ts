@@ -5,7 +5,11 @@ import { hashPin } from "@/lib/auth/pin";
 
 /** Server-side proxy for the employees list — see lib/auth/require-staff.ts and
  *  ARCHITECTURE.md for why staff-authenticated tenant data never talks to Supabase directly
- *  from the browser (RLS only allows Super Admin on this table). */
+ *  from the browser (RLS only allows Super Admin on this table).
+ *
+ *  Every employee is a roster entry; only some are also "Users" — the ones who can actually
+ *  sign in. That's driven entirely by whether pin_hash is set, so we derive `is_user` from it
+ *  here and never send the hash itself back to the client. */
 export async function GET() {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
@@ -13,11 +17,12 @@ export async function GET() {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("employees")
-    .select("id, restaurant_id, name, role, status, updated_at")
+    .select("id, restaurant_id, name, role, status, pin_hash, updated_at")
     .eq("restaurant_id", session.restaurantId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ employees: data });
+  const employees = (data ?? []).map(({ pin_hash, ...rest }) => ({ ...rest, is_user: pin_hash != null }));
+  return NextResponse.json({ employees });
 }
 
 /**
@@ -52,9 +57,9 @@ export async function POST(req: Request) {
   if (pin) {
     if (!/^\d{4}$/.test(pin)) return NextResponse.json({ error: "PIN must be exactly 4 digits" }, { status: 400 });
     payload.pin_hash = await hashPin(pin);
-  } else if (op === "insert") {
-    return NextResponse.json({ error: "A 4-digit PIN is required for a new employee" }, { status: 400 });
   }
+  // No PIN on insert is valid — the employee is added to the roster but isn't a User yet
+  // (can't sign in) until someone grants access with a PIN, either now or later.
 
   const { error } = await admin.from("employees").upsert(payload);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
