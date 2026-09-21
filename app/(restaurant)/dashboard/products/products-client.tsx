@@ -1,10 +1,13 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, NotebookText } from "lucide-react";
+import { Pencil, NotebookText, Image as ImageIcon } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
+import { Switch } from "@/components/ui/switch";
+import { GalleryPickerModal } from "@/components/gallery-picker-modal";
 import { fmtMoney } from "@/lib/format";
+import { RecipeModal } from "../menu/recipe-modal";
 
 type Category = { id: string; name: string };
 type Product = {
@@ -35,6 +38,8 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
   const [fAvailable, setFAvailable] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
 
   async function load() {
     setLoading(true);
@@ -208,30 +213,82 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
         <Field label="Name">
           <input value={fName} onChange={(e) => setFName(e.target.value)} className={inputCls} placeholder="Product name" />
         </Field>
-        <Field label="Category">
-          <select value={fCategoryId} onChange={(e) => setFCategoryId(e.target.value)} className={inputCls}>
-            <option value="">Uncategorized</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Selling price">
-          <input value={fPrice} onChange={(e) => setFPrice(e.target.value)} type="number" min="0" step="0.01" className={inputCls} placeholder="0.00" />
-        </Field>
-        <Field label="Image URL">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Category">
+            <select value={fCategoryId} onChange={(e) => setFCategoryId(e.target.value)} className={inputCls}>
+              <option value="">Uncategorized</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Selling price">
+            <input value={fPrice} onChange={(e) => setFPrice(e.target.value)} type="number" min="0" step="0.01" className={inputCls} placeholder="0.00" />
+          </Field>
+        </div>
+
+        <div>
+          <span className="mb-1 block text-xs font-medium text-ink-mid">Photo</span>
+          <div className="flex items-center gap-3 mb-2.5">
+            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-line bg-raised">
+              {fImageUrl ? (
+                <img src={fImageUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-ink-faint">
+                  <ImageIcon className="h-6 w-6" />
+                </div>
+              )}
+            </div>
+            <button type="button" onClick={() => setGalleryOpen(true)} className={btnGhost}>
+              🖼 Choose from Master Gallery
+            </button>
+          </div>
+          <p className="mb-1.5 text-[11px] text-ink-faint">Or paste an image URL below — uploading/choosing a photo takes priority.</p>
           <input value={fImageUrl} onChange={(e) => setFImageUrl(e.target.value)} className={inputCls} placeholder="https://…" />
-        </Field>
-        <label className="flex items-center gap-2 text-sm text-ink-strong">
-          <input type="checkbox" checked={fAvailable} onChange={(e) => setFAvailable(e.target.checked)} />
-          Available on the menu
+        </div>
+
+        <label className="flex items-center justify-between pt-1">
+          <span className="text-sm font-medium text-ink-strong">Available on the menu</span>
+          <Switch checked={fAvailable} onChange={setFAvailable} />
         </label>
-        <p className="text-xs text-ink-faint">
-          To set this product's recipe (ingredients &amp; cost), use the recipe icon in the table, or the Recipes &amp; Production page.
-        </p>
+        {editingId && (
+          <button
+            onClick={() => {
+              const p = products.find((x) => x.id === editingId);
+              if (p) {
+                setModalOpen(false);
+                setRecipeProduct(p);
+              }
+            }}
+            className="text-xs font-medium text-chili-500 hover:underline"
+          >
+            Edit recipe & cost →
+          </button>
+        )}
       </Modal>
+
+      {galleryOpen && (
+        <GalleryPickerModal
+          onClose={() => setGalleryOpen(false)}
+          onPick={(url) => {
+            setFImageUrl(url);
+            setGalleryOpen(false);
+          }}
+        />
+      )}
+
+      {recipeProduct && (
+        <RecipeModal
+          productId={recipeProduct.id}
+          productName={recipeProduct.name}
+          onClose={() => {
+            setRecipeProduct(null);
+            load();
+          }}
+        />
+      )}
     </main>
   );
 }
