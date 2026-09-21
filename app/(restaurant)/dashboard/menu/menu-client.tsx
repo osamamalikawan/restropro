@@ -1,8 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
-import { X, Pencil } from "lucide-react";
+import { X, Pencil, Image as ImageIcon } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, addBtnCls } from "@/components/ui/panel";
+import { Switch } from "@/components/ui/switch";
+import { GalleryPickerModal } from "@/components/gallery-picker-modal";
 import { fmtMoney } from "@/lib/format";
 import { RecipeModal } from "./recipe-modal";
 
@@ -33,6 +35,7 @@ export function MenuClient() {
   const [fAvailable, setFAvailable] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);
 
   async function loadAll() {
     const [catRes, prodRes] = await Promise.all([fetch("/api/menu-categories"), fetch("/api/products")]);
@@ -237,27 +240,47 @@ export function MenuClient() {
         }
       >
         {error && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}
-        <Field label="Name">
-          <input value={fName} onChange={(e) => setFName(e.target.value)} className={inputCls} placeholder="Item name" />
+        <Field label="Item name">
+          <input value={fName} onChange={(e) => setFName(e.target.value)} className={inputCls} placeholder="e.g. Spicy Chicken Wrap" />
         </Field>
-        <Field label="Category">
-          <select value={fCategoryId} onChange={(e) => setFCategoryId(e.target.value)} className={inputCls}>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Price">
-          <input value={fPrice} onChange={(e) => setFPrice(e.target.value)} type="number" min="0" step="0.01" className={inputCls} />
-        </Field>
-        <Field label="Image URL">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Category">
+            <select value={fCategoryId} onChange={(e) => setFCategoryId(e.target.value)} className={inputCls}>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Price (Rs)">
+            <input value={fPrice} onChange={(e) => setFPrice(e.target.value)} type="number" min="0" step="0.01" className={inputCls} />
+          </Field>
+        </div>
+
+        <div>
+          <span className="mb-1 block text-xs font-medium text-ink-mid">Photo</span>
+          <div className="flex items-center gap-3 mb-2.5">
+            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-line bg-raised">
+              {fImageUrl ? (
+                <img src={fImageUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-ink-faint">
+                  <ImageIcon className="h-6 w-6" />
+                </div>
+              )}
+            </div>
+            <button type="button" onClick={() => setGalleryOpen(true)} className={btnGhost}>
+              🖼 Choose from Master Gallery
+            </button>
+          </div>
+          <p className="mb-1.5 text-[11px] text-ink-faint">Or paste an image URL below — uploading/choosing a photo takes priority.</p>
           <input value={fImageUrl} onChange={(e) => setFImageUrl(e.target.value)} className={inputCls} placeholder="https://…" />
-        </Field>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={fAvailable} onChange={(e) => setFAvailable(e.target.checked)} />
-          Available on the menu
+        </div>
+
+        <label className="flex items-center justify-between pt-1">
+          <span className="text-sm font-medium text-ink-strong">Available in POS</span>
+          <Switch checked={fAvailable} onChange={setFAvailable} />
         </label>
         {editingId && (
           <button
@@ -271,6 +294,16 @@ export function MenuClient() {
           </button>
         )}
       </Modal>
+
+      {galleryOpen && (
+        <GalleryPickerModal
+          onClose={() => setGalleryOpen(false)}
+          onPick={(url) => {
+            setFImageUrl(url);
+            setGalleryOpen(false);
+          }}
+        />
+      )}
 
       {recipeProduct && <RecipeModal productId={recipeProduct.id} productName={recipeProduct.name} onClose={() => setRecipeProduct(null)} />}
     </main>
