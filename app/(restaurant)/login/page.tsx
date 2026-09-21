@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ACTIVE_RESTAURANT_KEY } from "./staff/session-key";
+import { Spinner } from "@/components/ui/loading";
 
 /**
  * Restaurant owner login — step 1 of the prototype's two-step flow (see
@@ -96,8 +97,9 @@ export default function OwnerLoginPage() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-lg bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white text-[12.5px] font-bold py-2.5 mt-1.5 transition-colors"
+          className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white text-[12.5px] font-bold py-2.5 mt-1.5 transition-colors"
         >
+          {loading && <Spinner size={13} />}
           {loading ? "Checking…" : "Continue"}
         </button>
       </form>

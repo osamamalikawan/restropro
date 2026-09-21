@@ -40,6 +40,7 @@ export function RestockClient() {
   const [date, setDate] = useState(todayISO());
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function loadAll() {
     const [invRes, supRes, purRes, prodRes] = await Promise.all([
@@ -53,6 +54,7 @@ export function RestockClient() {
     setSuppliers(supData.suppliers ?? []);
     setPurchases(purData.purchases ?? []);
     setProductions(prodData.productions ?? []);
+    setLoading(false);
   }
   useEffect(() => {
     loadAll();
@@ -182,7 +184,7 @@ export function RestockClient() {
           </div>
         </div>
 
-        <Panel>
+        <Panel loading={loading}>
           <PanelHead title="Restock history" subtitle="Purchases and in-house production, newest first" />
           <TableScroll>
             <table className="w-full">

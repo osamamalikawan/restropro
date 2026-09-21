@@ -90,7 +90,7 @@ export function ExpensesClient() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
-      <Panel>
+      <Panel loading={loading}>
         <PanelHead title="Expenses" subtitle="Regular and recurring restaurant expenses">
           <button onClick={openAdd} className={addBtnCls}>
             + Add expense
@@ -130,6 +130,7 @@ export function ExpensesClient() {
       </Panel>
 
       <Modal
+        busy={saving}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title="Add expense"

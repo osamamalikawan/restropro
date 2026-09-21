@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { initials, colorForId } from "@/lib/avatar";
 import { PinModal } from "./pin-modal";
 import { ACTIVE_RESTAURANT_KEY, type ActiveRestaurant } from "./session-key";
+import { PageLoader } from "@/components/ui/loading";
 
 type Employee = { id: string; name: string; role: string };
 
@@ -91,7 +92,11 @@ export default function StaffPickerPage() {
         </div>
       )}
 
-      {!loadError && employees === null && <p className="relative z-10 text-ink-faint text-sm">Loading staff…</p>}
+      {!loadError && employees === null && (
+        <div className="relative z-10">
+          <PageLoader label="Loading staff…" />
+        </div>
+      )}
 
       {!loadError && employees !== null && employees.length === 0 && (
         <div className="relative z-10 text-center">

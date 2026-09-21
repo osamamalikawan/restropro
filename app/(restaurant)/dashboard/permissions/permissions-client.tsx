@@ -1,12 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { Avatar, Badge } from "@/components/ui/panel";
+import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 
 type Role = "admin" | "manager" | "cashier" | "inventory";
 type Matrix = Record<Role, Record<string, boolean>>;
 type Category = { id: string; name: string };
-type Employee = { id: string; name: string; role: Role; status: "active" | "inactive"; is_user: boolean };
 
 const ROLE_META: Record<Role, { label: string; color: string }> = {
   admin: { label: "Admin", color: "#D9481F" },
@@ -54,18 +52,15 @@ export function PermissionsClient() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [newCat, setNewCat] = useState("");
   const [catError, setCatError] = useState("");
-
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [usersLoading, setUsersLoading] = useState(true);
-  const [usersError, setUsersError] = useState("");
+  const [savingShift, setSavingShift] = useState(false);
+  const [addingCategory, setAddingCategory] = useState(false);
 
   useEffect(() => {
     (async () => {
-      const [permRes, settingsRes, catRes, empRes] = await Promise.all([
+      const [permRes, settingsRes, catRes] = await Promise.all([
         fetch("/api/permissions"),
         fetch("/api/settings"),
         fetch("/api/expense-categories"),
-        fetch("/api/employees"),
       ]);
       const permData = await permRes.json();
       if (permRes.ok) {
@@ -80,13 +75,6 @@ export function PermissionsClient() {
       }
       const catData = await catRes.json();
       if (catRes.ok) setCategories(catData.categories ?? []);
-
-      const empData = await empRes.json();
-      // Users are just the subset of employees with login access (is_user) — see
-      // app/api/employees/route.ts. Every User is an Employee; not every Employee is a User.
-      if (empRes.ok) setEmployees(empData.employees ?? []);
-      else setUsersError(empData.error ?? `Could not load users (HTTP ${empRes.status})`);
-      setUsersLoading(false);
     })();
   }, []);
 
@@ -112,11 +100,13 @@ export function PermissionsClient() {
 
   async function saveShift() {
     setShiftMsg("");
+    setSavingShift(true);
     const res = await fetch("/api/settings", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ shiftStart, shiftEnd }),
     });
+    setSavingShift(false);
     if (!res.ok) {
       setShiftMsg((await res.json()).error || "Could not save");
       return;
@@ -132,12 +122,14 @@ export function PermissionsClient() {
       return;
     }
     setCatError("");
+    setAddingCategory(true);
     const res = await fetch("/api/expense-categories", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ op: "insert", row: { name } }),
     });
     const data = await res.json();
+    setAddingCategory(false);
     if (!res.ok) {
       setCatError(data.error);
       return;
@@ -162,54 +154,9 @@ export function PermissionsClient() {
     setCategories((prev) => prev.filter((c) => c.id !== cat.id));
   }
 
-  const users = employees.filter((e) => e.is_user);
-
   return (
     <main className="p-6 md:p-8 space-y-5">
-      <div className="rounded-xl border border-line bg-surface p-6">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <h3 className="font-display font-semibold text-ink-strong text-[15px]">Users</h3>
-            <div className="text-xs text-ink-faint mt-0.5">
-              Employees with login access. Every User is an employee — manage the full roster, including
-              employee-only staff, on the{" "}
-              <Link href="/dashboard/employees" className="text-chili-500 hover:underline">
-                Employees page
-              </Link>
-              .
-            </div>
-          </div>
-        </div>
-        {usersError && (
-          <p className="mb-3 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
-            Couldn&apos;t load users: {usersError}
-          </p>
-        )}
-        {usersLoading ? (
-          <p className="text-ink-faint text-sm">Loading…</p>
-        ) : users.length === 0 ? (
-          <p className="text-ink-faint text-sm">
-            No users yet — grant an employee a PIN on the{" "}
-            <Link href="/dashboard/employees" className="text-chili-500 hover:underline">
-              Employees page
-            </Link>{" "}
-            to make them a User.
-          </p>
-        ) : (
-          <div className="space-y-1.5">
-            {users.map((u) => (
-              <div key={u.id} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2">
-                <Avatar id={u.id} name={u.name} size={28} />
-                <span className="text-sm font-medium text-ink-strong flex-1">{u.name}</span>
-                <Badge tone={ROLE_META[u.role].label === "Admin" ? "crimson" : "steel"}>{ROLE_META[u.role].label}</Badge>
-                <Badge tone={u.status === "active" ? "basil" : "steel"}>{u.status === "active" ? "Active" : "Inactive"}</Badge>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-xl border border-line bg-surface p-6">
+      <div className="relative rounded-xl border border-line bg-surface p-6">
         <div className="mb-4">
           <h3 className="font-display font-semibold text-ink-strong text-[15px]">Role permissions</h3>
           <div className="text-xs text-ink-faint mt-0.5">
@@ -218,7 +165,7 @@ export function PermissionsClient() {
         </div>
         {permMsg && <p className="text-xs text-basil-400 mb-3">{permMsg}</p>}
         {!matrix ? (
-          <p className="text-ink-faint text-sm">Loading…</p>
+          <PageLoader label="Loading permissions…" />
         ) : (
           <div className="overflow-x-auto">
             <table className="text-sm border-collapse min-w-[900px]">
@@ -263,7 +210,7 @@ export function PermissionsClient() {
       </div>
 
       <div className="grid md:grid-cols-2 gap-5">
-        <div className="rounded-xl border border-line bg-surface p-6">
+        <div className="relative rounded-xl border border-line bg-surface p-6">
           <div className="mb-4">
             <h3 className="font-display font-semibold text-ink-strong text-[15px]">Default shift timings</h3>
             <div className="text-xs text-ink-faint mt-0.5">Applied restaurant-wide, supports overnight shifts</div>
@@ -295,13 +242,16 @@ export function PermissionsClient() {
           {shiftMsg && <p className="text-xs text-basil-400 mb-2">{shiftMsg}</p>}
           <button
             onClick={saveShift}
-            className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-4 py-2 transition-colors"
+            disabled={savingShift}
+            className="inline-flex items-center gap-1.5 rounded-md bg-chili-500 hover:bg-chili-600 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 transition-colors"
           >
+            {savingShift && <Spinner size={14} />}
             Save default shift
           </button>
+          <LoadingOverlay show={savingShift} />
         </div>
 
-        <div className="rounded-xl border border-line bg-surface p-6">
+        <div className="relative rounded-xl border border-line bg-surface p-6">
           <div className="mb-4">
             <h3 className="font-display font-semibold text-ink-strong text-[15px]">Expense categories</h3>
             <div className="text-xs text-ink-faint mt-0.5">Used when logging expense ledger entries</div>
@@ -327,11 +277,14 @@ export function PermissionsClient() {
             />
             <button
               onClick={addCategory}
-              className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-4 py-2 transition-colors shrink-0"
+              disabled={addingCategory}
+              className="inline-flex items-center gap-1.5 rounded-md bg-chili-500 hover:bg-chili-600 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 transition-colors shrink-0"
             >
+              {addingCategory && <Spinner size={14} />}
               Add
             </button>
           </div>
+          <LoadingOverlay show={addingCategory} />
         </div>
       </div>
     </main>

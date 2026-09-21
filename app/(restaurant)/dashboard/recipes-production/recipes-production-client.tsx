@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { X } from "lucide-react";
 import { inputCls, btnPrimary } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow } from "@/components/ui/panel";
+import { PageLoader } from "@/components/ui/loading";
 import { fmtMoney } from "@/lib/format";
 
 type Product = { id: string; name: string };
@@ -32,6 +33,7 @@ export function RecipesProductionClient() {
   const [products, setProducts] = useState<Product[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [productions, setProductions] = useState<Production[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([fetch("/api/products").then((r) => r.json()), fetch("/api/inventory").then((r) => r.json()), fetch("/api/productions").then((r) => r.json())]).then(
@@ -39,6 +41,7 @@ export function RecipesProductionClient() {
         setProducts(p.products ?? []);
         setInventoryItems(i.inventoryItems ?? []);
         setProductions(pr.productions ?? []);
+        setLoading(false);
       }
     );
   }, []);
@@ -50,6 +53,14 @@ export function RecipesProductionClient() {
 
   const rawItems = inventoryItems.filter((i) => i.item_type === "ready_made");
   const selfMadeItems = inventoryItems.filter((i) => i.item_type === "self_made");
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+        <PageLoader label="Loading recipes…" />
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
@@ -81,6 +92,7 @@ function ProductRecipesTab({ products, rawItems, initialProductId }: { products:
   const [newQty, setNewQty] = useState("1");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [linesLoading, setLinesLoading] = useState(false);
 
   useEffect(() => {
     if (!productId && products[0]) setProductId(products[0].id);
@@ -88,9 +100,11 @@ function ProductRecipesTab({ products, rawItems, initialProductId }: { products:
 
   useEffect(() => {
     if (!productId) return;
+    setLinesLoading(true);
     fetch(`/api/recipes?productId=${productId}`)
       .then((r) => r.json())
-      .then((d) => setLines(d.recipeItems ?? []));
+      .then((d) => setLines(d.recipeItems ?? []))
+      .finally(() => setLinesLoading(false));
   }, [productId]);
 
   const costPerUnit = lines.reduce((sum, l) => sum + Number(l.quantity) * Number(l.inventory_items?.cost ?? 0), 0);
@@ -124,7 +138,7 @@ function ProductRecipesTab({ products, rawItems, initialProductId }: { products:
   }
 
   return (
-    <Panel>
+    <Panel loading={linesLoading || saving}>
       <PanelHead title="Recipes (menu items)" subtitle="Ingredients consumed per menu item — stock deducts automatically on sale" />
       <div className="p-5 space-y-4">
         {error && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}
@@ -184,6 +198,7 @@ function SelfMadeRecipesTab({ selfMadeItems, rawItems }: { selfMadeItems: Invent
   const [newQty, setNewQty] = useState("1");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [linesLoading, setLinesLoading] = useState(false);
 
   useEffect(() => {
     if (!itemId && selfMadeItems[0]) setItemId(selfMadeItems[0].id);
@@ -191,9 +206,11 @@ function SelfMadeRecipesTab({ selfMadeItems, rawItems }: { selfMadeItems: Invent
 
   useEffect(() => {
     if (!itemId) return;
+    setLinesLoading(true);
     fetch(`/api/production-recipes?itemId=${itemId}`)
       .then((r) => r.json())
-      .then((d) => setLines(d.recipeItems ?? []));
+      .then((d) => setLines(d.recipeItems ?? []))
+      .finally(() => setLinesLoading(false));
   }, [itemId]);
 
   const costPerUnit = lines.reduce((sum, l) => sum + Number(l.quantity) * Number(l.ingredient?.cost ?? 0), 0);
@@ -238,7 +255,7 @@ function SelfMadeRecipesTab({ selfMadeItems, rawItems }: { selfMadeItems: Invent
   }
 
   return (
-    <Panel>
+    <Panel loading={linesLoading || saving}>
       <PanelHead title="Self-made item recipes" subtitle="Raw ingredients for in-house items — their cost is calculated automatically" />
       <div className="p-5 space-y-4">
         {error && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}

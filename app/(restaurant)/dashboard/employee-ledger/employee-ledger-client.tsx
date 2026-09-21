@@ -19,6 +19,7 @@ export function EmployeeLedgerClient() {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
     const [eRes, lRes] = await Promise.all([fetch("/api/employees"), fetch("/api/employee-ledger")]);
@@ -26,6 +27,7 @@ export function EmployeeLedgerClient() {
     setEmployees(e.employees ?? []);
     setEntries(l.entries ?? []);
     if (!employeeId && e.employees?.[0]) setEmployeeId(e.employees[0].id);
+    setLoading(false);
   }
   useEffect(() => {
     load();
@@ -93,7 +95,7 @@ export function EmployeeLedgerClient() {
           </div>
         </div>
 
-        <Panel>
+        <Panel loading={loading}>
           <PanelHead title="Payment history" />
           <TableScroll>
             <table className="w-full">

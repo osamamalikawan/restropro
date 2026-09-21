@@ -1,8 +1,17 @@
 import { initials, colorForId } from "@/lib/avatar";
+import { LoadingOverlay } from "@/components/ui/loading";
 
-/** Panel shell — 1:1 with the prototype's .panel > .panel-head + table-scroll. */
-export function Panel({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-xl border border-line bg-surface">{children}</div>;
+/** Panel shell — 1:1 with the prototype's .panel > .panel-head + table-scroll.
+ *  `loading` shows a blocking overlay (see LoadingOverlay) over the whole panel — pass the
+ *  same `loading`/`saving` state the page already tracks for its initial fetch or a
+ *  destructive/bulk action, so the table underneath can't be misclicked mid-update. */
+export function Panel({ children, loading = false, loadingLabel }: { children: React.ReactNode; loading?: boolean; loadingLabel?: string }) {
+  return (
+    <div className="relative rounded-xl border border-line bg-surface">
+      {children}
+      <LoadingOverlay show={loading} label={loadingLabel} />
+    </div>
+  );
 }
 
 export function PanelHead({
@@ -75,12 +84,23 @@ export function Badge({ children, tone = "steel" }: { children: React.ReactNode;
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${tones[tone]}`}>{children}</span>;
 }
 
-export function IconBtn({ onClick, title, children }: { onClick: () => void; title: string; children: React.ReactNode }) {
+export function IconBtn({
+  onClick,
+  title,
+  children,
+  disabled = false,
+}: {
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
   return (
     <button
       onClick={onClick}
       title={title}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-line text-ink-mid transition hover:bg-raised hover:text-ink-strong"
+      disabled={disabled}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-line text-ink-mid transition hover:bg-raised hover:text-ink-strong disabled:opacity-40 disabled:pointer-events-none"
     >
       {children}
     </button>

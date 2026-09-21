@@ -125,7 +125,7 @@ export function InventoryClient() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
-      <Panel>
+      <Panel loading={loading}>
         <PanelHead title="Stock & inventory" subtitle="Definitions only — add stock from Restock">
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search item…" className={searchInputCls} />
           <button onClick={openAdd} className={addBtnCls}>
@@ -199,6 +199,7 @@ export function InventoryClient() {
       </Panel>
 
       <Modal
+        busy={saving}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title={editingId ? "Edit inventory item" : "Add inventory item"}

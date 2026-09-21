@@ -19,6 +19,7 @@ export function SupplierLedgerClient() {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
     const [sRes, mRes, eRes] = await Promise.all([fetch("/api/suppliers"), fetch("/api/payment-methods"), fetch("/api/supplier-ledger")]);
@@ -27,6 +28,7 @@ export function SupplierLedgerClient() {
     setMethods(m.paymentMethods ?? m.methods ?? []);
     setEntries(e.entries ?? []);
     if (!supplierId && s.suppliers?.[0]) setSupplierId(s.suppliers[0].id);
+    setLoading(false);
   }
   useEffect(() => {
     load();
@@ -94,7 +96,7 @@ export function SupplierLedgerClient() {
           </div>
         </div>
 
-        <Panel>
+        <Panel loading={loading}>
           <PanelHead title="Payment history" />
           <TableScroll>
             <table className="w-full">

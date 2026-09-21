@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 
 type Sale = {
   id: string;
@@ -77,7 +78,7 @@ export function UnpaidOrdersClient() {
   return (
     <main className="p-6 md:p-8">
       {sales === null ? (
-        <p className="text-ink-faint text-sm">Loading…</p>
+        <PageLoader label="Loading unpaid orders…" />
       ) : (
         <div className="rounded-xl border border-line bg-surface overflow-hidden">
           <table className="w-full text-sm">
@@ -130,8 +131,13 @@ export function UnpaidOrdersClient() {
       )}
 
       {collecting && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-          <div className="w-full max-w-sm rounded-xl border border-line bg-surface p-6 space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !saving) setCollecting(null);
+          }}
+        >
+          <div className="relative w-full max-w-sm rounded-xl border border-line bg-surface p-6 space-y-4">
             <h3 className="font-display text-lg font-semibold">Collect payment — #{collecting.order_no}</h3>
             <div className="flex justify-between text-sm text-ink-mid">
               <span>Balance due</span>
@@ -156,17 +162,23 @@ export function UnpaidOrdersClient() {
             </label>
             {error && <p className="text-crimson-400 text-sm">{error}</p>}
             <div className="flex gap-2">
-              <button onClick={() => setCollecting(null)} className="flex-1 rounded-lg bg-raised hover:bg-hover py-2.5 font-semibold text-sm">
+              <button
+                onClick={() => setCollecting(null)}
+                disabled={saving}
+                className="flex-1 rounded-lg bg-raised hover:bg-hover py-2.5 font-semibold text-sm disabled:opacity-50"
+              >
                 Cancel
               </button>
               <button
                 onClick={submitCollect}
                 disabled={saving}
-                className="flex-1 rounded-lg bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white font-semibold py-2.5 text-sm"
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white font-semibold py-2.5 text-sm"
               >
-                {saving ? "Saving…" : "Confirm"}
+                {saving && <Spinner size={14} />}
+                Confirm
               </button>
             </div>
+            <LoadingOverlay show={saving} />
           </div>
         </div>
       )}

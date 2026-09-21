@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { PageLoader } from "@/components/ui/loading";
 import Link from "next/link";
 import { DollarSign, TrendingUp, Receipt, Layers, AlertTriangle, Clock, Users, Pencil, X } from "lucide-react";
 import { EditOrderModal } from "@/components/edit-order-modal";
@@ -72,7 +73,7 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
   if (!summary) {
     return (
       <main className="p-6 md:p-8">
-        <p className="text-ink-faint text-sm">Loading dashboard…</p>
+        <PageLoader label="Loading dashboard…" />
       </main>
     );
   }

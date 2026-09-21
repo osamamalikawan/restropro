@@ -122,7 +122,7 @@ export function SuppliersClient() {
           <KpiCard label="Outstanding payable" value={fmtMoney(Math.max(0, totalPurchased - totalPaid))} />
         </div>
 
-        <Panel>
+        <Panel loading={loading}>
           <PanelHead title="Payment history" />
           <TableScroll>
             <table className="w-full">
@@ -159,6 +159,7 @@ export function SuppliersClient() {
   function renderModal() {
     return (
       <Modal
+        busy={saving}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title={editingId ? "Edit supplier" : "Add supplier"}
@@ -195,7 +196,7 @@ export function SuppliersClient() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
-      <Panel>
+      <Panel loading={loading}>
         <PanelHead title="Suppliers" subtitle="Vendors supplying stock and ingredients">
           <button onClick={openAdd} className={addBtnCls}>
             + Add supplier

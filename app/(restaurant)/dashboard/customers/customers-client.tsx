@@ -133,7 +133,7 @@ export function CustomersClient() {
           <KpiCard label="Last order" value={stats.lastOrder ? `#${stats.lastOrder.order_no}` : "—"} />
         </div>
 
-        <Panel>
+        <Panel loading={loading}>
           <PanelHead title="Order history" />
           <TableScroll>
             <table className="w-full">
@@ -172,6 +172,7 @@ export function CustomersClient() {
   function renderModal() {
     return (
       <Modal
+        busy={saving}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title={editingId ? "Edit customer" : "Add customer"}
@@ -212,7 +213,7 @@ export function CustomersClient() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
-      <Panel>
+      <Panel loading={loading}>
         <PanelHead title="Customers" subtitle="Everyone who has ordered with you">
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or phone…" className={searchInputCls} />
           <button onClick={openAdd} className={addBtnCls}>

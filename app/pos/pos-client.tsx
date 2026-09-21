@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
 
 type Product = { id: string; name: string; price: number; is_available: boolean };
@@ -185,7 +186,7 @@ export function PosClient({
         </div>
 
         {products === null ? (
-          <p className="text-ink-faint text-sm">Loading menu…</p>
+          <PageLoader label="Loading menu…" />
         ) : products.length === 0 ? (
           <p className="text-ink-faint text-sm">
             No products yet — add some from <Link href="/dashboard/menu" className="underline">Menu</Link>.
@@ -307,8 +308,13 @@ export function PosClient({
       </div>
 
       {checkoutOpen && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-sm rounded-xl border border-line bg-surface p-6 space-y-4">
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !submitting) setCheckoutOpen(false);
+          }}
+        >
+          <div className="relative w-full max-w-sm rounded-xl border border-line bg-surface p-6 space-y-4">
             <h3 className="font-display text-lg font-semibold">Payment</h3>
             <div className="flex justify-between text-sm">
               <span>Total due</span>
@@ -401,18 +407,21 @@ export function PosClient({
             <div className="flex gap-2">
               <button
                 onClick={() => setCheckoutOpen(false)}
-                className="flex-1 rounded-lg bg-raised hover:bg-hover py-2.5 font-semibold"
+                disabled={submitting}
+                className="flex-1 rounded-lg bg-raised hover:bg-hover py-2.5 font-semibold disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={completeSale}
                 disabled={submitting}
-                className="flex-1 rounded-lg bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white font-semibold py-2.5"
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white font-semibold py-2.5"
               >
-                {submitting ? "Saving…" : "Confirm"}
+                {submitting && <Spinner size={14} />}
+                Confirm
               </button>
             </div>
+            <LoadingOverlay show={submitting} />
           </div>
         </div>
       )}

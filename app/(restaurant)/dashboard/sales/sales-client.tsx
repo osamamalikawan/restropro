@@ -1,5 +1,6 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
+import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 
 type Sale = {
   id: string;
@@ -33,6 +34,7 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   async function load() {
     const res = await fetch("/api/sales?limit=100");
@@ -46,6 +48,7 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
   async function cancelSale(sale: Sale) {
     if (!confirm(`Cancel order #${sale.order_no}? This restores its inventory and removes it from today's income.`)) return;
     setError("");
+    setCancellingId(sale.id);
     const res = await fetch("/api/sales/cancel", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -53,9 +56,11 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
     });
     if (!res.ok) {
       setError((await res.json()).error);
+      setCancellingId(null);
       return;
     }
-    load();
+    await load();
+    setCancellingId(null);
   }
 
   const filtered = (sales ?? []).filter((s) => {
@@ -82,9 +87,9 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
       {error && <p className="text-crimson-400 text-sm mb-3">{error}</p>}
 
       {sales === null ? (
-        <p className="text-ink-faint text-sm">Loading…</p>
+        <PageLoader label="Loading orders…" />
       ) : (
-        <div className="rounded-xl border border-line bg-surface overflow-hidden">
+        <div className="relative rounded-xl border border-line bg-surface overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-raised/50 text-ink-mid text-xs uppercase">
               <tr>
@@ -122,7 +127,12 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
                     </td>
                     <td className="p-3 text-right">
                       {canCancel && s.status !== "cancelled" && (
-                        <button onClick={() => cancelSale(s)} className="text-xs text-ink-faint hover:text-crimson-400">
+                        <button
+                          onClick={() => cancelSale(s)}
+                          disabled={cancellingId === s.id}
+                          className="inline-flex items-center gap-1 text-xs text-ink-faint hover:text-crimson-400 disabled:opacity-50"
+                        >
+                          {cancellingId === s.id && <Spinner size={11} />}
                           Cancel
                         </button>
                       )}
@@ -155,6 +165,7 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
               )}
             </tbody>
           </table>
+          <LoadingOverlay show={cancellingId !== null} />
         </div>
       )}
     </main>

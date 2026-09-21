@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { EditOrderModal } from "@/components/edit-order-modal";
+import { LoadingOverlay, PageLoader } from "@/components/ui/loading";
 
 type Sale = {
   id: string;
@@ -34,14 +35,17 @@ const TYPE_LABEL: Record<Sale["order_type"], string> = { dine_in: "Dine In", tak
  */
 export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
   const [sales, setSales] = useState<Sale[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [taxRate, setTaxRate] = useState(0.05);
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   async function load() {
     const res = await fetch("/api/sales?limit=60");
     const data = await res.json();
     if (res.ok) setSales((data.sales ?? []).filter((s: Sale) => s.status !== "cancelled"));
+    setLoading(false);
   }
   useEffect(() => {
     load();
@@ -53,6 +57,7 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
   }, []);
 
   async function move(saleId: string, kitchenStatus: string) {
+    setBusyId(saleId);
     setSales((prev) => prev.map((s) => (s.id === saleId ? { ...s, kitchen_status: kitchenStatus as Sale["kitchen_status"] } : s)));
     const res = await fetch("/api/sales/kitchen-status", {
       method: "POST",
@@ -61,12 +66,14 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
     });
     if (!res.ok) {
       setError((await res.json()).error);
-      load();
+      await load();
     }
+    setBusyId(null);
   }
 
   async function cancelTicket(saleId: string, orderNo: number) {
     if (!confirm(`Cancel order #${orderNo}? This restores its inventory and removes it from today's income.`)) return;
+    setBusyId(saleId);
     const res = await fetch("/api/sales/cancel", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -74,14 +81,19 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
     });
     if (!res.ok) {
       setError((await res.json()).error);
+      setBusyId(null);
       return;
     }
-    load();
+    await load();
+    setBusyId(null);
   }
 
   return (
     <main className="p-6 md:p-8">
       {error && <p className="text-crimson-400 text-sm mb-3">{error}</p>}
+      {loading ? (
+        <PageLoader label="Loading tickets…" />
+      ) : (
       <div className="grid md:grid-cols-3 gap-5">
         {COLUMNS.map((col, colIdx) => {
           const items = sales
@@ -101,7 +113,7 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
               <div className="flex-1 p-3 space-y-2.5 overflow-y-auto">
                 {items.length === 0 && <p className="text-xs text-ink-faint text-center py-6">No tickets here.</p>}
                 {items.map((s) => (
-                  <div key={s.id} className="rounded-lg border border-line bg-raised p-3">
+                  <div key={s.id} className="relative rounded-lg border border-line bg-raised p-3">
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="font-mono text-xs font-semibold">#{s.order_no}</span>
                       {s.status === "unpaid" && (
@@ -127,7 +139,8 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
                         {colIdx > 0 && (
                           <button
                             onClick={() => move(s.id, COLUMNS[colIdx - 1].key)}
-                            className="w-6 h-6 rounded bg-canvas border border-line text-xs hover:border-chili-500"
+                            disabled={busyId === s.id}
+                            className="w-6 h-6 rounded bg-canvas border border-line text-xs hover:border-chili-500 disabled:opacity-40"
                             title="Move back"
                           >
                             ‹
@@ -136,7 +149,8 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
                         {colIdx < COLUMNS.length - 1 && (
                           <button
                             onClick={() => move(s.id, COLUMNS[colIdx + 1].key)}
-                            className="w-6 h-6 rounded bg-canvas border border-line text-xs hover:border-chili-500"
+                            disabled={busyId === s.id}
+                            className="w-6 h-6 rounded bg-canvas border border-line text-xs hover:border-chili-500 disabled:opacity-40"
                             title="Move forward"
                           >
                             ›
@@ -145,15 +159,24 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
                       </div>
                       {canCancel && (
                         <div className="flex gap-2">
-                          <button onClick={() => setEditingSale(s)} className="text-[11px] text-ink-faint hover:text-chili-400">
+                          <button
+                            onClick={() => setEditingSale(s)}
+                            disabled={busyId === s.id}
+                            className="text-[11px] text-ink-faint hover:text-chili-400 disabled:opacity-40"
+                          >
                             Edit
                           </button>
-                          <button onClick={() => cancelTicket(s.id, s.order_no)} className="text-[11px] text-ink-faint hover:text-crimson-400">
+                          <button
+                            onClick={() => cancelTicket(s.id, s.order_no)}
+                            disabled={busyId === s.id}
+                            className="text-[11px] text-ink-faint hover:text-crimson-400 disabled:opacity-40"
+                          >
                             Cancel
                           </button>
                         </div>
                       )}
                     </div>
+                    <LoadingOverlay show={busyId === s.id} />
                   </div>
                 ))}
               </div>
@@ -161,6 +184,7 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
           );
         })}
       </div>
+      )}
 
       {editingSale && (
         <EditOrderModal

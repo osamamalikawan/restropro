@@ -22,6 +22,7 @@ type Product = {
 export function MenuClient() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
   const [newCatName, setNewCatName] = useState("");
   const [catError, setCatError] = useState("");
@@ -43,6 +44,7 @@ export function MenuClient() {
     const prodData = await prodRes.json();
     if (catRes.ok) setCategories(catData.categories ?? []);
     if (prodRes.ok) setProducts(prodData.products ?? []);
+    setLoading(false);
   }
   useEffect(() => {
     loadAll();
@@ -147,7 +149,7 @@ export function MenuClient() {
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
-        <Panel>
+        <Panel loading={loading} loadingLabel="Loading menu…">
           <PanelHead title="Menu categories" subtitle="Used to group items in POS" />
           <div className="px-5 py-3 space-y-1">
             {catError && <p className="mb-2 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{catError}</p>}
@@ -180,7 +182,7 @@ export function MenuClient() {
           </div>
         </Panel>
 
-        <Panel>
+        <Panel loading={loading} loadingLabel="Loading menu…">
           <PanelHead title="Menu products" subtitle="Image-first cards shown to cashiers in POS">
             <button onClick={openAdd} className={addBtnCls}>
               + Add product
@@ -216,6 +218,7 @@ export function MenuClient() {
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
+        busy={saving}
         title={editingId ? "Edit menu item" : "Add menu item"}
         footer={
           <>

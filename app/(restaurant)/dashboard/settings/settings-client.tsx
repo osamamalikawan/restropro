@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 
 type Settings = {
   service_charge_rate: number;
@@ -192,14 +193,18 @@ export function SettingsClient({
     setMethods((prev) => prev.filter((x) => x.id !== m.id));
   }
 
-  async function save(body: Record<string, unknown>, okMessage: string) {
+  const [savingSection, setSavingSection] = useState<string | null>(null);
+
+  async function save(section: string, body: Record<string, unknown>, okMessage: string) {
     setMsg(null);
+    setSavingSection(section);
     const res = await fetch("/api/settings", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
     const data = await res.json();
+    setSavingSection(null);
     if (!res.ok) {
       setMsg({ text: data.error || "Could not save", error: true });
       return;
@@ -219,7 +224,7 @@ export function SettingsClient({
   if (loading) {
     return (
       <main className="p-6 md:p-8">
-        <p className="text-ink-faint text-sm">Loading settings…</p>
+        <PageLoader label="Loading settings…" />
       </main>
     );
   }
@@ -266,10 +271,13 @@ export function SettingsClient({
           <Panel
             title="Restaurant profile"
             subtitle="Shown on receipts and the staff login screen"
+            loading={savingSection === "profile"}
             footer={
               <SaveButton
+                loading={savingSection === "profile"}
                 onClick={() =>
                   save(
+                    "profile",
                     { restaurantName: restName, address, phone, serviceChargeRate: s.service_charge_rate },
                     "Settings saved"
                   )
@@ -432,10 +440,13 @@ export function SettingsClient({
           <Panel
             title="POS, Tax & Invoicing controls"
             subtitle="Everything the checkout popup shows or hides, set from here"
+            loading={savingSection === "pos-tax"}
             footer={
               <SaveButton
+                loading={savingSection === "pos-tax"}
                 onClick={() =>
                   save(
+                    "pos-tax",
                     {
                       cashTaxRate: s.cash_tax_rate,
                       cardTaxRate: s.card_tax_rate,
@@ -472,11 +483,14 @@ export function SettingsClient({
             title="Printer & receipt"
             subtitle="80mm thermal receipt printer"
             badge="Connected"
+            loading={savingSection === "printer"}
             footer={
               <div className="flex gap-2.5">
                 <SaveButton
+                  loading={savingSection === "printer"}
                   onClick={() =>
                     save(
+                      "printer",
                       {
                         printerName: s.printer_name,
                         paperWidth: s.paper_width,
@@ -537,11 +551,14 @@ export function SettingsClient({
           <Panel
             title="FBR Digital Invoicing"
             subtitle="Federal Board of Revenue e-invoicing — off by default"
+            loading={savingSection === "fbr"}
             headerRight={<Switch on={s.fbr_enabled} onChange={(v) => set("fbr_enabled", v)} title="Enable FBR integration" />}
             footer={
               <SaveButton
+                loading={savingSection === "fbr"}
                 onClick={() =>
                   save(
+                    "fbr",
                     {
                       fbrEnabled: s.fbr_enabled,
                       fbrNtn: s.fbr_ntn,
@@ -623,6 +640,7 @@ function Panel({
   headerRight,
   footer,
   children,
+  loading = false,
 }: {
   title: string;
   subtitle: string;
@@ -630,9 +648,10 @@ function Panel({
   headerRight?: React.ReactNode;
   footer?: React.ReactNode;
   children: React.ReactNode;
+  loading?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-line bg-surface p-6 h-full flex flex-col">
+    <div className="relative rounded-xl border border-line bg-surface p-6 h-full flex flex-col">
       <div className="flex items-start justify-between mb-4">
         <div>
           <h3 className="font-display font-semibold text-ink-strong text-[15px]">{title}</h3>
@@ -643,6 +662,7 @@ function Panel({
       </div>
       <div className="flex-1">{children}</div>
       {footer && <div className="pt-3.5">{footer}</div>}
+      <LoadingOverlay show={loading} />
     </div>
   );
 }
@@ -678,9 +698,14 @@ function ToggleRow({ label, on, onChange, noMargin }: { label: string; on: boole
   );
 }
 
-function SaveButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+function SaveButton({ onClick, children, loading = false }: { onClick: () => void; children: React.ReactNode; loading?: boolean }) {
   return (
-    <button onClick={onClick} className="rounded-md bg-chili-500 hover:bg-chili-600 text-white text-sm font-semibold px-4 py-2 transition-colors">
+    <button
+      onClick={onClick}
+      disabled={loading}
+      className="inline-flex items-center gap-1.5 rounded-md bg-chili-500 hover:bg-chili-600 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 transition-colors"
+    >
+      {loading && <Spinner size={14} />}
       {children}
     </button>
   );

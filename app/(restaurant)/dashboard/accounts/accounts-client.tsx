@@ -105,7 +105,7 @@ export function AccountsClient() {
         <KpiCard label="Supplier payable" value={<span className="flex items-center gap-1.5 text-turmeric-500"><Hourglass className="h-4 w-4" />{fmtMoney(supplierPayable)}</span>} />
       </div>
 
-      <Panel>
+      <Panel loading={loading}>
         <PanelHead title="Ledger" subtitle="Income & expense transactions">
           <button onClick={openAdd} className={addBtnCls}>
             + Add entry
@@ -148,6 +148,7 @@ export function AccountsClient() {
       </Panel>
 
       <Modal
+        busy={saving}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title="Add ledger entry"
