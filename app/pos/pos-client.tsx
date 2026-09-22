@@ -4,7 +4,7 @@ import Link from "next/link";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
 
-type Product = { id: string; name: string; price: number; is_available: boolean; is_deal?: boolean; };
+type Product = { id: string; name: string; price: number; is_available: boolean };
 type CartLine = { productId: string; name: string; price: number; qty: number };
 type Table = { id: string; number: string; seats: number };
 type Area = { id: string; name: string; delivery_fee: number };
@@ -201,10 +201,7 @@ export function PosClient({
                   onClick={() => addToCart(p)}
                   className="rounded-xl border border-line bg-surface hover:border-chili-500 p-4 text-left transition-colors"
                 >
-                  <div className="flex items-center gap-1.5">
                   <div className="font-semibold text-sm">{p.name}</div>
-                  {p.is_deal && <span className="rounded-full bg-chili-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-chili-400">Deal</span>}
-                  </div>
                   <div className="text-basil-400 text-sm mt-1">Rs {p.price}</div>
                 </button>
               ))}

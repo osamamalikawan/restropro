@@ -2,28 +2,17 @@ import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-export async function GET(req: Request) {
+export async function GET() {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const url = new URL(req.url);
-  const limit = Math.min(Number(url.searchParams.get("limit") ?? 500), 2000);
-  const from = url.searchParams.get("from");
-  const to = url.searchParams.get("to");
-  const q = url.searchParams.get("q")?.trim();
-
   const admin = createAdminClient();
-  let query = admin
+  const { data, error } = await admin
     .from("expenses")
     .select("id, category, expense_type, amount, vendor, description, payment_method, txn_date")
     .eq("restaurant_id", session.restaurantId)
     .order("txn_date", { ascending: false })
-    .limit(limit);
-  if (from) query = query.gte("txn_date", from);
-  if (to) query = query.lte("txn_date", to);
-  if (q) query = query.or(`category.ilike.%${q}%,vendor.ilike.%${q}%,description.ilike.%${q}%`);
-
-  const { data, error } = await query;
+    .limit(50);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ expenses: data });
 }

@@ -60,6 +60,7 @@ const SETTINGS_FIELD_MAP: Record<string, string> = {
   fbrApiToken: "fbr_api_token",
   fbrEnvironment: "fbr_environment",
   fbrFee: "fbr_fee",
+  receiptTemplate: "receipt_template",
 };
 
 /**

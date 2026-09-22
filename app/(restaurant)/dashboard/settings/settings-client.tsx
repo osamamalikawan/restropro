@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
+import { RECEIPT_TEMPLATES, DUMMY_SALE, type ReceiptTemplateId } from "@/components/receipt/templates";
 
 type Settings = {
   service_charge_rate: number;
@@ -21,6 +22,7 @@ type Settings = {
   fbr_api_token: string | null;
   fbr_environment: string;
   fbr_fee: number;
+  receipt_template: string;
 };
 
 type PaymentMethod = { id: string; name: string };
@@ -241,6 +243,7 @@ export function SettingsClient({
       ? [
           { id: "pos-tax", label: "POS & Tax" },
           { id: "printer", label: "Printer & receipt" },
+          { id: "receipt-templates", label: "Receipt templates" },
           { id: "fbr", label: "FBR invoicing" },
         ]
       : []),
@@ -543,6 +546,72 @@ export function SettingsClient({
             <Field label="Receipt footer note">
               <input value={s.receipt_footer ?? ""} onChange={(e) => set("receipt_footer", e.target.value)} className="input" />
             </Field>
+          </Panel>
+        </div>
+
+        {/* Receipt design templates — spans both columns, needs room for 4 side-by-side previews */}
+        <div id="receipt-templates" className="scroll-mt-20 md:col-span-2">
+          <Panel
+            title="Receipt templates"
+            subtitle="Pick the design printed on every invoice — each renders with your restaurant's real profile and, when FBR is on below, its e-invoice block"
+            loading={savingSection === "receipt-templates"}
+            footer={
+              <SaveButton
+                loading={savingSection === "receipt-templates"}
+                onClick={() => save("receipt-templates", { receiptTemplate: s.receipt_template }, "Receipt template saved")}
+              >
+                Save receipt template
+              </SaveButton>
+            }
+          >
+            <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              {RECEIPT_TEMPLATES.map((t) => {
+                const selected = s.receipt_template === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => set("receipt_template", t.id)}
+                    className={`text-left rounded-xl border p-3 transition ${
+                      selected ? "border-chili-500 ring-1 ring-chili-500" : "border-line hover:border-chili-500/50"
+                    }`}
+                    style={{ background: "rgb(var(--bg-raised))" }}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-semibold text-ink-strong">{t.name}</span>
+                      {selected && (
+                        <span className="text-[10px] font-bold uppercase tracking-wide text-chili-500 bg-chili-500/10 rounded-full px-2 py-0.5">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-ink-mid mb-3">{t.description}</p>
+                    <div className="rounded-lg overflow-hidden flex justify-center py-3" style={{ background: "#e8e8e8" }}>
+                      <div style={{ transform: "scale(0.72)", transformOrigin: "top center" }}>
+                        <t.Component
+                          restaurant={{ name: restName || "Your Restaurant", address, phone }}
+                          settings={{
+                            receipt_header: s.receipt_header,
+                            receipt_footer: s.receipt_footer,
+                            fbr_enabled: s.fbr_enabled,
+                            fbr_ntn: s.fbr_ntn,
+                            fbr_strn: s.fbr_strn,
+                            fbr_pos_id: s.fbr_pos_id,
+                          }}
+                          sale={DUMMY_SALE}
+                        />
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-ink-faint mt-3">
+              Preview uses a sample order — your restaurant's actual name, address and phone above are real.{" "}
+              {s.fbr_enabled
+                ? "FBR is currently ON, so every template below shows its e-invoice block."
+                : "FBR is currently OFF — turn it on in the panel below to preview each template's e-invoice block."}
+            </p>
           </Panel>
         </div>
 

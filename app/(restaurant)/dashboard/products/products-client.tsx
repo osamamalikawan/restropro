@@ -15,23 +15,12 @@ type Product = {
   id: string;
   category_id: string | null;
   name: string;
-  description?: string | null;
   price: number;
   image_url: string | null;
   is_available: boolean;
-  is_deal?: boolean;
   menu_categories?: { name: string } | null;
 };
 type RecipeItem = { product_id: string; quantity: number; inventory_items: { cost: number } | null };
-type Deal = {
-  id: string;
-  name: string;
-  description: string | null;
-  price: number;
-  image_url: string | null;
-  is_available: boolean;
-  deal_items: { id: string; quantity: number; component_product_id: string; component: { id: string; name: string; price: number } | null }[];
-};
 
 export function ProductsClient({ canEdit }: { canEdit: boolean }) {
   const router = useRouter();
@@ -54,27 +43,13 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
   const [loadError, setLoadError] = useState("");
 
-  const [deals, setDeals] = useState<Deal[]>([]);
-  const [dealModalOpen, setDealModalOpen] = useState(false);
-  const [editingDealId, setEditingDealId] = useState<string | null>(null);
-  const [dName, setDName] = useState("");
-  const [dDescription, setDDescription] = useState("");
-  const [dPrice, setDPrice] = useState("");
-  const [dImageUrl, setDImageUrl] = useState("");
-  const [dAvailable, setDAvailable] = useState(true);
-  const [dComponents, setDComponents] = useState<{ productId: string; quantity: number }[]>([]);
-  const [dGalleryOpen, setDGalleryOpen] = useState(false);
-  const [dError, setDError] = useState("");
-  const [dSaving, setDSaving] = useState(false);
-
   async function load() {
     setLoading(true);
     setLoadError("");
-    const [pRes, cRes, rRes, dRes] = await Promise.all([
+    const [pRes, cRes, rRes] = await Promise.all([
       fetchJson<{ products: Product[] }>("/api/products"),
       fetchJson<{ categories: Category[] }>("/api/menu-categories"),
       fetchJson<{ recipeItems: RecipeItem[] }>("/api/recipes"),
-      fetchJson<{ deals: Deal[] }>("/api/deals"),
     ]);
     if (!pRes.ok) {
       setLoadError(pRes.error);
@@ -84,7 +59,6 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
     }
     setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
     setRecipeItems(rRes.ok ? rRes.data?.recipeItems ?? [] : []);
-    setDeals(dRes.ok ? dRes.data?.deals ?? [] : []);
     setLoading(false);
   }
   useEffect(() => {
@@ -101,89 +75,8 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
 
   const filtered = useMemo(() => {
     const query = q.toLowerCase();
-    return products.filter((p) => !p.is_deal && p.name.toLowerCase().includes(query));
+    return products.filter((p) => p.name.toLowerCase().includes(query));
   }, [products, q]);
-
-  // Only regular (non-deal) available-or-not products can go into a deal's composition —
-  // deals are not nestable in v1.
-  const componentOptions = useMemo(() => products.filter((p) => !p.is_deal), [products]);
-
-  function openAddDeal() {
-    setEditingDealId(null);
-    setDName("");
-    setDDescription("");
-    setDPrice("");
-    setDImageUrl("");
-    setDAvailable(true);
-    setDComponents([]);
-    setDError("");
-    setDealModalOpen(true);
-  }
-  function openEditDeal(d: Deal) {
-    setEditingDealId(d.id);
-    setDName(d.name);
-    setDDescription(d.description ?? "");
-    setDPrice(String(d.price));
-    setDImageUrl(d.image_url ?? "");
-    setDAvailable(d.is_available);
-    setDComponents(d.deal_items.map((di) => ({ productId: di.component_product_id, quantity: Number(di.quantity) })));
-    setDError("");
-    setDealModalOpen(true);
-  }
-  function addComponentRow() {
-    const firstUnused = componentOptions.find((p) => !dComponents.some((c) => c.productId === p.id));
-    if (!firstUnused) return;
-    setDComponents((prev) => [...prev, { productId: firstUnused.id, quantity: 1 }]);
-  }
-  function removeComponentRow(idx: number) {
-    setDComponents((prev) => prev.filter((_, i) => i !== idx));
-  }
-  function updateComponentRow(idx: number, patch: Partial<{ productId: string; quantity: number }>) {
-    setDComponents((prev) => prev.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
-  }
-
-  async function saveDeal() {
-    if (!dName.trim()) {
-      setDError("Deal name is required");
-      return;
-    }
-    if (dComponents.length < 2) {
-      setDError("A deal needs at least 2 products");
-      return;
-    }
-    setDSaving(true);
-    setDError("");
-    const res = await fetch("/api/deals", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        op: editingDealId ? "update" : "insert",
-        id: editingDealId ?? undefined,
-        name: dName.trim(),
-        description: dDescription.trim() || null,
-        price: Number(dPrice) || 0,
-        imageUrl: dImageUrl.trim() || null,
-        isAvailable: dAvailable,
-        components: dComponents,
-      }),
-    });
-    setDSaving(false);
-    if (!res.ok) {
-      setDError((await res.json()).error ?? "Could not save deal");
-      return;
-    }
-    setDealModalOpen(false);
-    await load();
-  }
-  async function removeDeal(id: string) {
-    if (!confirm("Remove this deal? This cannot be undone.")) return;
-    await fetch("/api/deals", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "delete", id }),
-    });
-    await load();
-  }
 
   function openAdd() {
     setEditingId(null);
@@ -313,66 +206,6 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
         </TableScroll>
       </Panel>
 
-      <Panel loading={loading} loadingLabel="">
-        <PanelHead title="Deals" subtitle="Bundle two or more products at a special price — shown to customers under the Deals category">
-          {canEdit && (
-            <button onClick={openAddDeal} className={addBtnCls}>
-              + Add deal
-            </button>
-          )}
-        </PanelHead>
-        <TableScroll>
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-line">
-                <Th />
-                <Th>Deal</Th>
-                <Th>Includes</Th>
-                <Th>Price</Th>
-                <Th>Available</Th>
-                <Th />
-              </tr>
-            </thead>
-            <tbody>
-              {deals.map((d) => (
-                <tr key={d.id} className="border-b border-line last:border-0">
-                  <Td>
-                    <div
-                      className="h-9 w-14 rounded-md bg-raised bg-cover bg-center border border-line"
-                      style={d.image_url ? { backgroundImage: `url('${d.image_url}')` } : undefined}
-                    />
-                  </Td>
-                  <Td>
-                    <div className="font-medium text-ink-strong">{d.name}</div>
-                    {d.description && <div className="text-xs text-ink-mid mt-0.5">{d.description}</div>}
-                  </Td>
-                  <Td className="text-ink-mid text-xs">
-                    {d.deal_items.map((di) => `${di.quantity}× ${di.component?.name ?? "—"}`).join(", ")}
-                  </Td>
-                  <Td className="font-mono font-medium">{fmtMoney(d.price)}</Td>
-                  <Td>
-                    <Badge tone={d.is_available ? "basil" : "crimson"}>{d.is_available ? "Yes" : "Hidden"}</Badge>
-                  </Td>
-                  <Td>
-                    {canEdit && (
-                      <div className="flex items-center gap-1.5">
-                        <IconBtn title="Edit" onClick={() => openEditDeal(d)}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </IconBtn>
-                        <IconBtn title="Remove" onClick={() => removeDeal(d.id)}>
-                          ✕
-                        </IconBtn>
-                      </div>
-                    )}
-                  </Td>
-                </tr>
-              ))}
-              {!loading && deals.length === 0 && <EmptyRow colSpan={6} label="No deals yet — bundle products above into a deal." />}
-            </tbody>
-          </table>
-        </TableScroll>
-      </Panel>
-
       <Modal
         busy={saving}
         open={modalOpen}
@@ -466,114 +299,6 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
           onClose={() => {
             setRecipeProduct(null);
             load();
-          }}
-        />
-      )}
-
-      <Modal
-        busy={dSaving}
-        open={dealModalOpen}
-        onClose={() => setDealModalOpen(false)}
-        title={editingDealId ? "Edit deal" : "Add deal"}
-        footer={
-          <>
-            <button onClick={() => setDealModalOpen(false)} className={btnGhost}>
-              Cancel
-            </button>
-            <button onClick={saveDeal} disabled={dSaving} className={btnPrimary}>
-              {dSaving ? "Saving…" : "Save deal"}
-            </button>
-          </>
-        }
-      >
-        {dError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{dError}</p>}
-        <Field label="Deal name">
-          <input value={dName} onChange={(e) => setDName(e.target.value)} className={inputCls} placeholder="e.g. Burger + Fries Combo" />
-        </Field>
-        <Field label="Description">
-          <textarea
-            value={dDescription}
-            onChange={(e) => setDDescription(e.target.value)}
-            className={inputCls}
-            rows={2}
-            placeholder="What's in it, for the customer to see"
-          />
-        </Field>
-        <Field label="Deal price (Rs)">
-          <input value={dPrice} onChange={(e) => setDPrice(e.target.value)} type="number" min="0" step="0.01" className={inputCls} placeholder="0.00" />
-        </Field>
-
-        <div>
-          <span className="mb-1 block text-xs font-medium text-ink-mid">Photo</span>
-          <div className="flex items-center gap-3 mb-2.5">
-            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-line bg-raised">
-              {dImageUrl ? (
-                <img src={dImageUrl} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-ink-faint">
-                  <ImageIcon className="h-6 w-6" />
-                </div>
-              )}
-            </div>
-            <button type="button" onClick={() => setDGalleryOpen(true)} className={btnGhost}>
-              🖼 Choose from Master Gallery
-            </button>
-          </div>
-          <p className="mb-1.5 text-[11px] text-ink-faint">Or paste an image URL below — uploading/choosing a photo takes priority.</p>
-          <input value={dImageUrl} onChange={(e) => setDImageUrl(e.target.value)} className={inputCls} placeholder="https://…" />
-        </div>
-
-        <div>
-          <span className="mb-1.5 block text-xs font-medium text-ink-mid">Products in this deal (at least 2)</span>
-          <div className="space-y-2">
-            {dComponents.map((c, idx) => (
-              <div key={idx} className="flex items-center gap-2">
-                <select
-                  value={c.productId}
-                  onChange={(e) => updateComponentRow(idx, { productId: e.target.value })}
-                  className={`${inputCls} flex-1`}
-                >
-                  {componentOptions.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="number"
-                  min={1}
-                  value={c.quantity}
-                  onChange={(e) => updateComponentRow(idx, { quantity: +e.target.value || 1 })}
-                  className={`${inputCls} w-20`}
-                />
-                <button type="button" onClick={() => removeComponentRow(idx)} className="text-ink-faint hover:text-crimson-400" title="Remove">
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={addComponentRow}
-            disabled={componentOptions.length === 0}
-            className="mt-2 text-xs font-medium text-chili-500 hover:underline disabled:opacity-50"
-          >
-            + Add product to deal
-          </button>
-        </div>
-
-        <label className="flex items-center justify-between pt-1">
-          <span className="text-sm font-medium text-ink-strong">Active</span>
-          <Switch checked={dAvailable} onChange={setDAvailable} />
-        </label>
-      </Modal>
-
-      {dGalleryOpen && (
-        <GalleryPickerModal
-          onClose={() => setDGalleryOpen(false)}
-          onPick={(url) => {
-            setDImageUrl(url);
-            setDGalleryOpen(false);
           }}
         />
       )}

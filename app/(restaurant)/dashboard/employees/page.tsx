@@ -10,5 +10,5 @@ export default async function EmployeesPage() {
   if (!session) redirect("/login");
   if (!(await hasModuleAccess(session.restaurantId, session.role, "employees"))) redirect("/dashboard");
 
-  return <EmployeesClient canManage={session.role === "admin"} />;
+  return <EmployeesClient canManage={session.role === "admin" || session.role === "manager"} />;
 }

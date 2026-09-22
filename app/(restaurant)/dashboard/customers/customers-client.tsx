@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from "react";
 import { IdCard, Pencil, ArrowLeft } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, searchInputCls, addBtnCls } from "@/components/ui/panel";
-import { Pagination, usePagination } from "@/components/ui/pagination";
 import { fmtMoney, fmtDateTime } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
 
@@ -69,7 +68,6 @@ export function CustomersClient() {
     const query = q.toLowerCase();
     return customers.filter((c) => c.name.toLowerCase().includes(query) || c.phone.includes(query));
   }, [customers, q]);
-  const customersPage = usePagination(filtered, 20);
 
   function openAdd() {
     setEditingId(null);
@@ -251,7 +249,7 @@ export function CustomersClient() {
               </tr>
             </thead>
             <tbody>
-              {customersPage.pageItems.map((c) => {
+              {filtered.map((c) => {
                 const stats = statsFor(c.id);
                 return (
                   <tr key={c.id} className="border-b border-line last:border-0">
@@ -286,7 +284,6 @@ export function CustomersClient() {
             </tbody>
           </table>
         </TableScroll>
-        <Pagination page={customersPage.page} pageCount={customersPage.pageCount} onChange={customersPage.setPage} total={customersPage.total} pageSize={customersPage.pageSize} />
       </Panel>
 
       {renderModal()}

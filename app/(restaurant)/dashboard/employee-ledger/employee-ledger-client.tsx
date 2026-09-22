@@ -2,7 +2,6 @@
 import { useEffect, useState } from "react";
 import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/components/ui/panel";
-import { Pagination, usePagination } from "@/components/ui/pagination";
 import { fmtMoney, todayISO } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
 
@@ -64,8 +63,6 @@ export function EmployeeLedgerClient() {
     await load();
   }
 
-  const ledgerPage = usePagination(entries, 20);
-
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       {loadError && (
@@ -125,7 +122,7 @@ export function EmployeeLedgerClient() {
                 </tr>
               </thead>
               <tbody>
-                {ledgerPage.pageItems.map((l) => (
+                {entries.map((l) => (
                   <tr key={l.id} className="border-b border-line last:border-0">
                     <Td className="text-ink-mid">{l.txn_date}</Td>
                     <Td className="font-medium text-ink-strong">{l.employees?.name ?? "—"}</Td>
@@ -140,7 +137,6 @@ export function EmployeeLedgerClient() {
               </tbody>
             </table>
           </TableScroll>
-          <Pagination page={ledgerPage.page} pageCount={ledgerPage.pageCount} onChange={ledgerPage.setPage} total={ledgerPage.total} pageSize={ledgerPage.pageSize} />
         </Panel>
       </div>
     </main>

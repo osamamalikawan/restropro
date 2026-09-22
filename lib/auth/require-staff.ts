@@ -4,6 +4,22 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { computeStatus, isUsable } from "@/lib/subscription";
 import { getModuleAccess, type Role } from "@/lib/permissions";
 
+/** A single .single() lookup, retried once on a transient error. Without this, a momentary
+ *  network/DB hiccup (more likely to surface on pages that fire several parallel requests at
+ *  once, like Employees) was silently treated the same as "this employee doesn't exist" and
+ *  forced a full logout — even though the session and the row were both perfectly fine. */
+async function queryWithRetry<T>(run: () => PromiseLike<{ data: T | null; error: any }>): Promise<T | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { data, error } = await run();
+    if (!error) return data;
+    if (attempt === 1) {
+      console.error("requireStaffSession: DB lookup failed after retry", error);
+      return null;
+    }
+  }
+  return null;
+}
+
 /** Shared re-verification used by every staff-facing API route: checks the signed cookie,
  *  then re-checks employees.status + session_version server-side (so a PIN reset / forced
  *  logout / deactivation takes effect immediately even though the cookie itself is still
@@ -14,11 +30,9 @@ export async function requireStaffSession(): Promise<StaffSessionPayload | null>
   if (!session) return null;
 
   const admin = createAdminClient();
-  const { data: employee } = await admin
-    .from("employees")
-    .select("status, session_version")
-    .eq("id", session.employeeId)
-    .single();
+  const employee = await queryWithRetry<{ status: string; session_version: number }>(() =>
+    admin.from("employees").select("status, session_version").eq("id", session.employeeId).single()
+  );
   if (!employee || employee.status !== "active" || employee.session_version !== session.sessionVersion) {
     return null;
   }
@@ -34,18 +48,14 @@ export async function resolveStaffContext() {
   if (!session) return null;
 
   const admin = createAdminClient();
-  const { data: employee } = await admin
-    .from("employees")
-    .select("id, name, role, status")
-    .eq("id", session.employeeId)
-    .single();
+  const employee = await queryWithRetry<{ id: string; name: string; role: string; status: string }>(() =>
+    admin.from("employees").select("id, name, role, status").eq("id", session.employeeId).single()
+  );
   if (!employee) return null;
 
-  const { data: restaurant } = await admin
-    .from("restaurants")
-    .select("id, name, status")
-    .eq("id", session.restaurantId)
-    .single();
+  const restaurant = await queryWithRetry<{ id: string; name: string; status: string }>(() =>
+    admin.from("restaurants").select("id, name, status").eq("id", session.restaurantId).single()
+  );
   if (!restaurant || restaurant.status !== "active") return null;
 
   const { data: sub } = await admin
@@ -65,7 +75,7 @@ export async function resolveStaffContext() {
 
   return {
     session,
-    employee,
+    employee: { ...employee, role: employee.role as Role },
     restaurant,
     subStatus,
     modulePerms,

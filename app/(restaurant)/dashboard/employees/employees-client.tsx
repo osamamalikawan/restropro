@@ -1,12 +1,24 @@
 "use client";
-import { useEffect, useState } from "react";
-import { IdCard, Pencil, ArrowLeft } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { IdCard, Pencil, ArrowLeft, UserX, RotateCcw } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
 
-type Employee = { id: string; name: string; role: "admin" | "manager" | "cashier" | "inventory"; status: "active" | "inactive" };
+type Employee = {
+  id: string;
+  name: string;
+  role: "admin" | "manager" | "cashier" | "inventory";
+  status: "active" | "inactive" | "suspended" | "left";
+  father_name: string | null;
+  cnic_number: string | null;
+  address: string | null;
+  joining_date: string | null;
+  salary_amount: number | null;
+  left_date: string | null;
+  is_user: boolean;
+};
 type LedgerEntry = { id: string; employee_id: string; type: string; amount: number; note: string | null; txn_date: string };
 type Sale = { cashier_employee_id: string | null; status: string };
 
@@ -18,26 +30,30 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"active" | "left">("active");
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [fName, setFName] = useState("");
   const [fRole, setFRole] = useState<Employee["role"]>("cashier");
-  const [fStatus, setFStatus] = useState<Employee["status"]>("active");
+  const [fFatherName, setFFatherName] = useState("");
+  const [fCnic, setFCnic] = useState("");
+  const [fAddress, setFAddress] = useState("");
+  const [fJoiningDate, setFJoiningDate] = useState("");
+  const [fSalary, setFSalary] = useState("");
   const [fPin, setFPin] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const [profileId, setProfileId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
     setLoadError("");
-    // Independent per-endpoint fetches — see lib/fetch-json.ts. A failed/empty response from
-    // one (previously: a plain Promise.all([...].json()) — if /api/sales came back with an
-    // empty body, .json() threw and killed the WHOLE batch before setEmployees() ever ran,
-    // even though /api/employees itself had already succeeded) can no longer block the others.
+    // Independent per-endpoint fetches — see lib/fetch-json.ts — a failed/empty response from
+    // one can't throw and wipe out the others.
     const [eRes, lRes, sRes] = await Promise.all([
       fetchJson<{ employees: Employee[] }>("/api/employees"),
       fetchJson<{ entries: LedgerEntry[] }>("/api/employee-ledger?limit=1000"),
@@ -57,11 +73,21 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
     load();
   }, []);
 
+  const filtered = useMemo(
+    () => employees.filter((e) => (tab === "left" ? e.status === "left" : e.status !== "left")),
+    [employees, tab]
+  );
+  const leftCount = employees.filter((e) => e.status === "left").length;
+
   function openAdd() {
     setEditingId(null);
     setFName("");
     setFRole("cashier");
-    setFStatus("active");
+    setFFatherName("");
+    setFCnic("");
+    setFAddress("");
+    setFJoiningDate(new Date().toISOString().slice(0, 10));
+    setFSalary("");
     setFPin("");
     setError("");
     setModalOpen(true);
@@ -70,7 +96,11 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
     setEditingId(e.id);
     setFName(e.name);
     setFRole(e.role);
-    setFStatus(e.status);
+    setFFatherName(e.father_name ?? "");
+    setFCnic(e.cnic_number ?? "");
+    setFAddress(e.address ?? "");
+    setFJoiningDate(e.joining_date ?? "");
+    setFSalary(e.salary_amount != null ? String(e.salary_amount) : "");
     setFPin("");
     setError("");
     setModalOpen(true);
@@ -80,8 +110,8 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
       setError("Name is required");
       return;
     }
-    if (!editingId && !/^\d{4}$/.test(fPin)) {
-      setError("A 4-digit PIN is required for a new employee");
+    if (fPin && !/^\d{4}$/.test(fPin)) {
+      setError("PIN must be exactly 4 digits");
       return;
     }
     setSaving(true);
@@ -91,15 +121,56 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         op: editingId ? "update" : "insert",
-        row: { id: editingId ?? undefined, name: fName.trim(), role: fRole, status: fStatus, pin: fPin || undefined },
+        row: {
+          id: editingId ?? undefined,
+          name: fName.trim(),
+          role: fRole,
+          father_name: fFatherName.trim() || null,
+          cnic_number: fCnic.trim() || null,
+          address: fAddress.trim() || null,
+          joining_date: fJoiningDate || null,
+          salary_amount: fSalary ? Number(fSalary) : null,
+          pin: fPin || undefined,
+        },
       }),
     });
     setSaving(false);
     if (!res.ok) {
-      setError((await res.json()).error ?? "Could not save employee");
+      setError((await res.json().catch(() => ({})))?.error ?? "Could not save employee");
       return;
     }
     setModalOpen(false);
+    await load();
+  }
+
+  async function markLeft(id: string) {
+    if (!confirm("Mark this employee as left? Their record is kept, but login access (if any) is disabled immediately.")) return;
+    setBusyId(id);
+    const res = await fetchJson("/api/employees", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "markLeft", row: { id } }),
+    });
+    setBusyId(null);
+    if (!res.ok) {
+      alert(res.error);
+      return;
+    }
+    await load();
+  }
+
+  async function restore(id: string) {
+    setBusyId(id);
+    const res = await fetchJson("/api/employees", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "update", row: { id, status: "active", left_date: null } }),
+    });
+    setBusyId(null);
+    if (!res.ok) {
+      alert(res.error);
+      return;
+    }
     await load();
   }
 
@@ -121,7 +192,12 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
             <h1 className="font-display text-2xl font-semibold">{profile.name}</h1>
             <div className="flex gap-2 mt-1">
               <Badge tone={ROLE_COLORS[profile.role] as any}>{ROLE_LABELS[profile.role]}</Badge>
-              <Badge tone={profile.status === "active" ? "basil" : "steel"}>{profile.status === "active" ? "Active" : "Inactive"}</Badge>
+              {profile.status === "left" ? (
+                <Badge tone="crimson">Left {profile.left_date ? `· ${profile.left_date}` : ""}</Badge>
+              ) : (
+                <Badge tone="basil">Active</Badge>
+              )}
+              <Badge tone={profile.is_user ? "basil" : "steel"}>{profile.is_user ? "User" : "Employee only"}</Badge>
             </div>
           </div>
           {canManage && (
@@ -130,6 +206,31 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
             </button>
           )}
         </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+          <div className="rounded-xl border border-line bg-surface p-4">
+            <div className="text-xs text-ink-mid mb-1">Father's name</div>
+            <div className="text-sm font-medium text-ink-strong">{profile.father_name || "—"}</div>
+          </div>
+          <div className="rounded-xl border border-line bg-surface p-4">
+            <div className="text-xs text-ink-mid mb-1">CNIC</div>
+            <div className="text-sm font-medium text-ink-strong font-mono">{profile.cnic_number || "—"}</div>
+          </div>
+          <div className="rounded-xl border border-line bg-surface p-4">
+            <div className="text-xs text-ink-mid mb-1">Joining date</div>
+            <div className="text-sm font-medium text-ink-strong">{profile.joining_date || "—"}</div>
+          </div>
+          <div className="rounded-xl border border-line bg-surface p-4">
+            <div className="text-xs text-ink-mid mb-1">Salary</div>
+            <div className="text-sm font-medium text-ink-strong">{profile.salary_amount != null ? fmtMoney(profile.salary_amount) : "—"}</div>
+          </div>
+        </div>
+        {profile.address && (
+          <div className="rounded-xl border border-line bg-surface p-4 mb-6">
+            <div className="text-xs text-ink-mid mb-1">Address</div>
+            <div className="text-sm text-ink-strong">{profile.address}</div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <KpiCard label="Total paid" value={fmtMoney(totalPaid)} />
@@ -193,6 +294,23 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
         <Field label="Name">
           <input value={fName} onChange={(e) => setFName(e.target.value)} className={inputCls} />
         </Field>
+        <Field label="Father's name">
+          <input value={fFatherName} onChange={(e) => setFFatherName(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label="CNIC number">
+          <input value={fCnic} onChange={(e) => setFCnic(e.target.value)} className={inputCls} placeholder="xxxxx-xxxxxxx-x" />
+        </Field>
+        <Field label="Address">
+          <input value={fAddress} onChange={(e) => setFAddress(e.target.value)} className={inputCls} />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Joining date">
+            <input type="date" value={fJoiningDate} onChange={(e) => setFJoiningDate(e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="Salary amount">
+            <input value={fSalary} onChange={(e) => setFSalary(e.target.value)} type="number" min="0" step="0.01" className={inputCls} placeholder="0.00" />
+          </Field>
+        </div>
         <Field label="Role">
           <select value={fRole} onChange={(e) => setFRole(e.target.value as Employee["role"])} className={inputCls}>
             <option value="admin">Admin</option>
@@ -201,15 +319,21 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
             <option value="inventory">Inventory</option>
           </select>
         </Field>
-        <Field label="Status">
-          <select value={fStatus} onChange={(e) => setFStatus(e.target.value as Employee["status"])} className={inputCls}>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </select>
-        </Field>
-        <Field label={editingId ? "New 4-digit PIN (leave blank to keep current)" : "4-digit PIN"}>
+        <Field
+          label={
+            !editingId
+              ? "4-digit PIN (optional — leave blank to add as roster-only, no login)"
+              : employees.find((x) => x.id === editingId)?.is_user
+                ? "New 4-digit PIN (leave blank to keep current)"
+                : "Set a 4-digit PIN to grant login access"
+          }
+        >
           <input value={fPin} onChange={(e) => setFPin(e.target.value.replace(/\D/g, "").slice(0, 4))} className={inputCls} placeholder="••••" inputMode="numeric" />
         </Field>
+        <p className="text-xs text-ink-faint -mt-1">
+          Every User is an employee, but not every employee is a User — only employees with a PIN can sign in to POS/Dashboard.
+          PIN access can also be granted or removed later from Users &amp; Permissions.
+        </p>
       </Modal>
     );
   }
@@ -222,7 +346,21 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
         </p>
       )}
       <Panel loading={loading}>
-        <PanelHead title="Employees" subtitle="Staff who can sign in with a PIN">
+        <PanelHead title="Employees" subtitle="Full staff roster — mark someone left instead of deleting their record">
+          <div className="flex rounded-lg border border-line p-0.5 mr-1">
+            <button
+              onClick={() => setTab("active")}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${tab === "active" ? "bg-raised text-ink-strong" : "text-ink-mid"}`}
+            >
+              Active
+            </button>
+            <button
+              onClick={() => setTab("left")}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${tab === "left" ? "bg-raised text-ink-strong" : "text-ink-mid"}`}
+            >
+              Left {leftCount > 0 && `(${leftCount})`}
+            </button>
+          </div>
           {canManage && (
             <button onClick={openAdd} className={addBtnCls}>
               + Add employee
@@ -235,13 +373,14 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
               <tr className="border-b border-line">
                 <Th>Employee</Th>
                 <Th>Role</Th>
-                <Th>Status</Th>
+                <Th>Access</Th>
+                <Th>{tab === "left" ? "Left on" : "Joined"}</Th>
                 <Th />
               </tr>
             </thead>
             <tbody>
-              {employees.map((e) => (
-                <tr key={e.id} className="border-b border-line last:border-0">
+              {filtered.map((e) => (
+                <tr key={e.id} className={`border-b border-line last:border-0 ${e.status === "left" ? "opacity-60" : ""}`}>
                   <Td>
                     <div className="flex items-center gap-2.5">
                       <Avatar id={e.id} name={e.name} />
@@ -252,8 +391,9 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
                     <Badge tone={ROLE_COLORS[e.role] as any}>{ROLE_LABELS[e.role]}</Badge>
                   </Td>
                   <Td>
-                    <Badge tone={e.status === "active" ? "basil" : "steel"}>{e.status === "active" ? "Active" : "Inactive"}</Badge>
+                    <Badge tone={e.is_user ? "basil" : "steel"}>{e.is_user ? "User" : "Employee only"}</Badge>
                   </Td>
+                  <Td className="text-ink-mid">{tab === "left" ? e.left_date || "—" : e.joining_date || "—"}</Td>
                   <Td>
                     <div className="flex items-center gap-1.5">
                       <IconBtn title="View profile" onClick={() => setProfileId(e.id)}>
@@ -264,11 +404,23 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
                           <Pencil className="h-3.5 w-3.5" />
                         </IconBtn>
                       )}
+                      {canManage && e.status !== "left" && (
+                        <IconBtn title="Mark as left" onClick={() => markLeft(e.id)}>
+                          <UserX className={`h-3.5 w-3.5 ${busyId === e.id ? "opacity-50" : ""}`} />
+                        </IconBtn>
+                      )}
+                      {canManage && e.status === "left" && (
+                        <IconBtn title="Restore to active" onClick={() => restore(e.id)}>
+                          <RotateCcw className={`h-3.5 w-3.5 ${busyId === e.id ? "opacity-50" : ""}`} />
+                        </IconBtn>
+                      )}
                     </div>
                   </Td>
                 </tr>
               ))}
-              {!loading && employees.length === 0 && <EmptyRow colSpan={4} label="No employees yet." />}
+              {!loading && !loadError && filtered.length === 0 && (
+                <EmptyRow colSpan={5} label={tab === "left" ? "No one has left yet." : "No employees yet — add one above."} />
+              )}
             </tbody>
           </table>
         </TableScroll>

@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from "react";
 import { IdCard, Pencil, ArrowLeft } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
-import { Pagination, usePagination } from "@/components/ui/pagination";
 import { fmtMoney } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
 
@@ -206,8 +205,6 @@ export function SuppliersClient() {
     );
   }
 
-  const suppliersPage = usePagination(suppliers, 20);
-
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <Panel loading={loading}>
@@ -233,7 +230,7 @@ export function SuppliersClient() {
               </tr>
             </thead>
             <tbody>
-              {suppliersPage.pageItems.map((s) => (
+              {suppliers.map((s) => (
                 <tr key={s.id} className="border-b border-line last:border-0">
                   <Td className="font-medium text-ink-strong">{s.name}</Td>
                   <Td>
@@ -258,7 +255,6 @@ export function SuppliersClient() {
             </tbody>
           </table>
         </TableScroll>
-        <Pagination page={suppliersPage.page} pageCount={suppliersPage.pageCount} onChange={suppliersPage.setPage} total={suppliersPage.total} pageSize={suppliersPage.pageSize} />
       </Panel>
 
       {renderModal()}
