@@ -16,6 +16,7 @@ type Product = {
   category_id: string | null;
   image_url: string | null;
   is_available: boolean;
+  is_deal?: boolean;
   menu_categories?: { name: string } | null;
 };
 
@@ -189,7 +190,7 @@ export function MenuClient() {
             </button>
           </PanelHead>
           <div className="p-5 grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(155px, 1fr))" }}>
-            {products.map((p) => (
+            {products.filter((p) => !p.is_deal).map((p) => (
               <div
                 key={p.id}
                 className={`group relative overflow-hidden rounded-lg border border-line transition hover:-translate-y-0.5 hover:border-chili-500 ${
