@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
+import { Pagination, usePagination } from "@/components/ui/pagination";
 
 type Sale = {
   id: string;
@@ -75,6 +76,8 @@ export function UnpaidOrdersClient() {
     load();
   }
 
+  const unpaidPage = usePagination(sales ?? [], 20);
+
   return (
     <main className="p-6 md:p-8">
       {sales === null ? (
@@ -94,7 +97,7 @@ export function UnpaidOrdersClient() {
               </tr>
             </thead>
             <tbody>
-              {sales.map((s) => {
+              {unpaidPage.pageItems.map((s) => {
                 const paid = s.sale_payments.reduce((sum, p) => sum + p.amount, 0);
                 const balance = balanceOf(s);
                 return (
@@ -127,6 +130,7 @@ export function UnpaidOrdersClient() {
               )}
             </tbody>
           </table>
+          <Pagination page={unpaidPage.page} pageCount={unpaidPage.pageCount} onChange={unpaidPage.setPage} total={unpaidPage.total} pageSize={unpaidPage.pageSize} />
         </div>
       )}
 

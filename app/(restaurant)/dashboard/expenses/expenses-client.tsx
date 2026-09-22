@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, addBtnCls } from "@/components/ui/panel";
 import { LoadingOverlay, Spinner } from "@/components/ui/loading";
+import { Pagination, usePagination } from "@/components/ui/pagination";
 import { fmtMoney, todayISO } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, Search } from "lucide-react";
 
 type ExpenseCategory = { id: string; name: string };
 type PaymentMethod = { id: string; name: string };
@@ -26,7 +27,6 @@ type RecurringExpense = {
   amount: number;
   vendor: string | null;
   description: string | null;
-  payment_method: string;
   frequency: Frequency;
   next_due_date: string;
   is_active: boolean;
@@ -45,6 +45,14 @@ export function ExpensesClient() {
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  // Search is instant, client-side, over whatever's currently loaded. Date range triggers a
+  // fresh server fetch (see loadExpenses) so it isn't limited to whatever the default
+  // fetch window already pulled in.
+  const [search, setSearch] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
 
   const [modalOpen, setModalOpen] = useState(false);
   const [fDate, setFDate] = useState(todayISO());
@@ -56,12 +64,12 @@ export function ExpensesClient() {
   const [fMethod, setFMethod] = useState("Cash");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState("");
 
   const [recurring, setRecurring] = useState<RecurringExpense[]>([]);
   const [recurringLoading, setRecurringLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dueError, setDueError] = useState("");
+  const [dueMethods, setDueMethods] = useState<Record<string, string>>({});
 
   const [recurModalOpen, setRecurModalOpen] = useState(false);
   const [rEditingId, setREditingId] = useState<string | null>(null);
@@ -69,30 +77,54 @@ export function ExpensesClient() {
   const [rAmount, setRAmount] = useState("");
   const [rVendor, setRVendor] = useState("");
   const [rDesc, setRDesc] = useState("");
-  const [rMethod, setRMethod] = useState("Cash");
   const [rFrequency, setRFrequency] = useState<Frequency>("monthly");
   const [rNextDate, setRNextDate] = useState(todayISO());
   const [rError, setRError] = useState("");
   const [rSaving, setRSaving] = useState(false);
 
-  async function load() {
+  async function loadExpenses() {
     setLoading(true);
     setLoadError("");
-    const [eRes, cRes, mRes] = await Promise.all([
-      fetchJson<{ expenses: Expense[] }>("/api/expenses"),
+    const params = new URLSearchParams();
+    if (fromDate) params.set("from", fromDate);
+    if (toDate) params.set("to", toDate);
+    const res = await fetchJson<{ expenses: Expense[] }>(`/api/expenses?${params.toString()}`);
+    if (!res.ok) {
+      setLoadError(res.error);
+      setExpenses([]);
+    } else {
+      setExpenses(res.data?.expenses ?? []);
+    }
+    setLoading(false);
+  }
+  async function loadLookups() {
+    const [cRes, mRes] = await Promise.all([
       fetchJson<{ categories: ExpenseCategory[] }>("/api/expense-categories"),
       fetchJson<{ methods: PaymentMethod[] }>("/api/payment-methods"),
     ]);
-    if (!eRes.ok) {
-      setLoadError(eRes.error);
-      setExpenses([]);
-    } else {
-      setExpenses(eRes.data?.expenses ?? []);
-    }
     setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
     setMethods(mRes.ok ? mRes.data?.methods ?? [] : []);
-    setLoading(false);
   }
+  useEffect(() => {
+    loadLookups();
+    loadRecurring();
+  }, []);
+  useEffect(() => {
+    loadExpenses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromDate, toDate]);
+
+  const filteredExpenses = expenses.filter((e) => {
+    if (!search.trim()) return true;
+    const q = search.trim().toLowerCase();
+    return (
+      e.category.toLowerCase().includes(q) ||
+      (e.vendor ?? "").toLowerCase().includes(q) ||
+      (e.description ?? "").toLowerCase().includes(q) ||
+      e.payment_method.toLowerCase().includes(q)
+    );
+  });
+  const expensesPage = usePagination(filteredExpenses, 20);
 
   async function loadRecurring() {
     setRecurringLoading(true);
@@ -100,20 +132,21 @@ export function ExpensesClient() {
     if (res.ok) setRecurring(res.data?.recurringExpenses ?? []);
     setRecurringLoading(false);
   }
-  useEffect(() => {
-    load();
-    loadRecurring();
-  }, []);
+  const recurringPage = usePagination(recurring, 10);
 
   const dueNow = recurring.filter((r) => r.is_active && r.next_due_date <= todayISO());
 
   async function confirmDue(r: RecurringExpense, logIt: boolean) {
+    if (logIt && !dueMethods[r.id]) {
+      setDueError("Select a payment method first");
+      return;
+    }
     setDueError("");
     setBusyId(r.id);
     const res = await fetch("/api/recurring-expenses/confirm", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: r.id, log: logIt }),
+      body: JSON.stringify({ id: r.id, log: logIt, paymentMethod: dueMethods[r.id] }),
     });
     const data = await res.json().catch(() => ({}));
     setBusyId(null);
@@ -121,7 +154,7 @@ export function ExpensesClient() {
       setDueError(data.error || "Could not update this recurring expense");
       return;
     }
-    await Promise.all([loadRecurring(), logIt ? load() : Promise.resolve()]);
+    await Promise.all([loadRecurring(), logIt ? loadExpenses() : Promise.resolve()]);
   }
 
   function openAddRecurring() {
@@ -130,7 +163,6 @@ export function ExpensesClient() {
     setRAmount("");
     setRVendor("");
     setRDesc("");
-    setRMethod(methods[0]?.name ?? "Cash");
     setRFrequency("monthly");
     setRNextDate(todayISO());
     setRError("");
@@ -142,7 +174,6 @@ export function ExpensesClient() {
     setRAmount(String(r.amount));
     setRVendor(r.vendor ?? "");
     setRDesc(r.description ?? "");
-    setRMethod(r.payment_method);
     setRFrequency(r.frequency);
     setRNextDate(r.next_due_date);
     setRError("");
@@ -169,7 +200,6 @@ export function ExpensesClient() {
             amount: Number(rAmount),
             vendor: rVendor.trim() || null,
             description: rDesc.trim() || null,
-            payment_method: rMethod,
             frequency: rFrequency,
             next_due_date: rNextDate,
           },
@@ -181,7 +211,6 @@ export function ExpensesClient() {
             amount: Number(rAmount),
             vendor: rVendor.trim() || undefined,
             description: rDesc.trim() || undefined,
-            paymentMethod: rMethod,
             frequency: rFrequency,
             nextDueDate: rNextDate,
           },
@@ -261,7 +290,7 @@ export function ExpensesClient() {
       return;
     }
     setModalOpen(false);
-    await load();
+    await loadExpenses();
   }
 
   return (
@@ -275,18 +304,29 @@ export function ExpensesClient() {
           {dueError && <p className="text-xs text-crimson-400 mb-3">{dueError}</p>}
           <div className="space-y-2">
             {dueNow.map((r) => (
-              <div key={r.id} className="relative flex items-center justify-between gap-3 rounded-lg bg-surface border border-line px-3.5 py-2.5">
+              <div key={r.id} className="relative flex items-center justify-between gap-3 rounded-lg bg-surface border border-line px-3.5 py-2.5 flex-wrap">
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-ink-strong truncate">
                     {r.category}
                     {r.vendor && <span className="text-ink-faint"> · {r.vendor}</span>}
                   </div>
                   <div className="text-xs text-ink-faint">
-                    {FREQUENCY_LABEL[r.frequency]} · was due {r.next_due_date} · <span className="font-mono">{fmtMoney(r.amount)}</span> via{" "}
-                    {r.payment_method}
+                    {FREQUENCY_LABEL[r.frequency]} · was due {r.next_due_date} · <span className="font-mono">{fmtMoney(r.amount)}</span>
                   </div>
                 </div>
-                <div className="flex gap-2 shrink-0">
+                <div className="flex gap-2 shrink-0 items-center">
+                  <select
+                    value={dueMethods[r.id] ?? ""}
+                    onChange={(e) => setDueMethods((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                    className="rounded-md bg-raised border border-line px-2 py-1.5 text-xs"
+                  >
+                    <option value="">Payment method…</option>
+                    {methods.map((m) => (
+                      <option key={m.id} value={m.name}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
                   <button
                     onClick={() => confirmDue(r, false)}
                     disabled={busyId === r.id}
@@ -316,8 +356,34 @@ export function ExpensesClient() {
             + Add expense
           </button>
         </PanelHead>
+        <div className="flex flex-wrap items-center gap-2.5 px-4 pb-3">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-ink-faint" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search category, receiver, description…"
+              className={`${inputCls} pl-8`}
+            />
+          </div>
+          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className={`${inputCls} w-auto`} title="From date" />
+          <span className="text-ink-faint text-xs">to</span>
+          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className={`${inputCls} w-auto`} title="To date" />
+          {(fromDate || toDate || search) && (
+            <button
+              onClick={() => {
+                setFromDate("");
+                setToDate("");
+                setSearch("");
+              }}
+              className="text-xs text-ink-faint hover:text-ink-strong underline"
+            >
+              Clear
+            </button>
+          )}
+        </div>
         {loadError && (
-          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+          <p className="mx-5 mt-1 mb-3 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
             Couldn&apos;t load expenses: {loadError}
           </p>
         )}
@@ -328,14 +394,14 @@ export function ExpensesClient() {
                 <Th>Date</Th>
                 <Th>Type</Th>
                 <Th>Category</Th>
-                <Th>Vendor</Th>
+                <Th>Receiver</Th>
                 <Th>Description</Th>
                 <Th>Amount</Th>
                 <Th>Method</Th>
               </tr>
             </thead>
             <tbody>
-              {expenses.map((e) => (
+              {expensesPage.pageItems.map((e) => (
                 <tr key={e.id} className="border-b border-line last:border-0">
                   <Td className="text-ink-mid">{e.txn_date}</Td>
                   <Td>
@@ -348,14 +414,17 @@ export function ExpensesClient() {
                   <Td className="text-ink-mid">{e.payment_method}</Td>
                 </tr>
               ))}
-              {!loading && !loadError && expenses.length === 0 && <EmptyRow colSpan={7} label="No expenses logged yet." />}
+              {!loading && !loadError && filteredExpenses.length === 0 && (
+                <EmptyRow colSpan={7} label={search || fromDate || toDate ? "No expenses match your filters." : "No expenses logged yet."} />
+              )}
             </tbody>
           </table>
         </TableScroll>
+        <Pagination page={expensesPage.page} pageCount={expensesPage.pageCount} onChange={expensesPage.setPage} total={expensesPage.total} pageSize={expensesPage.pageSize} />
       </Panel>
 
       <Panel loading={recurringLoading}>
-        <PanelHead title="Recurring expenses" subtitle="Rent, subscriptions, and anything else that repeats on a schedule">
+        <PanelHead title="Recurring expenses" subtitle="Rent, subscriptions, and anything else that repeats on a schedule — payment method is chosen when you confirm it, not here">
           <button onClick={openAddRecurring} className={addBtnCls}>
             + Add recurring expense
           </button>
@@ -365,7 +434,7 @@ export function ExpensesClient() {
             <thead>
               <tr className="border-b border-line">
                 <Th>Category</Th>
-                <Th>Vendor</Th>
+                <Th>Receiver</Th>
                 <Th>Amount</Th>
                 <Th>Frequency</Th>
                 <Th>Next due</Th>
@@ -374,7 +443,7 @@ export function ExpensesClient() {
               </tr>
             </thead>
             <tbody>
-              {recurring.map((r) => (
+              {recurringPage.pageItems.map((r) => (
                 <tr key={r.id} className="border-b border-line last:border-0">
                   <Td>{r.category}</Td>
                   <Td className="text-ink-mid">{r.vendor || "—"}</Td>
@@ -404,6 +473,7 @@ export function ExpensesClient() {
             </tbody>
           </table>
         </TableScroll>
+        <Pagination page={recurringPage.page} pageCount={recurringPage.pageCount} onChange={recurringPage.setPage} total={recurringPage.total} pageSize={recurringPage.pageSize} />
       </Panel>
 
       <Modal
@@ -441,7 +511,7 @@ export function ExpensesClient() {
             ))}
           </select>
         </Field>
-        <Field label="Vendor (optional)">
+        <Field label="Receiver (optional)">
           <input value={fVendor} onChange={(e) => setFVendor(e.target.value)} className={inputCls} />
         </Field>
         <Field label="Description (optional)">
@@ -487,7 +557,7 @@ export function ExpensesClient() {
             ))}
           </select>
         </Field>
-        <Field label="Vendor (optional)">
+        <Field label="Receiver (optional)">
           <input value={rVendor} onChange={(e) => setRVendor(e.target.value)} className={inputCls} />
         </Field>
         <Field label="Description (optional)">
@@ -495,15 +565,6 @@ export function ExpensesClient() {
         </Field>
         <Field label="Amount">
           <input value={rAmount} onChange={(e) => setRAmount(e.target.value)} type="number" min="0" step="0.01" className={inputCls} />
-        </Field>
-        <Field label="Payment method">
-          <select value={rMethod} onChange={(e) => setRMethod(e.target.value)} className={inputCls}>
-            {methods.map((m) => (
-              <option key={m.id} value={m.name}>
-                {m.name}
-              </option>
-            ))}
-          </select>
         </Field>
         <Field label="Repeats">
           <select value={rFrequency} onChange={(e) => setRFrequency(e.target.value as Frequency)} className={inputCls}>
@@ -517,6 +578,7 @@ export function ExpensesClient() {
         <Field label="Next payment date">
           <input type="date" value={rNextDate} onChange={(e) => setRNextDate(e.target.value)} className={inputCls} />
         </Field>
+        <p className="text-xs text-ink-faint">Payment method is picked when you confirm the payment on its due date, not here.</p>
       </Modal>
     </main>
   );

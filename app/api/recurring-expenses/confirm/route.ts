@@ -13,14 +13,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Not permitted" }, { status: 403 });
   }
 
-  const { id, log } = (await req.json().catch(() => ({}))) as { id?: string; log?: boolean };
+  const { id, log, paymentMethod } = (await req.json().catch(() => ({}))) as { id?: string; log?: boolean; paymentMethod?: string };
   if (!id || typeof log !== "boolean") return NextResponse.json({ error: "id and log are required" }, { status: 400 });
+  if (log && !paymentMethod) return NextResponse.json({ error: "Select a payment method" }, { status: 400 });
 
   const admin = createAdminClient();
   const { data, error } = await admin.rpc("confirm_recurring_expense", {
     p_id: id,
     p_restaurant_id: session.restaurantId,
     p_log: log,
+    p_payment_method: paymentMethod || null,
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 

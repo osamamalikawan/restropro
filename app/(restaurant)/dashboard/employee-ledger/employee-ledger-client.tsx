@@ -140,6 +140,7 @@ export function EmployeeLedgerClient() {
               </tbody>
             </table>
           </TableScroll>
+          <Pagination page={ledgerPage.page} pageCount={ledgerPage.pageCount} onChange={ledgerPage.setPage} total={ledgerPage.total} pageSize={ledgerPage.pageSize} />
         </Panel>
       </div>
     </main>

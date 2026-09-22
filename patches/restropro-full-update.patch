@@ -1,0 +1,1661 @@
+diff --git a/app/(restaurant)/dashboard/accounts/accounts-client.tsx b/app/(restaurant)/dashboard/accounts/accounts-client.tsx
+index c09cb3c..cd2117c 100644
+--- a/app/(restaurant)/dashboard/accounts/accounts-client.tsx
++++ b/app/(restaurant)/dashboard/accounts/accounts-client.tsx
+@@ -4,6 +4,7 @@ import { ArrowUp, ArrowDown, Equal, Hourglass } from "lucide-react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, KpiCard, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney, todayISO } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+ type AccountEntry = { id: string; txn_date: string; description: string; category: string; type: "income" | "expense"; amount: number };
+ type Supplier = { id: string };
+@@ -25,20 +26,26 @@ export function AccountsClient() {
+   const [fDate, setFDate] = useState(todayISO());
+   const [error, setError] = useState("");
+   const [saving, setSaving] = useState(false);
++  const [loadError, setLoadError] = useState("");
+ 
+   async function load() {
+     setLoading(true);
++    setLoadError("");
+     const [aRes, sRes, pRes, lRes] = await Promise.all([
+-      fetch("/api/accounts"),
+-      fetch("/api/suppliers"),
+-      fetch("/api/restock?limit=1000"),
+-      fetch("/api/supplier-ledger?limit=1000"),
++      fetchJson<{ accounts: AccountEntry[] }>("/api/accounts"),
++      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
++      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
++      fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger?limit=1000"),
+     ]);
+-    const [a, s, p, l] = await Promise.all([aRes.json(), sRes.json(), pRes.json(), lRes.json()]);
+-    setEntries(a.accounts ?? []);
+-    setSuppliers(s.suppliers ?? []);
+-    setPurchases(p.purchases ?? []);
+-    setLedger(l.entries ?? []);
++    if (!aRes.ok) {
++      setLoadError(aRes.error);
++      setEntries([]);
++    } else {
++      setEntries(aRes.data?.accounts ?? []);
++    }
++    setSuppliers(sRes.ok ? sRes.data?.suppliers ?? [] : []);
++    setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
++    setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
+     setLoading(false);
+   }
+   useEffect(() => {
+@@ -111,6 +118,11 @@ export function AccountsClient() {
+             + Add entry
+           </button>
+         </PanelHead>
++        {loadError && (
++          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++            Couldn&apos;t load the ledger: {loadError}
++          </p>
++        )}
+         <TableScroll>
+           <table className="w-full">
+             <thead>
+@@ -141,7 +153,7 @@ export function AccountsClient() {
+                   <Td className="font-mono text-ink-mid">{fmtMoney(e.balance)}</Td>
+                 </tr>
+               ))}
+-              {!loading && withBalance.length === 0 && <EmptyRow colSpan={6} label="No ledger entries yet." />}
++              {!loading && !loadError && withBalance.length === 0 && <EmptyRow colSpan={6} label="No ledger entries yet." />}
+             </tbody>
+           </table>
+         </TableScroll>
+diff --git a/app/(restaurant)/dashboard/customers/customers-client.tsx b/app/(restaurant)/dashboard/customers/customers-client.tsx
+index 3175224..e46489c 100644
+--- a/app/(restaurant)/dashboard/customers/customers-client.tsx
++++ b/app/(restaurant)/dashboard/customers/customers-client.tsx
+@@ -4,6 +4,7 @@ import { IdCard, Pencil, ArrowLeft } from "lucide-react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, searchInputCls, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney, fmtDateTime } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+ type Area = { id: string; name: string };
+ type Customer = { id: string; name: string; phone: string; address: string | null; area_id: string | null; delivery_areas?: { name: string } | null };
+@@ -17,6 +18,7 @@ export function CustomersClient() {
+   const [q, setQ] = useState("");
+   const [loading, setLoading] = useState(true);
+   const [error, setError] = useState("");
++  const [loadError, setLoadError] = useState("");
+ 
+   // Add/edit modal
+   const [modalOpen, setModalOpen] = useState(false);
+@@ -32,15 +34,23 @@ export function CustomersClient() {
+ 
+   async function load() {
+     setLoading(true);
++    setLoadError("");
++    // Independent per-endpoint fetches — see lib/fetch-json.ts. A failed/empty response from
++    // one (e.g. sales, used only for the spend/orders columns) can no longer throw and wipe
++    // out the customers list itself.
+     const [cRes, aRes, sRes] = await Promise.all([
+-      fetch("/api/customers"),
+-      fetch("/api/delivery-areas"),
+-      fetch("/api/sales?limit=1000"),
++      fetchJson<{ customers: Customer[] }>("/api/customers"),
++      fetchJson<{ areas: Area[] }>("/api/delivery-areas"),
++      fetchJson<{ sales: Sale[] }>("/api/sales?limit=1000"),
+     ]);
+-    const [c, a, s] = await Promise.all([cRes.json(), aRes.json(), sRes.json()]);
+-    setCustomers(c.customers ?? []);
+-    setAreas(a.areas ?? []);
+-    setSales(s.sales ?? []);
++    if (!cRes.ok) {
++      setLoadError(cRes.error);
++      setCustomers([]);
++    } else {
++      setCustomers(cRes.data?.customers ?? []);
++    }
++    setAreas(aRes.ok ? aRes.data?.areas ?? [] : []);
++    setSales(sRes.ok ? sRes.data?.sales ?? [] : []);
+     setLoading(false);
+   }
+   useEffect(() => {
+@@ -220,6 +230,11 @@ export function CustomersClient() {
+             + Add customer
+           </button>
+         </PanelHead>
++        {loadError && (
++          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++            Couldn&apos;t load customers: {loadError}
++          </p>
++        )}
+         <TableScroll>
+           <table className="w-full">
+             <thead>
+@@ -265,7 +280,7 @@ export function CustomersClient() {
+                   </tr>
+                 );
+               })}
+-              {!loading && filtered.length === 0 && <EmptyRow colSpan={7} label="No customers yet." />}
++              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={7} label="No customers yet." />}
+             </tbody>
+           </table>
+         </TableScroll>
+diff --git a/app/(restaurant)/dashboard/employee-ledger/employee-ledger-client.tsx b/app/(restaurant)/dashboard/employee-ledger/employee-ledger-client.tsx
+index 27126b8..b06ae63 100644
+--- a/app/(restaurant)/dashboard/employee-ledger/employee-ledger-client.tsx
++++ b/app/(restaurant)/dashboard/employee-ledger/employee-ledger-client.tsx
+@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
+ import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/components/ui/panel";
+ import { fmtMoney, todayISO } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+ type Employee = { id: string; name: string };
+ type LedgerEntry = { id: string; type: string; amount: number; note: string | null; txn_date: string; employees?: { name: string } | null };
+@@ -20,13 +21,20 @@ export function EmployeeLedgerClient() {
+   const [error, setError] = useState("");
+   const [saving, setSaving] = useState(false);
+   const [loading, setLoading] = useState(true);
++  const [loadError, setLoadError] = useState("");
+ 
+   async function load() {
+-    const [eRes, lRes] = await Promise.all([fetch("/api/employees"), fetch("/api/employee-ledger")]);
+-    const [e, l] = await Promise.all([eRes.json(), lRes.json()]);
+-    setEmployees(e.employees ?? []);
+-    setEntries(l.entries ?? []);
+-    if (!employeeId && e.employees?.[0]) setEmployeeId(e.employees[0].id);
++    setLoadError("");
++    const [eRes, lRes] = await Promise.all([
++      fetchJson<{ employees: Employee[] }>("/api/employees"),
++      fetchJson<{ entries: LedgerEntry[] }>("/api/employee-ledger"),
++    ]);
++    const failed = [eRes, lRes].find((r) => !r.ok);
++    setLoadError(failed ? failed.error : "");
++    const employeesList = eRes.ok ? eRes.data?.employees ?? [] : [];
++    setEmployees(employeesList);
++    setEntries(lRes.ok ? lRes.data?.entries ?? [] : []);
++    if (!employeeId && employeesList[0]) setEmployeeId(employeesList[0].id);
+     setLoading(false);
+   }
+   useEffect(() => {
+@@ -57,6 +65,11 @@ export function EmployeeLedgerClient() {
+ 
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
++      {loadError && (
++        <p className="mb-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++          Couldn&apos;t load employee ledger data: {loadError}
++        </p>
++      )}
+       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">
+         <div className="rounded-xl border border-line bg-surface p-5">
+           <h3 className="font-display text-lg font-semibold mb-4">Log a payment</h3>
+diff --git a/app/(restaurant)/dashboard/employees/employees-client.tsx b/app/(restaurant)/dashboard/employees/employees-client.tsx
+index 775de38..d844475 100644
+--- a/app/(restaurant)/dashboard/employees/employees-client.tsx
++++ b/app/(restaurant)/dashboard/employees/employees-client.tsx
+@@ -1,11 +1,24 @@
+ "use client";
+-import { useEffect, useState } from "react";
+-import { IdCard, Pencil, ArrowLeft } from "lucide-react";
++import { useEffect, useMemo, useState } from "react";
++import { IdCard, Pencil, ArrowLeft, UserX, RotateCcw } from "lucide-react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+-type Employee = { id: string; name: string; role: "admin" | "manager" | "cashier" | "inventory"; status: "active" | "inactive" };
++type Employee = {
++  id: string;
++  name: string;
++  role: "admin" | "manager" | "cashier" | "inventory";
++  status: "active" | "inactive" | "suspended" | "left";
++  father_name: string | null;
++  cnic_number: string | null;
++  address: string | null;
++  joining_date: string | null;
++  salary_amount: number | null;
++  left_date: string | null;
++  is_user: boolean;
++};
+ type LedgerEntry = { id: string; employee_id: string; type: string; amount: number; note: string | null; txn_date: string };
+ type Sale = { cashier_employee_id: string | null; status: string };
+ 
+@@ -17,43 +30,64 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
+   const [sales, setSales] = useState<Sale[]>([]);
+   const [loading, setLoading] = useState(true);
++  const [tab, setTab] = useState<"active" | "left">("active");
+ 
+   const [modalOpen, setModalOpen] = useState(false);
+   const [editingId, setEditingId] = useState<string | null>(null);
+   const [fName, setFName] = useState("");
+   const [fRole, setFRole] = useState<Employee["role"]>("cashier");
+-  const [fStatus, setFStatus] = useState<Employee["status"]>("active");
++  const [fFatherName, setFFatherName] = useState("");
++  const [fCnic, setFCnic] = useState("");
++  const [fAddress, setFAddress] = useState("");
++  const [fJoiningDate, setFJoiningDate] = useState("");
++  const [fSalary, setFSalary] = useState("");
+   const [fPin, setFPin] = useState("");
+   const [error, setError] = useState("");
+   const [saving, setSaving] = useState(false);
+   const [loadError, setLoadError] = useState("");
++  const [busyId, setBusyId] = useState<string | null>(null);
+ 
+   const [profileId, setProfileId] = useState<string | null>(null);
+ 
+   async function load() {
+     setLoading(true);
+     setLoadError("");
+-    const [eRes, lRes, sRes] = await Promise.all([fetch("/api/employees"), fetch("/api/employee-ledger?limit=1000"), fetch("/api/sales?limit=1000")]);
+-    const [e, l, s] = await Promise.all([eRes.json(), lRes.json(), sRes.json()]);
++    // Independent per-endpoint fetches — see lib/fetch-json.ts — a failed/empty response from
++    // one can't throw and wipe out the others.
++    const [eRes, lRes, sRes] = await Promise.all([
++      fetchJson<{ employees: Employee[] }>("/api/employees"),
++      fetchJson<{ entries: LedgerEntry[] }>("/api/employee-ledger?limit=1000"),
++      fetchJson<{ sales: Sale[] }>("/api/sales?limit=1000"),
++    ]);
+     if (!eRes.ok) {
+-      setLoadError(e.error || "Could not load employees");
++      setLoadError(eRes.error);
+       setEmployees([]);
+     } else {
+-      setEmployees(e.employees ?? []);
++      setEmployees(eRes.data?.employees ?? []);
+     }
+-    setLedger(l.entries ?? []);
+-    setSales(s.sales ?? []);
++    setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
++    setSales(sRes.ok ? sRes.data?.sales ?? [] : []);
+     setLoading(false);
+   }
+   useEffect(() => {
+     load();
+   }, []);
+ 
++  const filtered = useMemo(
++    () => employees.filter((e) => (tab === "left" ? e.status === "left" : e.status !== "left")),
++    [employees, tab]
++  );
++  const leftCount = employees.filter((e) => e.status === "left").length;
++
+   function openAdd() {
+     setEditingId(null);
+     setFName("");
+     setFRole("cashier");
+-    setFStatus("active");
++    setFFatherName("");
++    setFCnic("");
++    setFAddress("");
++    setFJoiningDate(new Date().toISOString().slice(0, 10));
++    setFSalary("");
+     setFPin("");
+     setError("");
+     setModalOpen(true);
+@@ -62,7 +96,11 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+     setEditingId(e.id);
+     setFName(e.name);
+     setFRole(e.role);
+-    setFStatus(e.status);
++    setFFatherName(e.father_name ?? "");
++    setFCnic(e.cnic_number ?? "");
++    setFAddress(e.address ?? "");
++    setFJoiningDate(e.joining_date ?? "");
++    setFSalary(e.salary_amount != null ? String(e.salary_amount) : "");
+     setFPin("");
+     setError("");
+     setModalOpen(true);
+@@ -72,8 +110,8 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+       setError("Name is required");
+       return;
+     }
+-    if (!editingId && !/^\d{4}$/.test(fPin)) {
+-      setError("A 4-digit PIN is required for a new employee");
++    if (fPin && !/^\d{4}$/.test(fPin)) {
++      setError("PIN must be exactly 4 digits");
+       return;
+     }
+     setSaving(true);
+@@ -83,18 +121,59 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+       headers: { "content-type": "application/json" },
+       body: JSON.stringify({
+         op: editingId ? "update" : "insert",
+-        row: { id: editingId ?? undefined, name: fName.trim(), role: fRole, status: fStatus, pin: fPin || undefined },
++        row: {
++          id: editingId ?? undefined,
++          name: fName.trim(),
++          role: fRole,
++          father_name: fFatherName.trim() || null,
++          cnic_number: fCnic.trim() || null,
++          address: fAddress.trim() || null,
++          joining_date: fJoiningDate || null,
++          salary_amount: fSalary ? Number(fSalary) : null,
++          pin: fPin || undefined,
++        },
+       }),
+     });
+     setSaving(false);
+     if (!res.ok) {
+-      setError((await res.json()).error ?? "Could not save employee");
++      setError((await res.json().catch(() => ({})))?.error ?? "Could not save employee");
+       return;
+     }
+     setModalOpen(false);
+     await load();
+   }
+ 
++  async function markLeft(id: string) {
++    if (!confirm("Mark this employee as left? Their record is kept, but login access (if any) is disabled immediately.")) return;
++    setBusyId(id);
++    const res = await fetchJson("/api/employees", {
++      method: "POST",
++      headers: { "content-type": "application/json" },
++      body: JSON.stringify({ op: "markLeft", row: { id } }),
++    });
++    setBusyId(null);
++    if (!res.ok) {
++      alert(res.error);
++      return;
++    }
++    await load();
++  }
++
++  async function restore(id: string) {
++    setBusyId(id);
++    const res = await fetchJson("/api/employees", {
++      method: "POST",
++      headers: { "content-type": "application/json" },
++      body: JSON.stringify({ op: "update", row: { id, status: "active", left_date: null } }),
++    });
++    setBusyId(null);
++    if (!res.ok) {
++      alert(res.error);
++      return;
++    }
++    await load();
++  }
++
+   const profile = profileId ? employees.find((e) => e.id === profileId) : null;
+ 
+   if (profile) {
+@@ -113,7 +192,12 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+             <h1 className="font-display text-2xl font-semibold">{profile.name}</h1>
+             <div className="flex gap-2 mt-1">
+               <Badge tone={ROLE_COLORS[profile.role] as any}>{ROLE_LABELS[profile.role]}</Badge>
+-              <Badge tone={profile.status === "active" ? "basil" : "steel"}>{profile.status === "active" ? "Active" : "Inactive"}</Badge>
++              {profile.status === "left" ? (
++                <Badge tone="crimson">Left {profile.left_date ? `· ${profile.left_date}` : ""}</Badge>
++              ) : (
++                <Badge tone="basil">Active</Badge>
++              )}
++              <Badge tone={profile.is_user ? "basil" : "steel"}>{profile.is_user ? "User" : "Employee only"}</Badge>
+             </div>
+           </div>
+           {canManage && (
+@@ -123,6 +207,31 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+           )}
+         </div>
+ 
++        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
++          <div className="rounded-xl border border-line bg-surface p-4">
++            <div className="text-xs text-ink-mid mb-1">Father's name</div>
++            <div className="text-sm font-medium text-ink-strong">{profile.father_name || "—"}</div>
++          </div>
++          <div className="rounded-xl border border-line bg-surface p-4">
++            <div className="text-xs text-ink-mid mb-1">CNIC</div>
++            <div className="text-sm font-medium text-ink-strong font-mono">{profile.cnic_number || "—"}</div>
++          </div>
++          <div className="rounded-xl border border-line bg-surface p-4">
++            <div className="text-xs text-ink-mid mb-1">Joining date</div>
++            <div className="text-sm font-medium text-ink-strong">{profile.joining_date || "—"}</div>
++          </div>
++          <div className="rounded-xl border border-line bg-surface p-4">
++            <div className="text-xs text-ink-mid mb-1">Salary</div>
++            <div className="text-sm font-medium text-ink-strong">{profile.salary_amount != null ? fmtMoney(profile.salary_amount) : "—"}</div>
++          </div>
++        </div>
++        {profile.address && (
++          <div className="rounded-xl border border-line bg-surface p-4 mb-6">
++            <div className="text-xs text-ink-mid mb-1">Address</div>
++            <div className="text-sm text-ink-strong">{profile.address}</div>
++          </div>
++        )}
++
+         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+           <KpiCard label="Total paid" value={fmtMoney(totalPaid)} />
+           <KpiCard label="Payments logged" value={payments.length} />
+@@ -185,6 +294,23 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+         <Field label="Name">
+           <input value={fName} onChange={(e) => setFName(e.target.value)} className={inputCls} />
+         </Field>
++        <Field label="Father's name">
++          <input value={fFatherName} onChange={(e) => setFFatherName(e.target.value)} className={inputCls} />
++        </Field>
++        <Field label="CNIC number">
++          <input value={fCnic} onChange={(e) => setFCnic(e.target.value)} className={inputCls} placeholder="xxxxx-xxxxxxx-x" />
++        </Field>
++        <Field label="Address">
++          <input value={fAddress} onChange={(e) => setFAddress(e.target.value)} className={inputCls} />
++        </Field>
++        <div className="grid grid-cols-2 gap-3">
++          <Field label="Joining date">
++            <input type="date" value={fJoiningDate} onChange={(e) => setFJoiningDate(e.target.value)} className={inputCls} />
++          </Field>
++          <Field label="Salary amount">
++            <input value={fSalary} onChange={(e) => setFSalary(e.target.value)} type="number" min="0" step="0.01" className={inputCls} placeholder="0.00" />
++          </Field>
++        </div>
+         <Field label="Role">
+           <select value={fRole} onChange={(e) => setFRole(e.target.value as Employee["role"])} className={inputCls}>
+             <option value="admin">Admin</option>
+@@ -193,15 +319,21 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+             <option value="inventory">Inventory</option>
+           </select>
+         </Field>
+-        <Field label="Status">
+-          <select value={fStatus} onChange={(e) => setFStatus(e.target.value as Employee["status"])} className={inputCls}>
+-            <option value="active">Active</option>
+-            <option value="inactive">Inactive</option>
+-          </select>
+-        </Field>
+-        <Field label={editingId ? "New 4-digit PIN (leave blank to keep current)" : "4-digit PIN"}>
++        <Field
++          label={
++            !editingId
++              ? "4-digit PIN (optional — leave blank to add as roster-only, no login)"
++              : employees.find((x) => x.id === editingId)?.is_user
++                ? "New 4-digit PIN (leave blank to keep current)"
++                : "Set a 4-digit PIN to grant login access"
++          }
++        >
+           <input value={fPin} onChange={(e) => setFPin(e.target.value.replace(/\D/g, "").slice(0, 4))} className={inputCls} placeholder="••••" inputMode="numeric" />
+         </Field>
++        <p className="text-xs text-ink-faint -mt-1">
++          Every User is an employee, but not every employee is a User — only employees with a PIN can sign in to POS/Dashboard.
++          PIN access can also be granted or removed later from Users &amp; Permissions.
++        </p>
+       </Modal>
+     );
+   }
+@@ -214,7 +346,21 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+         </p>
+       )}
+       <Panel loading={loading}>
+-        <PanelHead title="Employees" subtitle="Staff who can sign in with a PIN">
++        <PanelHead title="Employees" subtitle="Full staff roster — mark someone left instead of deleting their record">
++          <div className="flex rounded-lg border border-line p-0.5 mr-1">
++            <button
++              onClick={() => setTab("active")}
++              className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${tab === "active" ? "bg-raised text-ink-strong" : "text-ink-mid"}`}
++            >
++              Active
++            </button>
++            <button
++              onClick={() => setTab("left")}
++              className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${tab === "left" ? "bg-raised text-ink-strong" : "text-ink-mid"}`}
++            >
++              Left {leftCount > 0 && `(${leftCount})`}
++            </button>
++          </div>
+           {canManage && (
+             <button onClick={openAdd} className={addBtnCls}>
+               + Add employee
+@@ -227,13 +373,14 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+               <tr className="border-b border-line">
+                 <Th>Employee</Th>
+                 <Th>Role</Th>
+-                <Th>Status</Th>
++                <Th>Access</Th>
++                <Th>{tab === "left" ? "Left on" : "Joined"}</Th>
+                 <Th />
+               </tr>
+             </thead>
+             <tbody>
+-              {employees.map((e) => (
+-                <tr key={e.id} className="border-b border-line last:border-0">
++              {filtered.map((e) => (
++                <tr key={e.id} className={`border-b border-line last:border-0 ${e.status === "left" ? "opacity-60" : ""}`}>
+                   <Td>
+                     <div className="flex items-center gap-2.5">
+                       <Avatar id={e.id} name={e.name} />
+@@ -244,8 +391,9 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+                     <Badge tone={ROLE_COLORS[e.role] as any}>{ROLE_LABELS[e.role]}</Badge>
+                   </Td>
+                   <Td>
+-                    <Badge tone={e.status === "active" ? "basil" : "steel"}>{e.status === "active" ? "Active" : "Inactive"}</Badge>
++                    <Badge tone={e.is_user ? "basil" : "steel"}>{e.is_user ? "User" : "Employee only"}</Badge>
+                   </Td>
++                  <Td className="text-ink-mid">{tab === "left" ? e.left_date || "—" : e.joining_date || "—"}</Td>
+                   <Td>
+                     <div className="flex items-center gap-1.5">
+                       <IconBtn title="View profile" onClick={() => setProfileId(e.id)}>
+@@ -256,11 +404,23 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
+                           <Pencil className="h-3.5 w-3.5" />
+                         </IconBtn>
+                       )}
++                      {canManage && e.status !== "left" && (
++                        <IconBtn title="Mark as left" onClick={() => markLeft(e.id)}>
++                          <UserX className={`h-3.5 w-3.5 ${busyId === e.id ? "opacity-50" : ""}`} />
++                        </IconBtn>
++                      )}
++                      {canManage && e.status === "left" && (
++                        <IconBtn title="Restore to active" onClick={() => restore(e.id)}>
++                          <RotateCcw className={`h-3.5 w-3.5 ${busyId === e.id ? "opacity-50" : ""}`} />
++                        </IconBtn>
++                      )}
+                     </div>
+                   </Td>
+                 </tr>
+               ))}
+-              {!loading && employees.length === 0 && <EmptyRow colSpan={4} label="No employees yet." />}
++              {!loading && !loadError && filtered.length === 0 && (
++                <EmptyRow colSpan={5} label={tab === "left" ? "No one has left yet." : "No employees yet — add one above."} />
++              )}
+             </tbody>
+           </table>
+         </TableScroll>
+diff --git a/app/(restaurant)/dashboard/employees/page.tsx b/app/(restaurant)/dashboard/employees/page.tsx
+index f46467a..f691ca2 100644
+--- a/app/(restaurant)/dashboard/employees/page.tsx
++++ b/app/(restaurant)/dashboard/employees/page.tsx
+@@ -10,5 +10,5 @@ export default async function EmployeesPage() {
+   if (!session) redirect("/login");
+   if (!(await hasModuleAccess(session.restaurantId, session.role, "employees"))) redirect("/dashboard");
+ 
+-  return <EmployeesClient canManage={session.role === "admin"} />;
++  return <EmployeesClient canManage={session.role === "admin" || session.role === "manager"} />;
+ }
+diff --git a/app/(restaurant)/dashboard/expenses/expenses-client.tsx b/app/(restaurant)/dashboard/expenses/expenses-client.tsx
+index def8ae6..64063cd 100644
+--- a/app/(restaurant)/dashboard/expenses/expenses-client.tsx
++++ b/app/(restaurant)/dashboard/expenses/expenses-client.tsx
+@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney, todayISO } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+ type ExpenseCategory = { id: string; name: string };
+ type PaymentMethod = { id: string; name: string };
+@@ -33,16 +34,25 @@ export function ExpensesClient() {
+   const [fMethod, setFMethod] = useState("Cash");
+   const [error, setError] = useState("");
+   const [saving, setSaving] = useState(false);
++  const [loadError, setLoadError] = useState("");
+ 
+   async function load() {
+     setLoading(true);
+-    const [eRes, cRes, mRes] = await Promise.all([fetch("/api/expenses"), fetch("/api/expense-categories"), fetch("/api/payment-methods")]);
+-    const [e, c, m] = await Promise.all([eRes.json(), cRes.json(), mRes.json()]);
+-    setExpenses(e.expenses ?? []);
+-    setCategories(c.categories ?? []);
+-    setMethods(m.methods ?? []);
++    setLoadError("");
++    const [eRes, cRes, mRes] = await Promise.all([
++      fetchJson<{ expenses: Expense[] }>("/api/expenses"),
++      fetchJson<{ categories: ExpenseCategory[] }>("/api/expense-categories"),
++      fetchJson<{ methods: PaymentMethod[] }>("/api/payment-methods"),
++    ]);
++    if (!eRes.ok) {
++      setLoadError(eRes.error);
++      setExpenses([]);
++    } else {
++      setExpenses(eRes.data?.expenses ?? []);
++    }
++    setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
++    setMethods(mRes.ok ? mRes.data?.methods ?? [] : []);
+     setLoading(false);
+-    return { c, m };
+   }
+   useEffect(() => {
+     load();
+@@ -96,6 +106,11 @@ export function ExpensesClient() {
+             + Add expense
+           </button>
+         </PanelHead>
++        {loadError && (
++          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++            Couldn&apos;t load expenses: {loadError}
++          </p>
++        )}
+         <TableScroll>
+           <table className="w-full">
+             <thead>
+@@ -123,7 +138,7 @@ export function ExpensesClient() {
+                   <Td className="text-ink-mid">{e.payment_method}</Td>
+                 </tr>
+               ))}
+-              {!loading && expenses.length === 0 && <EmptyRow colSpan={7} label="No expenses logged yet." />}
++              {!loading && !loadError && expenses.length === 0 && <EmptyRow colSpan={7} label="No expenses logged yet." />}
+             </tbody>
+           </table>
+         </TableScroll>
+diff --git a/app/(restaurant)/dashboard/inventory/inventory-client.tsx b/app/(restaurant)/dashboard/inventory/inventory-client.tsx
+index 7eb2013..ec1d5bc 100644
+--- a/app/(restaurant)/dashboard/inventory/inventory-client.tsx
++++ b/app/(restaurant)/dashboard/inventory/inventory-client.tsx
+@@ -5,6 +5,7 @@ import { RotateCw, Pencil } from "lucide-react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+ type Item = {
+   id: string;
+@@ -41,13 +42,22 @@ export function InventoryClient() {
+   const [fCost, setFCost] = useState("0");
+   const [error, setError] = useState("");
+   const [saving, setSaving] = useState(false);
++  const [loadError, setLoadError] = useState("");
+ 
+   async function load() {
+     setLoading(true);
+-    const [iRes, pRes] = await Promise.all([fetch("/api/inventory"), fetch("/api/restock?limit=1000")]);
+-    const [i, p] = await Promise.all([iRes.json(), pRes.json()]);
+-    setItems(i.inventoryItems ?? []);
+-    setPurchases(p.purchases ?? []);
++    setLoadError("");
++    const [iRes, pRes] = await Promise.all([
++      fetchJson<{ inventoryItems: Item[] }>("/api/inventory"),
++      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
++    ]);
++    if (!iRes.ok) {
++      setLoadError(iRes.error);
++      setItems([]);
++    } else {
++      setItems(iRes.data?.inventoryItems ?? []);
++    }
++    setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
+     setLoading(false);
+   }
+   useEffect(() => {
+@@ -132,6 +142,11 @@ export function InventoryClient() {
+             + Add item
+           </button>
+         </PanelHead>
++        {loadError && (
++          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++            Couldn&apos;t load inventory: {loadError}
++          </p>
++        )}
+         <TableScroll>
+           <table className="w-full">
+             <thead>
+@@ -192,7 +207,7 @@ export function InventoryClient() {
+                   </tr>
+                 );
+               })}
+-              {!loading && filtered.length === 0 && <EmptyRow colSpan={7} label="No inventory items yet." />}
++              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={7} label="No inventory items yet." />}
+             </tbody>
+           </table>
+         </TableScroll>
+diff --git a/app/(restaurant)/dashboard/products/products-client.tsx b/app/(restaurant)/dashboard/products/products-client.tsx
+index 196bd06..7e390b1 100644
+--- a/app/(restaurant)/dashboard/products/products-client.tsx
++++ b/app/(restaurant)/dashboard/products/products-client.tsx
+@@ -7,6 +7,7 @@ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, search
+ import { Switch } from "@/components/ui/switch";
+ import { GalleryPickerModal } from "@/components/gallery-picker-modal";
+ import { fmtMoney } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ import { RecipeModal } from "../menu/recipe-modal";
+ 
+ type Category = { id: string; name: string };
+@@ -40,18 +41,24 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+   const [saving, setSaving] = useState(false);
+   const [galleryOpen, setGalleryOpen] = useState(false);
+   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
++  const [loadError, setLoadError] = useState("");
+ 
+   async function load() {
+     setLoading(true);
++    setLoadError("");
+     const [pRes, cRes, rRes] = await Promise.all([
+-      fetch("/api/products"),
+-      fetch("/api/menu-categories"),
+-      fetch("/api/recipes"),
++      fetchJson<{ products: Product[] }>("/api/products"),
++      fetchJson<{ categories: Category[] }>("/api/menu-categories"),
++      fetchJson<{ recipeItems: RecipeItem[] }>("/api/recipes"),
+     ]);
+-    const [p, c, r] = await Promise.all([pRes.json(), cRes.json(), rRes.json()]);
+-    setProducts(p.products ?? []);
+-    setCategories(c.categories ?? []);
+-    setRecipeItems(r.recipeItems ?? []);
++    if (!pRes.ok) {
++      setLoadError(pRes.error);
++      setProducts([]);
++    } else {
++      setProducts(pRes.data?.products ?? []);
++    }
++    setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
++    setRecipeItems(rRes.ok ? rRes.data?.recipeItems ?? [] : []);
+     setLoading(false);
+   }
+   useEffect(() => {
+@@ -134,6 +141,11 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+             </button>
+           )}
+         </PanelHead>
++        {loadError && (
++          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++            Couldn&apos;t load products: {loadError}
++          </p>
++        )}
+         <TableScroll>
+           <table className="w-full">
+             <thead>
+@@ -188,7 +200,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+                   </tr>
+                 );
+               })}
+-              {!loading && filtered.length === 0 && <EmptyRow colSpan={8} label="No products yet." />}
++              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={8} label="No products yet." />}
+             </tbody>
+           </table>
+         </TableScroll>
+diff --git a/app/(restaurant)/dashboard/recipes-production/recipes-production-client.tsx b/app/(restaurant)/dashboard/recipes-production/recipes-production-client.tsx
+index abd2ce4..55b4e26 100644
+--- a/app/(restaurant)/dashboard/recipes-production/recipes-production-client.tsx
++++ b/app/(restaurant)/dashboard/recipes-production/recipes-production-client.tsx
+@@ -6,6 +6,7 @@ import { inputCls, btnPrimary } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow } from "@/components/ui/panel";
+ import { PageLoader } from "@/components/ui/loading";
+ import { fmtMoney } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+ type Product = { id: string; name: string };
+ type InventoryItem = { id: string; name: string; unit: string; cost: number; item_type: "ready_made" | "self_made" };
+@@ -34,16 +35,23 @@ export function RecipesProductionClient() {
+   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+   const [productions, setProductions] = useState<Production[]>([]);
+   const [loading, setLoading] = useState(true);
++  const [loadError, setLoadError] = useState("");
+ 
+   useEffect(() => {
+-    Promise.all([fetch("/api/products").then((r) => r.json()), fetch("/api/inventory").then((r) => r.json()), fetch("/api/productions").then((r) => r.json())]).then(
+-      ([p, i, pr]) => {
+-        setProducts(p.products ?? []);
+-        setInventoryItems(i.inventoryItems ?? []);
+-        setProductions(pr.productions ?? []);
+-        setLoading(false);
+-      }
+-    );
++    // Independent per-endpoint fetches — see lib/fetch-json.ts — so a failed/empty response
++    // from any one can't throw inside Promise.all and blank the whole page.
++    Promise.all([
++      fetchJson<{ products: Product[] }>("/api/products"),
++      fetchJson<{ inventoryItems: InventoryItem[] }>("/api/inventory"),
++      fetchJson<{ productions: Production[] }>("/api/productions"),
++    ]).then(([p, i, pr]) => {
++      const failed = [p, i, pr].find((r) => !r.ok);
++      setLoadError(failed ? failed.error : "");
++      setProducts(p.ok ? p.data?.products ?? [] : []);
++      setInventoryItems(i.ok ? i.data?.inventoryItems ?? [] : []);
++      setProductions(pr.ok ? pr.data?.productions ?? [] : []);
++      setLoading(false);
++    });
+   }, []);
+ 
+   useEffect(() => {
+@@ -64,6 +72,11 @@ export function RecipesProductionClient() {
+ 
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
++      {loadError && (
++        <p className="mb-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++          Couldn&apos;t load recipe data: {loadError}
++        </p>
++      )}
+       <div className="mb-5 flex gap-1 border-b border-line">
+         {TABS.map((t) => (
+           <button
+diff --git a/app/(restaurant)/dashboard/restock/restock-client.tsx b/app/(restaurant)/dashboard/restock/restock-client.tsx
+index e6bba70..42228c8 100644
+--- a/app/(restaurant)/dashboard/restock/restock-client.tsx
++++ b/app/(restaurant)/dashboard/restock/restock-client.tsx
+@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow } from "@/components/ui/panel";
+ import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
+ import { fmtMoney, todayISO } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+ type InventoryItem = { id: string; name: string; unit: string; item_type: "ready_made" | "self_made"; cost: number };
+ type Supplier = { id: string; name: string };
+@@ -41,19 +42,22 @@ export function RestockClient() {
+   const [error, setError] = useState("");
+   const [saving, setSaving] = useState(false);
+   const [loading, setLoading] = useState(true);
++  const [loadError, setLoadError] = useState("");
+ 
+   async function loadAll() {
++    setLoadError("");
+     const [invRes, supRes, purRes, prodRes] = await Promise.all([
+-      fetch("/api/inventory"),
+-      fetch("/api/suppliers"),
+-      fetch("/api/restock?limit=1000"),
+-      fetch("/api/productions"),
++      fetchJson<{ inventoryItems: InventoryItem[] }>("/api/inventory"),
++      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
++      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
++      fetchJson<{ productions: Production[] }>("/api/productions"),
+     ]);
+-    const [invData, supData, purData, prodData] = await Promise.all([invRes.json(), supRes.json(), purRes.json(), prodRes.json()]);
+-    setItems(invData.inventoryItems ?? []);
+-    setSuppliers(supData.suppliers ?? []);
+-    setPurchases(purData.purchases ?? []);
+-    setProductions(prodData.productions ?? []);
++    const failed = [invRes, supRes, purRes, prodRes].find((r) => !r.ok);
++    setLoadError(failed ? failed.error : "");
++    setItems(invRes.ok ? invRes.data?.inventoryItems ?? [] : []);
++    setSuppliers(supRes.ok ? supRes.data?.suppliers ?? [] : []);
++    setPurchases(purRes.ok ? purRes.data?.purchases ?? [] : []);
++    setProductions(prodRes.ok ? prodRes.data?.productions ?? [] : []);
+     setLoading(false);
+   }
+   useEffect(() => {
+@@ -131,6 +135,11 @@ export function RestockClient() {
+ 
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
++      {loadError && (
++        <p className="mb-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++          Couldn&apos;t load restock data: {loadError}
++        </p>
++      )}
+       <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-5 items-start">
+         <div className="rounded-xl border border-line bg-surface p-5">
+           <h3 className="font-display text-lg font-semibold">{isSelf ? "Log production" : "Log a purchase"}</h3>
+diff --git a/app/(restaurant)/dashboard/settings/settings-client.tsx b/app/(restaurant)/dashboard/settings/settings-client.tsx
+index a17a199..204110d 100644
+--- a/app/(restaurant)/dashboard/settings/settings-client.tsx
++++ b/app/(restaurant)/dashboard/settings/settings-client.tsx
+@@ -1,6 +1,7 @@
+ "use client";
+ import { useEffect, useState } from "react";
+ import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
++import { RECEIPT_TEMPLATES, DUMMY_SALE, type ReceiptTemplateId } from "@/components/receipt/templates";
+ 
+ type Settings = {
+   service_charge_rate: number;
+@@ -21,6 +22,7 @@ type Settings = {
+   fbr_api_token: string | null;
+   fbr_environment: string;
+   fbr_fee: number;
++  receipt_template: string;
+ };
+ 
+ type PaymentMethod = { id: string; name: string };
+@@ -241,6 +243,7 @@ export function SettingsClient({
+       ? [
+           { id: "pos-tax", label: "POS & Tax" },
+           { id: "printer", label: "Printer & receipt" },
++          { id: "receipt-templates", label: "Receipt templates" },
+           { id: "fbr", label: "FBR invoicing" },
+         ]
+       : []),
+@@ -546,6 +549,72 @@ export function SettingsClient({
+           </Panel>
+         </div>
+ 
++        {/* Receipt design templates — spans both columns, needs room for 4 side-by-side previews */}
++        <div id="receipt-templates" className="scroll-mt-20 md:col-span-2">
++          <Panel
++            title="Receipt templates"
++            subtitle="Pick the design printed on every invoice — each renders with your restaurant's real profile and, when FBR is on below, its e-invoice block"
++            loading={savingSection === "receipt-templates"}
++            footer={
++              <SaveButton
++                loading={savingSection === "receipt-templates"}
++                onClick={() => save("receipt-templates", { receiptTemplate: s.receipt_template }, "Receipt template saved")}
++              >
++                Save receipt template
++              </SaveButton>
++            }
++          >
++            <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
++              {RECEIPT_TEMPLATES.map((t) => {
++                const selected = s.receipt_template === t.id;
++                return (
++                  <button
++                    key={t.id}
++                    type="button"
++                    onClick={() => set("receipt_template", t.id)}
++                    className={`text-left rounded-xl border p-3 transition ${
++                      selected ? "border-chili-500 ring-1 ring-chili-500" : "border-line hover:border-chili-500/50"
++                    }`}
++                    style={{ background: "rgb(var(--bg-raised))" }}
++                  >
++                    <div className="flex items-center justify-between mb-2">
++                      <span className="text-sm font-semibold text-ink-strong">{t.name}</span>
++                      {selected && (
++                        <span className="text-[10px] font-bold uppercase tracking-wide text-chili-500 bg-chili-500/10 rounded-full px-2 py-0.5">
++                          Selected
++                        </span>
++                      )}
++                    </div>
++                    <p className="text-xs text-ink-mid mb-3">{t.description}</p>
++                    <div className="rounded-lg overflow-hidden flex justify-center py-3" style={{ background: "#e8e8e8" }}>
++                      <div style={{ transform: "scale(0.72)", transformOrigin: "top center" }}>
++                        <t.Component
++                          restaurant={{ name: restName || "Your Restaurant", address, phone }}
++                          settings={{
++                            receipt_header: s.receipt_header,
++                            receipt_footer: s.receipt_footer,
++                            fbr_enabled: s.fbr_enabled,
++                            fbr_ntn: s.fbr_ntn,
++                            fbr_strn: s.fbr_strn,
++                            fbr_pos_id: s.fbr_pos_id,
++                          }}
++                          sale={DUMMY_SALE}
++                        />
++                      </div>
++                    </div>
++                  </button>
++                );
++              })}
++            </div>
++            <p className="text-xs text-ink-faint mt-3">
++              Preview uses a sample order — your restaurant's actual name, address and phone above are real.{" "}
++              {s.fbr_enabled
++                ? "FBR is currently ON, so every template below shows its e-invoice block."
++                : "FBR is currently OFF — turn it on in the panel below to preview each template's e-invoice block."}
++            </p>
++          </Panel>
++        </div>
++
+         {/* FBR Digital Invoicing — spans both columns, it's the densest panel */}
+         <div id="fbr" className="scroll-mt-20 md:col-span-2">
+           <Panel
+diff --git a/app/(restaurant)/dashboard/supplier-ledger/supplier-ledger-client.tsx b/app/(restaurant)/dashboard/supplier-ledger/supplier-ledger-client.tsx
+index 4915168..56fc490 100644
+--- a/app/(restaurant)/dashboard/supplier-ledger/supplier-ledger-client.tsx
++++ b/app/(restaurant)/dashboard/supplier-ledger/supplier-ledger-client.tsx
+@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
+ import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/components/ui/panel";
+ import { fmtMoney, todayISO } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+ type Supplier = { id: string; name: string };
+ type PaymentMethod = { id: string; name: string };
+@@ -20,14 +21,22 @@ export function SupplierLedgerClient() {
+   const [error, setError] = useState("");
+   const [saving, setSaving] = useState(false);
+   const [loading, setLoading] = useState(true);
++  const [loadError, setLoadError] = useState("");
+ 
+   async function load() {
+-    const [sRes, mRes, eRes] = await Promise.all([fetch("/api/suppliers"), fetch("/api/payment-methods"), fetch("/api/supplier-ledger")]);
+-    const [s, m, e] = await Promise.all([sRes.json(), mRes.json(), eRes.json()]);
+-    setSuppliers(s.suppliers ?? []);
+-    setMethods(m.paymentMethods ?? m.methods ?? []);
+-    setEntries(e.entries ?? []);
+-    if (!supplierId && s.suppliers?.[0]) setSupplierId(s.suppliers[0].id);
++    setLoadError("");
++    const [sRes, mRes, eRes] = await Promise.all([
++      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
++      fetchJson<{ methods: PaymentMethod[]; paymentMethods?: PaymentMethod[] }>("/api/payment-methods"),
++      fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger"),
++    ]);
++    const failed = [sRes, mRes, eRes].find((r) => !r.ok);
++    setLoadError(failed ? failed.error : "");
++    const suppliersList = sRes.ok ? sRes.data?.suppliers ?? [] : [];
++    setSuppliers(suppliersList);
++    setMethods(mRes.ok ? mRes.data?.paymentMethods ?? mRes.data?.methods ?? [] : []);
++    setEntries(eRes.ok ? eRes.data?.entries ?? [] : []);
++    if (!supplierId && suppliersList[0]) setSupplierId(suppliersList[0].id);
+     setLoading(false);
+   }
+   useEffect(() => {
+@@ -58,6 +67,11 @@ export function SupplierLedgerClient() {
+ 
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
++      {loadError && (
++        <p className="mb-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++          Couldn&apos;t load supplier ledger data: {loadError}
++        </p>
++      )}
+       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">
+         <div className="rounded-xl border border-line bg-surface p-5">
+           <h3 className="font-display text-lg font-semibold mb-4">Log a payment</h3>
+diff --git a/app/(restaurant)/dashboard/suppliers/suppliers-client.tsx b/app/(restaurant)/dashboard/suppliers/suppliers-client.tsx
+index 684398c..49c05d6 100644
+--- a/app/(restaurant)/dashboard/suppliers/suppliers-client.tsx
++++ b/app/(restaurant)/dashboard/suppliers/suppliers-client.tsx
+@@ -4,6 +4,7 @@ import { IdCard, Pencil, ArrowLeft } from "lucide-react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney } from "@/lib/format";
++import { fetchJson } from "@/lib/fetch-json";
+ 
+ type Supplier = { id: string; name: string; contact_person: string | null; phone: string | null; category: string | null; payment_terms: string | null };
+ type Purchase = { supplier_id: string | null; total_cost: number; inventory_items?: { name: string; unit: string } | null; unit_cost: number };
+@@ -26,14 +27,24 @@ export function SuppliersClient() {
+   const [saving, setSaving] = useState(false);
+ 
+   const [profileId, setProfileId] = useState<string | null>(null);
++  const [loadError, setLoadError] = useState("");
+ 
+   async function load() {
+     setLoading(true);
+-    const [sRes, pRes, lRes] = await Promise.all([fetch("/api/suppliers"), fetch("/api/restock?limit=1000"), fetch("/api/supplier-ledger?limit=1000")]);
+-    const [s, p, l] = await Promise.all([sRes.json(), pRes.json(), lRes.json()]);
+-    setSuppliers(s.suppliers ?? []);
+-    setPurchases(p.purchases ?? []);
+-    setLedger(l.entries ?? []);
++    setLoadError("");
++    const [sRes, pRes, lRes] = await Promise.all([
++      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
++      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
++      fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger?limit=1000"),
++    ]);
++    if (!sRes.ok) {
++      setLoadError(sRes.error);
++      setSuppliers([]);
++    } else {
++      setSuppliers(sRes.data?.suppliers ?? []);
++    }
++    setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
++    setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
+     setLoading(false);
+   }
+   useEffect(() => {
+@@ -202,6 +213,11 @@ export function SuppliersClient() {
+             + Add supplier
+           </button>
+         </PanelHead>
++        {loadError && (
++          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
++            Couldn&apos;t load suppliers: {loadError}
++          </p>
++        )}
+         <TableScroll>
+           <table className="w-full">
+             <thead>
+diff --git a/app/api/employees/route.ts b/app/api/employees/route.ts
+index 430e495..19ffee5 100644
+--- a/app/api/employees/route.ts
++++ b/app/api/employees/route.ts
+@@ -3,6 +3,8 @@ import { requireStaffSession } from "@/lib/auth/require-staff";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ import { hashPin } from "@/lib/auth/pin";
+ 
++const MANAGER_ROLES = ["admin", "manager"];
++
+ /** Server-side proxy for the employees list — see lib/auth/require-staff.ts and
+  *  ARCHITECTURE.md for why staff-authenticated tenant data never talks to Supabase directly
+  *  from the browser (RLS only allows Super Admin on this table).
+@@ -17,7 +19,9 @@ export async function GET() {
+   const admin = createAdminClient();
+   const { data, error } = await admin
+     .from("employees")
+-    .select("id, restaurant_id, name, role, status, pin_hash, updated_at")
++    .select(
++      "id, restaurant_id, name, role, status, father_name, cnic_number, address, joining_date, salary_amount, left_date, pin_hash, updated_at"
++    )
+     .eq("restaurant_id", session.restaurantId);
+   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+ 
+@@ -26,27 +30,73 @@ export async function GET() {
+ }
+ 
+ /**
+- * Write path — also backs the Users & Permissions page (add employee / change role /
+- * deactivate), not just the sync engine's outbox flush. Admin-only: managing who can log in
+- * and what they can do is exactly the kind of action that shouldn't be delegated to Manager.
++ * Write path — also backs the Users & Permissions page (create a User from an active
++ * employee, revoke a User's login access). Admin AND Manager can manage employees/users;
++ * everyone else is blocked here even if they somehow reach the page.
+  *
+- * `row.pin` (plain 4-digit string) is accepted on insert and hashed server-side via
++ * `row.pin` (plain 4-digit string) is accepted on insert/update and hashed server-side via
+  * hashPin() — the plain PIN never gets persisted or sent back to any client after this call.
++ *
++ * Ops:
++ *  - insert / update: upsert the roster row. Omitting `pin` leaves login access untouched
++ *    (adding an employee with no pin = roster-only, not a User yet).
++ *  - markLeft: soft-delete — never removes the row. Sets status='left', left_date=today, and
++ *    clears any PIN (disables their login immediately, per the employees.session_version bump
++ *    below) while keeping every other field for historical/payroll records.
++ *  - revokeUser: keeps the employee on the roster (status untouched) but clears their PIN —
++ *    used from Users & Permissions to remove someone's login access without marking them left.
+  */
+ export async function POST(req: Request) {
+   const session = await requireStaffSession();
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+-  if (session.role !== "admin") {
+-    return NextResponse.json({ error: "Only Admin can manage employees" }, { status: 403 });
++  if (!MANAGER_ROLES.includes(session.role)) {
++    return NextResponse.json({ error: "Only Admin or Manager can manage employees" }, { status: 403 });
+   }
+ 
+   const { op, row } = (await req.json().catch(() => ({}))) as { op?: string; row?: any };
+   if (!op || !row) return NextResponse.json({ error: "op and row are required" }, { status: 400 });
++  if (op !== "insert" && !row.id) return NextResponse.json({ error: "row.id is required" }, { status: 400 });
+ 
+   const admin = createAdminClient();
+ 
++  if (op === "markLeft") {
++    // Bumping session_version invalidates any signed cookie they're currently holding —
++    // same mechanism a PIN reset uses — so login access is disabled immediately, not just on
++    // their next token expiry.
++    const { data: current } = await admin.from("employees").select("session_version").eq("id", row.id).eq("restaurant_id", session.restaurantId).single();
++    const { error } = await admin
++      .from("employees")
++      .update({
++        status: "left",
++        left_date: row.leftDate ?? new Date().toISOString().slice(0, 10),
++        pin_hash: null,
++        session_version: (current?.session_version ?? 1) + 1,
++        updated_at: new Date().toISOString(),
++      })
++      .eq("id", row.id)
++      .eq("restaurant_id", session.restaurantId);
++    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
++    return NextResponse.json({ success: true });
++  }
++
++  if (op === "revokeUser") {
++    const { data: current } = await admin.from("employees").select("session_version").eq("id", row.id).eq("restaurant_id", session.restaurantId).single();
++    const { error } = await admin
++      .from("employees")
++      .update({ pin_hash: null, session_version: (current?.session_version ?? 1) + 1, updated_at: new Date().toISOString() })
++      .eq("id", row.id)
++      .eq("restaurant_id", session.restaurantId);
++    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
++    return NextResponse.json({ success: true });
++  }
++
++  // Legacy alias some older client code may still send — same as markLeft.
+   if (op === "delete") {
+-    const { error } = await admin.from("employees").update({ status: "inactive" }).eq("id", row.id).eq("restaurant_id", session.restaurantId);
++    const { error } = await admin
++      .from("employees")
++      .update({ status: "left", left_date: new Date().toISOString().slice(0, 10), pin_hash: null })
++      .eq("id", row.id)
++      .eq("restaurant_id", session.restaurantId);
+     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+     return NextResponse.json({ success: true });
+   }
+@@ -59,7 +109,8 @@ export async function POST(req: Request) {
+     payload.pin_hash = await hashPin(pin);
+   }
+   // No PIN on insert is valid — the employee is added to the roster but isn't a User yet
+-  // (can't sign in) until someone grants access with a PIN, either now or later.
++  // (can't sign in) until someone grants access with a PIN, either now or later, from Users &
++  // Permissions.
+ 
+   const { error } = await admin.from("employees").upsert(payload);
+   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+diff --git a/app/api/settings/route.ts b/app/api/settings/route.ts
+index 151b466..19f3fc5 100644
+--- a/app/api/settings/route.ts
++++ b/app/api/settings/route.ts
+@@ -60,6 +60,7 @@ const SETTINGS_FIELD_MAP: Record<string, string> = {
+   fbrApiToken: "fbr_api_token",
+   fbrEnvironment: "fbr_environment",
+   fbrFee: "fbr_fee",
++  receiptTemplate: "receipt_template",
+ };
+ 
+ /**
+diff --git a/components/receipt/templates.tsx b/components/receipt/templates.tsx
+new file mode 100644
+index 0000000..e090b37
+--- /dev/null
++++ b/components/receipt/templates.tsx
+@@ -0,0 +1,338 @@
++/** Receipt design templates for the Settings → Receipt templates picker.
++ *
++ *  Each template renders from the SAME data shape (restaurant profile + settings + a sale),
++ *  so swapping templates is just swapping which component renders — this is also what actual
++ *  POS printing would import later (only the paper-width/monospace framing is preview-only).
++ *
++ *  FBR integration (Federal Board of Revenue e-invoicing, Pakistan) is not a 5th template —
++ *  it's an overlay every template renders when `settings.fbr_enabled` is on: an invoice
++ *  number, NTN/STRN, and a verification QR block. Off, the receipt prints without any of it.
++ */
++
++export type ReceiptRestaurant = { name: string; address: string | null; phone: string | null };
++export type ReceiptSettings = {
++  receipt_header: string | null;
++  receipt_footer: string | null;
++  fbr_enabled: boolean;
++  fbr_ntn: string | null;
++  fbr_strn: string | null;
++  fbr_pos_id: string | null;
++};
++export type ReceiptLine = { name: string; qty: number; price: number };
++export type ReceiptSale = {
++  orderNo: string;
++  date: string;
++  cashier: string;
++  orderType: string;
++  items: ReceiptLine[];
++  subtotal: number;
++  discount: number;
++  tax: number;
++  total: number;
++  paymentMethod: string;
++};
++
++/** Fixed dummy order — deliberately not random so every template renders identically for
++ *  side-by-side comparison, and totals actually add up. */
++export const DUMMY_SALE: ReceiptSale = {
++  orderNo: "1042",
++  date: new Date().toLocaleString(undefined, { day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }),
++  cashier: "Ali Raza",
++  orderType: "Dine-in · Table 4",
++  items: [
++    { name: "Chicken Tikka Pizza (L)", qty: 1, price: 1450 },
++    { name: "Beef Zinger Burger", qty: 2, price: 650 },
++    { name: "Garlic Bread", qty: 1, price: 280 },
++    { name: "Soft Drink 500ml", qty: 3, price: 120 },
++  ],
++  subtotal: 3390,
++  discount: 100,
++  tax: 305,
++  total: 3595,
++  paymentMethod: "Cash",
++};
++
++function money(n: number) {
++  return `Rs ${n.toLocaleString()}`;
++}
++
++/** Placeholder QR — a deterministic pixel grid, not a real scannable code. Good enough to
++ *  show where FBR's verification QR will sit on the printed receipt. */
++function QrPlaceholder({ dark = false }: { dark?: boolean }) {
++  const cells = Array.from({ length: 49 }, (_, i) => (i * 7) % 11 < 5 || i % 13 === 0);
++  return (
++    <div
++      className="grid shrink-0"
++      style={{ gridTemplateColumns: "repeat(7, 1fr)", width: 56, height: 56, gap: 1, background: dark ? "#fff" : "#000", padding: 3 }}
++    >
++      {cells.map((on, i) => (
++        <div key={i} style={{ background: on ? (dark ? "#000" : "#fff") : "transparent" }} />
++      ))}
++    </div>
++  );
++}
++
++function FbrBlockClassic({ settings, sale }: { settings: ReceiptSettings; sale: ReceiptSale }) {
++  if (!settings.fbr_enabled) return null;
++  return (
++    <div className="mt-2 pt-2 border-t border-dashed border-black/40 flex items-center gap-2 text-[10px] leading-tight">
++      <QrPlaceholder />
++      <div className="flex-1">
++        <div className="font-bold">FBR Digital Invoice</div>
++        <div>Invoice #: FBR-{sale.orderNo}-2026</div>
++        <div>NTN: {settings.fbr_ntn || "—"}</div>
++        <div>STRN: {settings.fbr_strn || "—"}</div>
++        <div>POS ID: {settings.fbr_pos_id || "—"}</div>
++        <div className="opacity-70">Verifiable via FBR Tax Asaan app</div>
++      </div>
++    </div>
++  );
++}
++
++function ItemsClassic({ sale }: { sale: ReceiptSale }) {
++  return (
++    <div className="text-[11px] leading-snug">
++      {sale.items.map((it, i) => (
++        <div key={i} className="flex justify-between gap-2">
++          <span>
++            {it.qty} × {it.name}
++          </span>
++          <span className="shrink-0">{money(it.qty * it.price)}</span>
++        </div>
++      ))}
++    </div>
++  );
++}
++
++/** 1. Classic — plain monospace thermal-printer look. Dashed rules, no color. */
++export function ClassicReceipt({ restaurant, settings, sale }: { restaurant: ReceiptRestaurant; settings: ReceiptSettings; sale: ReceiptSale }) {
++  return (
++    <div className="bg-white text-black font-mono text-[11px] w-[280px] p-4 shadow-lg">
++      <div className="text-center">
++        <div className="font-bold text-sm">{restaurant.name}</div>
++        {restaurant.address && <div>{restaurant.address}</div>}
++        {restaurant.phone && <div>{restaurant.phone}</div>}
++        {settings.receipt_header && <div className="mt-1">{settings.receipt_header}</div>}
++      </div>
++      <div className="my-2 border-t border-dashed border-black/50" />
++      <div className="flex justify-between">
++        <span>Order #{sale.orderNo}</span>
++        <span>{sale.date}</span>
++      </div>
++      <div>{sale.orderType}</div>
++      <div>Cashier: {sale.cashier}</div>
++      <div className="my-2 border-t border-dashed border-black/50" />
++      <ItemsClassic sale={sale} />
++      <div className="my-2 border-t border-dashed border-black/50" />
++      <div className="flex justify-between">
++        <span>Subtotal</span>
++        <span>{money(sale.subtotal)}</span>
++      </div>
++      <div className="flex justify-between">
++        <span>Discount</span>
++        <span>-{money(sale.discount)}</span>
++      </div>
++      <div className="flex justify-between">
++        <span>Tax</span>
++        <span>{money(sale.tax)}</span>
++      </div>
++      <div className="my-2 border-t border-dashed border-black/50" />
++      <div className="flex justify-between font-bold text-sm">
++        <span>TOTAL</span>
++        <span>{money(sale.total)}</span>
++      </div>
++      <div className="flex justify-between mt-1">
++        <span>Paid via</span>
++        <span>{sale.paymentMethod}</span>
++      </div>
++      <FbrBlockClassic settings={settings} sale={sale} />
++      {settings.receipt_footer && <div className="text-center mt-3">{settings.receipt_footer}</div>}
++      <div className="text-center mt-2">Thank you, come again!</div>
++    </div>
++  );
++}
++
++/** 2. Modern — sans-serif, a bold header band, a boxed total. */
++export function ModernReceipt({ restaurant, settings, sale }: { restaurant: ReceiptRestaurant; settings: ReceiptSettings; sale: ReceiptSale }) {
++  return (
++    <div className="bg-white text-black w-[280px] shadow-lg overflow-hidden">
++      <div className="bg-black text-white px-4 py-3">
++        <div className="font-bold text-sm">{restaurant.name}</div>
++        <div className="text-[10px] opacity-80">
++          {[restaurant.address, restaurant.phone].filter(Boolean).join(" · ")}
++        </div>
++      </div>
++      <div className="p-4 text-[11px]">
++        {settings.receipt_header && <div className="mb-2 italic text-ink-mid" style={{ color: "#555" }}>{settings.receipt_header}</div>}
++        <div className="flex justify-between text-[10px] uppercase tracking-wide" style={{ color: "#777" }}>
++          <span>Order #{sale.orderNo}</span>
++          <span>{sale.orderType}</span>
++        </div>
++        <div className="text-[10px]" style={{ color: "#777" }}>
++          {sale.date} · {sale.cashier}
++        </div>
++        <div className="my-2.5 h-px bg-black/10" />
++        {sale.items.map((it, i) => (
++          <div key={i} className="flex justify-between py-0.5">
++            <span>
++              {it.name} <span style={{ color: "#999" }}>×{it.qty}</span>
++            </span>
++            <span className="font-medium">{money(it.qty * it.price)}</span>
++          </div>
++        ))}
++        <div className="my-2.5 h-px bg-black/10" />
++        <div className="flex justify-between" style={{ color: "#555" }}>
++          <span>Subtotal</span>
++          <span>{money(sale.subtotal)}</span>
++        </div>
++        <div className="flex justify-between" style={{ color: "#555" }}>
++          <span>Discount</span>
++          <span>-{money(sale.discount)}</span>
++        </div>
++        <div className="flex justify-between" style={{ color: "#555" }}>
++          <span>Tax</span>
++          <span>{money(sale.tax)}</span>
++        </div>
++        <div className="mt-2.5 rounded-lg bg-black text-white px-3 py-2 flex justify-between items-center">
++          <span className="text-[10px] uppercase tracking-wide opacity-80">Total due</span>
++          <span className="font-bold">{money(sale.total)}</span>
++        </div>
++        <div className="mt-2 text-[10px] text-center" style={{ color: "#777" }}>
++          Paid via {sale.paymentMethod}
++        </div>
++        {settings.fbr_enabled && (
++          <div className="mt-3 rounded-lg border border-black/10 p-2.5 flex items-center gap-2.5">
++            <QrPlaceholder />
++            <div className="text-[9.5px] leading-tight" style={{ color: "#555" }}>
++              <div className="font-bold text-black">FBR e-Invoice</div>
++              <div>#FBR-{sale.orderNo}-2026 · NTN {settings.fbr_ntn || "—"}</div>
++              <div>STRN {settings.fbr_strn || "—"} · POS {settings.fbr_pos_id || "—"}</div>
++            </div>
++          </div>
++        )}
++        {settings.receipt_footer && (
++          <div className="text-center mt-3 text-[10px]" style={{ color: "#777" }}>
++            {settings.receipt_footer}
++          </div>
++        )}
++      </div>
++    </div>
++  );
++}
++
++/** 3. Minimal — lots of whitespace, thin hairlines, small caps, no bold blocks. */
++export function MinimalReceipt({ restaurant, settings, sale }: { restaurant: ReceiptRestaurant; settings: ReceiptSettings; sale: ReceiptSale }) {
++  return (
++    <div className="bg-white text-black w-[280px] p-6 shadow-lg text-[11px]" style={{ fontFamily: "Georgia, serif" }}>
++      <div className="text-center mb-4">
++        <div className="text-[13px] tracking-[0.15em] uppercase">{restaurant.name}</div>
++        <div className="text-[9.5px] mt-1" style={{ color: "#888" }}>
++          {[restaurant.address, restaurant.phone].filter(Boolean).join(" · ")}
++        </div>
++      </div>
++      <div className="flex justify-between text-[9.5px] uppercase tracking-wide mb-3" style={{ color: "#999" }}>
++        <span>#{sale.orderNo}</span>
++        <span>{sale.date}</span>
++      </div>
++      {sale.items.map((it, i) => (
++        <div key={i} className="flex justify-between mb-1.5">
++          <span>{it.name}</span>
++          <span>{money(it.qty * it.price)}</span>
++        </div>
++      ))}
++      <div className="my-3 h-px" style={{ background: "#eee" }} />
++      <div className="flex justify-between mb-1" style={{ color: "#888" }}>
++        <span>Subtotal</span>
++        <span>{money(sale.subtotal)}</span>
++      </div>
++      <div className="flex justify-between mb-1" style={{ color: "#888" }}>
++        <span>Tax</span>
++        <span>{money(sale.tax)}</span>
++      </div>
++      <div className="flex justify-between mt-3 text-[14px]">
++        <span>Total</span>
++        <span>{money(sale.total)}</span>
++      </div>
++      <div className="text-center mt-5 text-[9.5px]" style={{ color: "#999" }}>
++        {sale.cashier} · {sale.paymentMethod}
++      </div>
++      {settings.fbr_enabled && (
++        <div className="mt-4 pt-3 flex flex-col items-center gap-2" style={{ borderTop: "1px solid #eee" }}>
++          <QrPlaceholder />
++          <div className="text-[9px] text-center" style={{ color: "#999" }}>
++            FBR e-Invoice #{sale.orderNo}-2026<br />
++            NTN {settings.fbr_ntn || "—"} · STRN {settings.fbr_strn || "—"}
++          </div>
++        </div>
++      )}
++      {settings.receipt_footer && (
++        <div className="text-center mt-4 text-[9.5px] italic" style={{ color: "#999" }}>
++          {settings.receipt_footer}
++        </div>
++      )}
++    </div>
++  );
++}
++
++/** 4. Bold — big high-contrast type, a heavy total, made to be legible on a phone photo. */
++export function BoldReceipt({ restaurant, settings, sale }: { restaurant: ReceiptRestaurant; settings: ReceiptSettings; sale: ReceiptSale }) {
++  return (
++    <div className="bg-black text-white w-[280px] shadow-lg">
++      <div className="px-4 py-4 text-center" style={{ borderBottom: "3px solid #fff" }}>
++        <div className="font-black text-base uppercase tracking-tight">{restaurant.name}</div>
++        <div className="text-[10px] opacity-70 mt-0.5">
++          {[restaurant.address, restaurant.phone].filter(Boolean).join(" · ")}
++        </div>
++      </div>
++      <div className="p-4 text-[11px]">
++        <div className="flex justify-between font-bold mb-2">
++          <span>#{sale.orderNo}</span>
++          <span className="opacity-70 font-normal">{sale.date}</span>
++        </div>
++        {sale.items.map((it, i) => (
++          <div key={i} className="flex justify-between py-1" style={{ borderBottom: "1px solid rgba(255,255,255,0.12)" }}>
++            <span>
++              {it.qty}x {it.name}
++            </span>
++            <span className="font-bold">{money(it.qty * it.price)}</span>
++          </div>
++        ))}
++        <div className="flex justify-between mt-2 opacity-70">
++          <span>Subtotal</span>
++          <span>{money(sale.subtotal)}</span>
++        </div>
++        <div className="flex justify-between opacity-70">
++          <span>Tax</span>
++          <span>{money(sale.tax)}</span>
++        </div>
++        <div className="mt-3 flex justify-between items-baseline">
++          <span className="uppercase text-[11px] tracking-wide">Total</span>
++          <span className="font-black text-2xl">{money(sale.total)}</span>
++        </div>
++        <div className="mt-2 text-[10px] opacity-70 text-center">
++          {sale.cashier} · Paid via {sale.paymentMethod}
++        </div>
++        {settings.fbr_enabled && (
++          <div className="mt-4 rounded-lg p-2.5 flex items-center gap-2.5" style={{ background: "rgba(255,255,255,0.08)" }}>
++            <QrPlaceholder dark />
++            <div className="text-[9.5px] leading-tight opacity-90">
++              <div className="font-bold">FBR e-INVOICE</div>
++              <div>#{sale.orderNo}-2026 · NTN {settings.fbr_ntn || "—"}</div>
++              <div>STRN {settings.fbr_strn || "—"}</div>
++            </div>
++          </div>
++        )}
++        {settings.receipt_footer && <div className="text-center mt-4 text-[10px] opacity-60">{settings.receipt_footer}</div>}
++      </div>
++    </div>
++  );
++}
++
++export const RECEIPT_TEMPLATES = [
++  { id: "classic", name: "Classic", description: "Plain monospace thermal-printer look — dashed rules, no color.", Component: ClassicReceipt },
++  { id: "modern", name: "Modern", description: "Sans-serif with a bold header band and a boxed total.", Component: ModernReceipt },
++  { id: "minimal", name: "Minimal", description: "Lots of whitespace, thin hairlines, serif type.", Component: MinimalReceipt },
++  { id: "bold", name: "Bold", description: "High-contrast black receipt, large legible total.", Component: BoldReceipt },
++] as const;
++
++export type ReceiptTemplateId = (typeof RECEIPT_TEMPLATES)[number]["id"];
+diff --git a/lib/auth/require-staff.ts b/lib/auth/require-staff.ts
+index 49ba15a..ab658e0 100644
+--- a/lib/auth/require-staff.ts
++++ b/lib/auth/require-staff.ts
+@@ -4,6 +4,22 @@ import { createAdminClient } from "@/lib/supabase/admin";
+ import { computeStatus, isUsable } from "@/lib/subscription";
+ import { getModuleAccess, type Role } from "@/lib/permissions";
+ 
++/** A single .single() lookup, retried once on a transient error. Without this, a momentary
++ *  network/DB hiccup (more likely to surface on pages that fire several parallel requests at
++ *  once, like Employees) was silently treated the same as "this employee doesn't exist" and
++ *  forced a full logout — even though the session and the row were both perfectly fine. */
++async function queryWithRetry<T>(run: () => PromiseLike<{ data: T | null; error: any }>): Promise<T | null> {
++  for (let attempt = 0; attempt < 2; attempt++) {
++    const { data, error } = await run();
++    if (!error) return data;
++    if (attempt === 1) {
++      console.error("requireStaffSession: DB lookup failed after retry", error);
++      return null;
++    }
++  }
++  return null;
++}
++
+ /** Shared re-verification used by every staff-facing API route: checks the signed cookie,
+  *  then re-checks employees.status + session_version server-side (so a PIN reset / forced
+  *  logout / deactivation takes effect immediately even though the cookie itself is still
+@@ -14,11 +30,9 @@ export async function requireStaffSession(): Promise<StaffSessionPayload | null>
+   if (!session) return null;
+ 
+   const admin = createAdminClient();
+-  const { data: employee } = await admin
+-    .from("employees")
+-    .select("status, session_version")
+-    .eq("id", session.employeeId)
+-    .single();
++  const employee = await queryWithRetry<{ status: string; session_version: number }>(() =>
++    admin.from("employees").select("status, session_version").eq("id", session.employeeId).single()
++  );
+   if (!employee || employee.status !== "active" || employee.session_version !== session.sessionVersion) {
+     return null;
+   }
+@@ -34,18 +48,14 @@ export async function resolveStaffContext() {
+   if (!session) return null;
+ 
+   const admin = createAdminClient();
+-  const { data: employee } = await admin
+-    .from("employees")
+-    .select("id, name, role, status")
+-    .eq("id", session.employeeId)
+-    .single();
++  const employee = await queryWithRetry<{ id: string; name: string; role: string; status: string }>(() =>
++    admin.from("employees").select("id, name, role, status").eq("id", session.employeeId).single()
++  );
+   if (!employee) return null;
+ 
+-  const { data: restaurant } = await admin
+-    .from("restaurants")
+-    .select("id, name, status")
+-    .eq("id", session.restaurantId)
+-    .single();
++  const restaurant = await queryWithRetry<{ id: string; name: string; status: string }>(() =>
++    admin.from("restaurants").select("id, name, status").eq("id", session.restaurantId).single()
++  );
+   if (!restaurant || restaurant.status !== "active") return null;
+ 
+   const { data: sub } = await admin
+@@ -65,7 +75,7 @@ export async function resolveStaffContext() {
+ 
+   return {
+     session,
+-    employee,
++    employee: { ...employee, role: employee.role as Role },
+     restaurant,
+     subStatus,
+     modulePerms,
+diff --git a/lib/fetch-json.ts b/lib/fetch-json.ts
+new file mode 100644
+index 0000000..12bae29
+--- /dev/null
++++ b/lib/fetch-json.ts
+@@ -0,0 +1,29 @@
++/** Fetch + parse JSON, but NEVER throw. Used any time several endpoints are fetched together
++ *  with Promise.all() — a plain `res.json()` throws on an empty/malformed body (a flaky
++ *  request, a dev-server hiccup, a slow route timing out), and inside Promise.all that
++ *  exception kills the *entire* batch: even successful sibling requests never reach their
++ *  `setState` call. Callers use this per-request instead, so a failure in one endpoint only
++ *  affects that endpoint's own data — everything else on the page still renders. */
++export async function fetchJson<T = any>(input: RequestInfo | URL, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null; error: string }> {
++  let res: Response;
++  try {
++    res = await fetch(input, init);
++  } catch (e: any) {
++    return { ok: false, status: 0, data: null, error: e?.message ?? "Network error" };
++  }
++  let data: T | null = null;
++  let parseError = "";
++  try {
++    data = await res.json();
++  } catch {
++    parseError = "Empty or invalid response";
++  }
++  if (!res.ok) {
++    const msg = (data as any)?.error ?? parseError ?? `HTTP ${res.status}`;
++    return { ok: false, status: res.status, data, error: msg };
++  }
++  if (parseError) {
++    return { ok: false, status: res.status, data: null, error: parseError };
++  }
++  return { ok: true, status: res.status, data, error: "" };
++}

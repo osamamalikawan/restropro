@@ -1,6 +1,7 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
+import { Pagination, usePagination } from "@/components/ui/pagination";
 
 type Sale = {
   id: string;
@@ -72,6 +73,7 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
       s.customers?.phone?.includes(q)
     );
   });
+  const salesPage = usePagination(filtered, 20);
 
   return (
     <main className="p-6 md:p-8">
@@ -104,7 +106,7 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((s) => (
+              {salesPage.pageItems.map((s) => (
                 <Fragment key={s.id}>
                   <tr className="border-t border-line">
                     <td className="p-3 font-mono">
@@ -165,6 +167,7 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
               )}
             </tbody>
           </table>
+          <Pagination page={salesPage.page} pageCount={salesPage.pageCount} onChange={salesPage.setPage} total={salesPage.total} pageSize={salesPage.pageSize} />
           <LoadingOverlay show={cancellingId !== null} />
         </div>
       )}
