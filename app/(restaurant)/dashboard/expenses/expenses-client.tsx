@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney, todayISO } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type ExpenseCategory = { id: string; name: string };
 type PaymentMethod = { id: string; name: string };
@@ -33,16 +34,25 @@ export function ExpensesClient() {
   const [fMethod, setFMethod] = useState("Cash");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   async function load() {
     setLoading(true);
-    const [eRes, cRes, mRes] = await Promise.all([fetch("/api/expenses"), fetch("/api/expense-categories"), fetch("/api/payment-methods")]);
-    const [e, c, m] = await Promise.all([eRes.json(), cRes.json(), mRes.json()]);
-    setExpenses(e.expenses ?? []);
-    setCategories(c.categories ?? []);
-    setMethods(m.methods ?? []);
+    setLoadError("");
+    const [eRes, cRes, mRes] = await Promise.all([
+      fetchJson<{ expenses: Expense[] }>("/api/expenses"),
+      fetchJson<{ categories: ExpenseCategory[] }>("/api/expense-categories"),
+      fetchJson<{ methods: PaymentMethod[] }>("/api/payment-methods"),
+    ]);
+    if (!eRes.ok) {
+      setLoadError(eRes.error);
+      setExpenses([]);
+    } else {
+      setExpenses(eRes.data?.expenses ?? []);
+    }
+    setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
+    setMethods(mRes.ok ? mRes.data?.methods ?? [] : []);
     setLoading(false);
-    return { c, m };
   }
   useEffect(() => {
     load();
@@ -96,6 +106,11 @@ export function ExpensesClient() {
             + Add expense
           </button>
         </PanelHead>
+        {loadError && (
+          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+            Couldn&apos;t load expenses: {loadError}
+          </p>
+        )}
         <TableScroll>
           <table className="w-full">
             <thead>
@@ -123,7 +138,7 @@ export function ExpensesClient() {
                   <Td className="text-ink-mid">{e.payment_method}</Td>
                 </tr>
               ))}
-              {!loading && expenses.length === 0 && <EmptyRow colSpan={7} label="No expenses logged yet." />}
+              {!loading && !loadError && expenses.length === 0 && <EmptyRow colSpan={7} label="No expenses logged yet." />}
             </tbody>
           </table>
         </TableScroll>

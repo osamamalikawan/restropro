@@ -7,6 +7,7 @@ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, search
 import { Switch } from "@/components/ui/switch";
 import { GalleryPickerModal } from "@/components/gallery-picker-modal";
 import { fmtMoney } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 import { RecipeModal } from "../menu/recipe-modal";
 
 type Category = { id: string; name: string };
@@ -40,18 +41,24 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
   const [saving, setSaving] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
+  const [loadError, setLoadError] = useState("");
 
   async function load() {
     setLoading(true);
+    setLoadError("");
     const [pRes, cRes, rRes] = await Promise.all([
-      fetch("/api/products"),
-      fetch("/api/menu-categories"),
-      fetch("/api/recipes"),
+      fetchJson<{ products: Product[] }>("/api/products"),
+      fetchJson<{ categories: Category[] }>("/api/menu-categories"),
+      fetchJson<{ recipeItems: RecipeItem[] }>("/api/recipes"),
     ]);
-    const [p, c, r] = await Promise.all([pRes.json(), cRes.json(), rRes.json()]);
-    setProducts(p.products ?? []);
-    setCategories(c.categories ?? []);
-    setRecipeItems(r.recipeItems ?? []);
+    if (!pRes.ok) {
+      setLoadError(pRes.error);
+      setProducts([]);
+    } else {
+      setProducts(pRes.data?.products ?? []);
+    }
+    setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
+    setRecipeItems(rRes.ok ? rRes.data?.recipeItems ?? [] : []);
     setLoading(false);
   }
   useEffect(() => {
@@ -134,6 +141,11 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
             </button>
           )}
         </PanelHead>
+        {loadError && (
+          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+            Couldn&apos;t load products: {loadError}
+          </p>
+        )}
         <TableScroll>
           <table className="w-full">
             <thead>
@@ -188,7 +200,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
                   </tr>
                 );
               })}
-              {!loading && filtered.length === 0 && <EmptyRow colSpan={8} label="No products yet." />}
+              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={8} label="No products yet." />}
             </tbody>
           </table>
         </TableScroll>

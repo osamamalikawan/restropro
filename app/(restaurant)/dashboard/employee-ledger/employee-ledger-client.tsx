@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/components/ui/panel";
 import { fmtMoney, todayISO } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type Employee = { id: string; name: string };
 type LedgerEntry = { id: string; type: string; amount: number; note: string | null; txn_date: string; employees?: { name: string } | null };
@@ -20,13 +21,20 @@ export function EmployeeLedgerClient() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   async function load() {
-    const [eRes, lRes] = await Promise.all([fetch("/api/employees"), fetch("/api/employee-ledger")]);
-    const [e, l] = await Promise.all([eRes.json(), lRes.json()]);
-    setEmployees(e.employees ?? []);
-    setEntries(l.entries ?? []);
-    if (!employeeId && e.employees?.[0]) setEmployeeId(e.employees[0].id);
+    setLoadError("");
+    const [eRes, lRes] = await Promise.all([
+      fetchJson<{ employees: Employee[] }>("/api/employees"),
+      fetchJson<{ entries: LedgerEntry[] }>("/api/employee-ledger"),
+    ]);
+    const failed = [eRes, lRes].find((r) => !r.ok);
+    setLoadError(failed ? failed.error : "");
+    const employeesList = eRes.ok ? eRes.data?.employees ?? [] : [];
+    setEmployees(employeesList);
+    setEntries(lRes.ok ? lRes.data?.entries ?? [] : []);
+    if (!employeeId && employeesList[0]) setEmployeeId(employeesList[0].id);
     setLoading(false);
   }
   useEffect(() => {
@@ -57,6 +65,11 @@ export function EmployeeLedgerClient() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      {loadError && (
+        <p className="mb-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+          Couldn&apos;t load employee ledger data: {loadError}
+        </p>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">
         <div className="rounded-xl border border-line bg-surface p-5">
           <h3 className="font-display text-lg font-semibold mb-4">Log a payment</h3>

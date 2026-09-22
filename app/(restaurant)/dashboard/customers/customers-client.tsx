@@ -4,6 +4,7 @@ import { IdCard, Pencil, ArrowLeft } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, searchInputCls, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney, fmtDateTime } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type Area = { id: string; name: string };
 type Customer = { id: string; name: string; phone: string; address: string | null; area_id: string | null; delivery_areas?: { name: string } | null };
@@ -17,6 +18,7 @@ export function CustomersClient() {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
 
   // Add/edit modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -32,15 +34,23 @@ export function CustomersClient() {
 
   async function load() {
     setLoading(true);
+    setLoadError("");
+    // Independent per-endpoint fetches — see lib/fetch-json.ts. A failed/empty response from
+    // one (e.g. sales, used only for the spend/orders columns) can no longer throw and wipe
+    // out the customers list itself.
     const [cRes, aRes, sRes] = await Promise.all([
-      fetch("/api/customers"),
-      fetch("/api/delivery-areas"),
-      fetch("/api/sales?limit=1000"),
+      fetchJson<{ customers: Customer[] }>("/api/customers"),
+      fetchJson<{ areas: Area[] }>("/api/delivery-areas"),
+      fetchJson<{ sales: Sale[] }>("/api/sales?limit=1000"),
     ]);
-    const [c, a, s] = await Promise.all([cRes.json(), aRes.json(), sRes.json()]);
-    setCustomers(c.customers ?? []);
-    setAreas(a.areas ?? []);
-    setSales(s.sales ?? []);
+    if (!cRes.ok) {
+      setLoadError(cRes.error);
+      setCustomers([]);
+    } else {
+      setCustomers(cRes.data?.customers ?? []);
+    }
+    setAreas(aRes.ok ? aRes.data?.areas ?? [] : []);
+    setSales(sRes.ok ? sRes.data?.sales ?? [] : []);
     setLoading(false);
   }
   useEffect(() => {
@@ -220,6 +230,11 @@ export function CustomersClient() {
             + Add customer
           </button>
         </PanelHead>
+        {loadError && (
+          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+            Couldn&apos;t load customers: {loadError}
+          </p>
+        )}
         <TableScroll>
           <table className="w-full">
             <thead>
@@ -265,7 +280,7 @@ export function CustomersClient() {
                   </tr>
                 );
               })}
-              {!loading && filtered.length === 0 && <EmptyRow colSpan={7} label="No customers yet." />}
+              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={7} label="No customers yet." />}
             </tbody>
           </table>
         </TableScroll>

@@ -6,6 +6,7 @@ import { inputCls, btnPrimary } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow } from "@/components/ui/panel";
 import { PageLoader } from "@/components/ui/loading";
 import { fmtMoney } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type Product = { id: string; name: string };
 type InventoryItem = { id: string; name: string; unit: string; cost: number; item_type: "ready_made" | "self_made" };
@@ -34,16 +35,23 @@ export function RecipesProductionClient() {
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [productions, setProductions] = useState<Production[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    Promise.all([fetch("/api/products").then((r) => r.json()), fetch("/api/inventory").then((r) => r.json()), fetch("/api/productions").then((r) => r.json())]).then(
-      ([p, i, pr]) => {
-        setProducts(p.products ?? []);
-        setInventoryItems(i.inventoryItems ?? []);
-        setProductions(pr.productions ?? []);
-        setLoading(false);
-      }
-    );
+    // Independent per-endpoint fetches — see lib/fetch-json.ts — so a failed/empty response
+    // from any one can't throw inside Promise.all and blank the whole page.
+    Promise.all([
+      fetchJson<{ products: Product[] }>("/api/products"),
+      fetchJson<{ inventoryItems: InventoryItem[] }>("/api/inventory"),
+      fetchJson<{ productions: Production[] }>("/api/productions"),
+    ]).then(([p, i, pr]) => {
+      const failed = [p, i, pr].find((r) => !r.ok);
+      setLoadError(failed ? failed.error : "");
+      setProducts(p.ok ? p.data?.products ?? [] : []);
+      setInventoryItems(i.ok ? i.data?.inventoryItems ?? [] : []);
+      setProductions(pr.ok ? pr.data?.productions ?? [] : []);
+      setLoading(false);
+    });
   }, []);
 
   useEffect(() => {
@@ -64,6 +72,11 @@ export function RecipesProductionClient() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      {loadError && (
+        <p className="mb-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+          Couldn&apos;t load recipe data: {loadError}
+        </p>
+      )}
       <div className="mb-5 flex gap-1 border-b border-line">
         {TABS.map((t) => (
           <button

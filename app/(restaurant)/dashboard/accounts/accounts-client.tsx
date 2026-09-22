@@ -4,6 +4,7 @@ import { ArrowUp, ArrowDown, Equal, Hourglass } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, KpiCard, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney, todayISO } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type AccountEntry = { id: string; txn_date: string; description: string; category: string; type: "income" | "expense"; amount: number };
 type Supplier = { id: string };
@@ -25,20 +26,26 @@ export function AccountsClient() {
   const [fDate, setFDate] = useState(todayISO());
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   async function load() {
     setLoading(true);
+    setLoadError("");
     const [aRes, sRes, pRes, lRes] = await Promise.all([
-      fetch("/api/accounts"),
-      fetch("/api/suppliers"),
-      fetch("/api/restock?limit=1000"),
-      fetch("/api/supplier-ledger?limit=1000"),
+      fetchJson<{ accounts: AccountEntry[] }>("/api/accounts"),
+      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
+      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
+      fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger?limit=1000"),
     ]);
-    const [a, s, p, l] = await Promise.all([aRes.json(), sRes.json(), pRes.json(), lRes.json()]);
-    setEntries(a.accounts ?? []);
-    setSuppliers(s.suppliers ?? []);
-    setPurchases(p.purchases ?? []);
-    setLedger(l.entries ?? []);
+    if (!aRes.ok) {
+      setLoadError(aRes.error);
+      setEntries([]);
+    } else {
+      setEntries(aRes.data?.accounts ?? []);
+    }
+    setSuppliers(sRes.ok ? sRes.data?.suppliers ?? [] : []);
+    setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
+    setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
     setLoading(false);
   }
   useEffect(() => {
@@ -111,6 +118,11 @@ export function AccountsClient() {
             + Add entry
           </button>
         </PanelHead>
+        {loadError && (
+          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+            Couldn&apos;t load the ledger: {loadError}
+          </p>
+        )}
         <TableScroll>
           <table className="w-full">
             <thead>
@@ -141,7 +153,7 @@ export function AccountsClient() {
                   <Td className="font-mono text-ink-mid">{fmtMoney(e.balance)}</Td>
                 </tr>
               ))}
-              {!loading && withBalance.length === 0 && <EmptyRow colSpan={6} label="No ledger entries yet." />}
+              {!loading && !loadError && withBalance.length === 0 && <EmptyRow colSpan={6} label="No ledger entries yet." />}
             </tbody>
           </table>
         </TableScroll>

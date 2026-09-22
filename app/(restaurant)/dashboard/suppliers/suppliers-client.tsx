@@ -4,6 +4,7 @@ import { IdCard, Pencil, ArrowLeft } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type Supplier = { id: string; name: string; contact_person: string | null; phone: string | null; category: string | null; payment_terms: string | null };
 type Purchase = { supplier_id: string | null; total_cost: number; inventory_items?: { name: string; unit: string } | null; unit_cost: number };
@@ -26,14 +27,24 @@ export function SuppliersClient() {
   const [saving, setSaving] = useState(false);
 
   const [profileId, setProfileId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState("");
 
   async function load() {
     setLoading(true);
-    const [sRes, pRes, lRes] = await Promise.all([fetch("/api/suppliers"), fetch("/api/restock?limit=1000"), fetch("/api/supplier-ledger?limit=1000")]);
-    const [s, p, l] = await Promise.all([sRes.json(), pRes.json(), lRes.json()]);
-    setSuppliers(s.suppliers ?? []);
-    setPurchases(p.purchases ?? []);
-    setLedger(l.entries ?? []);
+    setLoadError("");
+    const [sRes, pRes, lRes] = await Promise.all([
+      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
+      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
+      fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger?limit=1000"),
+    ]);
+    if (!sRes.ok) {
+      setLoadError(sRes.error);
+      setSuppliers([]);
+    } else {
+      setSuppliers(sRes.data?.suppliers ?? []);
+    }
+    setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
+    setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
     setLoading(false);
   }
   useEffect(() => {
@@ -202,6 +213,11 @@ export function SuppliersClient() {
             + Add supplier
           </button>
         </PanelHead>
+        {loadError && (
+          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+            Couldn&apos;t load suppliers: {loadError}
+          </p>
+        )}
         <TableScroll>
           <table className="w-full">
             <thead>

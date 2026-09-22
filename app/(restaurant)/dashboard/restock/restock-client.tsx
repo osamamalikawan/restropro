@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow } from "@/components/ui/panel";
 import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
 import { fmtMoney, todayISO } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type InventoryItem = { id: string; name: string; unit: string; item_type: "ready_made" | "self_made"; cost: number };
 type Supplier = { id: string; name: string };
@@ -41,19 +42,22 @@ export function RestockClient() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   async function loadAll() {
+    setLoadError("");
     const [invRes, supRes, purRes, prodRes] = await Promise.all([
-      fetch("/api/inventory"),
-      fetch("/api/suppliers"),
-      fetch("/api/restock?limit=1000"),
-      fetch("/api/productions"),
+      fetchJson<{ inventoryItems: InventoryItem[] }>("/api/inventory"),
+      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
+      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
+      fetchJson<{ productions: Production[] }>("/api/productions"),
     ]);
-    const [invData, supData, purData, prodData] = await Promise.all([invRes.json(), supRes.json(), purRes.json(), prodRes.json()]);
-    setItems(invData.inventoryItems ?? []);
-    setSuppliers(supData.suppliers ?? []);
-    setPurchases(purData.purchases ?? []);
-    setProductions(prodData.productions ?? []);
+    const failed = [invRes, supRes, purRes, prodRes].find((r) => !r.ok);
+    setLoadError(failed ? failed.error : "");
+    setItems(invRes.ok ? invRes.data?.inventoryItems ?? [] : []);
+    setSuppliers(supRes.ok ? supRes.data?.suppliers ?? [] : []);
+    setPurchases(purRes.ok ? purRes.data?.purchases ?? [] : []);
+    setProductions(prodRes.ok ? prodRes.data?.productions ?? [] : []);
     setLoading(false);
   }
   useEffect(() => {
@@ -131,6 +135,11 @@ export function RestockClient() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      {loadError && (
+        <p className="mb-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+          Couldn&apos;t load restock data: {loadError}
+        </p>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-5 items-start">
         <div className="rounded-xl border border-line bg-surface p-5">
           <h3 className="font-display text-lg font-semibold">{isSelf ? "Log production" : "Log a purchase"}</h3>

@@ -5,6 +5,7 @@ import { RotateCw, Pencil } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type Item = {
   id: string;
@@ -41,13 +42,22 @@ export function InventoryClient() {
   const [fCost, setFCost] = useState("0");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   async function load() {
     setLoading(true);
-    const [iRes, pRes] = await Promise.all([fetch("/api/inventory"), fetch("/api/restock?limit=1000")]);
-    const [i, p] = await Promise.all([iRes.json(), pRes.json()]);
-    setItems(i.inventoryItems ?? []);
-    setPurchases(p.purchases ?? []);
+    setLoadError("");
+    const [iRes, pRes] = await Promise.all([
+      fetchJson<{ inventoryItems: Item[] }>("/api/inventory"),
+      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
+    ]);
+    if (!iRes.ok) {
+      setLoadError(iRes.error);
+      setItems([]);
+    } else {
+      setItems(iRes.data?.inventoryItems ?? []);
+    }
+    setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
     setLoading(false);
   }
   useEffect(() => {
@@ -132,6 +142,11 @@ export function InventoryClient() {
             + Add item
           </button>
         </PanelHead>
+        {loadError && (
+          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+            Couldn&apos;t load inventory: {loadError}
+          </p>
+        )}
         <TableScroll>
           <table className="w-full">
             <thead>
@@ -192,7 +207,7 @@ export function InventoryClient() {
                   </tr>
                 );
               })}
-              {!loading && filtered.length === 0 && <EmptyRow colSpan={7} label="No inventory items yet." />}
+              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={7} label="No inventory items yet." />}
             </tbody>
           </table>
         </TableScroll>

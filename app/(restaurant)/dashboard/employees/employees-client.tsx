@@ -4,6 +4,7 @@ import { IdCard, Pencil, ArrowLeft } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type Employee = { id: string; name: string; role: "admin" | "manager" | "cashier" | "inventory"; status: "active" | "inactive" };
 type LedgerEntry = { id: string; employee_id: string; type: string; amount: number; note: string | null; txn_date: string };
@@ -33,16 +34,23 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
   async function load() {
     setLoading(true);
     setLoadError("");
-    const [eRes, lRes, sRes] = await Promise.all([fetch("/api/employees"), fetch("/api/employee-ledger?limit=1000"), fetch("/api/sales?limit=1000")]);
-    const [e, l, s] = await Promise.all([eRes.json(), lRes.json(), sRes.json()]);
+    // Independent per-endpoint fetches — see lib/fetch-json.ts. A failed/empty response from
+    // one (previously: a plain Promise.all([...].json()) — if /api/sales came back with an
+    // empty body, .json() threw and killed the WHOLE batch before setEmployees() ever ran,
+    // even though /api/employees itself had already succeeded) can no longer block the others.
+    const [eRes, lRes, sRes] = await Promise.all([
+      fetchJson<{ employees: Employee[] }>("/api/employees"),
+      fetchJson<{ entries: LedgerEntry[] }>("/api/employee-ledger?limit=1000"),
+      fetchJson<{ sales: Sale[] }>("/api/sales?limit=1000"),
+    ]);
     if (!eRes.ok) {
-      setLoadError(e.error || "Could not load employees");
+      setLoadError(eRes.error);
       setEmployees([]);
     } else {
-      setEmployees(e.employees ?? []);
+      setEmployees(eRes.data?.employees ?? []);
     }
-    setLedger(l.entries ?? []);
-    setSales(s.sales ?? []);
+    setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
+    setSales(sRes.ok ? sRes.data?.sales ?? [] : []);
     setLoading(false);
   }
   useEffect(() => {

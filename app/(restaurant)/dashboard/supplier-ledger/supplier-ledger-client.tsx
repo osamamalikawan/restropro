@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/components/ui/panel";
 import { fmtMoney, todayISO } from "@/lib/format";
+import { fetchJson } from "@/lib/fetch-json";
 
 type Supplier = { id: string; name: string };
 type PaymentMethod = { id: string; name: string };
@@ -20,14 +21,22 @@ export function SupplierLedgerClient() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   async function load() {
-    const [sRes, mRes, eRes] = await Promise.all([fetch("/api/suppliers"), fetch("/api/payment-methods"), fetch("/api/supplier-ledger")]);
-    const [s, m, e] = await Promise.all([sRes.json(), mRes.json(), eRes.json()]);
-    setSuppliers(s.suppliers ?? []);
-    setMethods(m.paymentMethods ?? m.methods ?? []);
-    setEntries(e.entries ?? []);
-    if (!supplierId && s.suppliers?.[0]) setSupplierId(s.suppliers[0].id);
+    setLoadError("");
+    const [sRes, mRes, eRes] = await Promise.all([
+      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
+      fetchJson<{ methods: PaymentMethod[]; paymentMethods?: PaymentMethod[] }>("/api/payment-methods"),
+      fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger"),
+    ]);
+    const failed = [sRes, mRes, eRes].find((r) => !r.ok);
+    setLoadError(failed ? failed.error : "");
+    const suppliersList = sRes.ok ? sRes.data?.suppliers ?? [] : [];
+    setSuppliers(suppliersList);
+    setMethods(mRes.ok ? mRes.data?.paymentMethods ?? mRes.data?.methods ?? [] : []);
+    setEntries(eRes.ok ? eRes.data?.entries ?? [] : []);
+    if (!supplierId && suppliersList[0]) setSupplierId(suppliersList[0].id);
     setLoading(false);
   }
   useEffect(() => {
@@ -58,6 +67,11 @@ export function SupplierLedgerClient() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      {loadError && (
+        <p className="mb-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+          Couldn&apos;t load supplier ledger data: {loadError}
+        </p>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">
         <div className="rounded-xl border border-line bg-surface p-5">
           <h3 className="font-display text-lg font-semibold mb-4">Log a payment</h3>
