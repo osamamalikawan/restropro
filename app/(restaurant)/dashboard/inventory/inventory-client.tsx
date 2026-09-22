@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { RotateCw, Pencil } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
+import { Pagination, usePagination } from "@/components/ui/pagination";
 import { fmtMoney } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
 
@@ -74,6 +75,7 @@ export function InventoryClient() {
     const query = q.toLowerCase();
     return items.filter((i) => i.name.toLowerCase().includes(query));
   }, [items, q]);
+  const itemsPage = usePagination(filtered, 20);
 
   function openAdd() {
     setEditingId(null);
@@ -161,7 +163,7 @@ export function InventoryClient() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((i) => {
+              {itemsPage.pageItems.map((i) => {
                 const st = stockStatus(i);
                 const pct = Math.min(100, Math.round((i.current_stock / (i.min_stock * 2 || 1)) * 100));
                 return (
@@ -211,6 +213,7 @@ export function InventoryClient() {
             </tbody>
           </table>
         </TableScroll>
+        <Pagination page={itemsPage.page} pageCount={itemsPage.pageCount} onChange={itemsPage.setPage} total={itemsPage.total} pageSize={itemsPage.pageSize} />
       </Panel>
 
       <Modal

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowUp, ArrowDown, Equal, Hourglass } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, KpiCard, addBtnCls } from "@/components/ui/panel";
+import { Pagination, usePagination } from "@/components/ui/pagination";
 import { fmtMoney, todayISO } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
 
@@ -71,6 +72,7 @@ export function AccountsClient() {
     }
     return entries.map((e) => ({ ...e, balance: balances.get(e.id) ?? 0 }));
   }, [entries]);
+  const accountsPage = usePagination(withBalance, 20);
 
   function openAdd() {
     setFType("income");
@@ -136,7 +138,7 @@ export function AccountsClient() {
               </tr>
             </thead>
             <tbody>
-              {withBalance.map((e) => (
+              {accountsPage.pageItems.map((e) => (
                 <tr key={e.id} className="border-b border-line last:border-0">
                   <Td className="text-ink-mid">{e.txn_date}</Td>
                   <Td className="font-medium text-ink-strong">{e.description}</Td>
@@ -157,6 +159,7 @@ export function AccountsClient() {
             </tbody>
           </table>
         </TableScroll>
+        <Pagination page={accountsPage.page} pageCount={accountsPage.pageCount} onChange={accountsPage.setPage} total={accountsPage.total} pageSize={accountsPage.pageSize} />
       </Panel>
 
       <Modal
