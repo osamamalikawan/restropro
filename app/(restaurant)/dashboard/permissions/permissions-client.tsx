@@ -2,16 +2,26 @@
 import { useEffect, useState } from "react";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 
-type Role = "admin" | "manager" | "cashier" | "inventory";
+type Role = string;
 type Matrix = Record<Role, Record<string, boolean>>;
 type Category = { id: string; name: string };
 
-const ROLE_META: Record<Role, { label: string; color: string }> = {
+const SYSTEM_ROLE_META: Record<string, { label: string; color: string }> = {
   admin: { label: "Admin", color: "#D9481F" },
   manager: { label: "Manager", color: "#3F6E52" },
   cashier: { label: "Cashier", color: "#4C7EA8" },
   inventory: { label: "Inventory Manager", color: "#C99A3E" },
 };
+const CUSTOM_ROLE_COLORS = ["#8A6FD1", "#2E8B8B", "#B0556A", "#6F8A4A", "#C97A4A"];
+/** A custom role has no fixed entry above — falls back to a title-cased label and a color
+ *  picked deterministically from its name, so it still reads consistently every render
+ *  rather than a different color each time. */
+function roleMeta(role: string): { label: string; color: string } {
+  if (SYSTEM_ROLE_META[role]) return SYSTEM_ROLE_META[role];
+  let hash = 0;
+  for (const c of role) hash = (hash * 31 + c.charCodeAt(0)) % CUSTOM_ROLE_COLORS.length;
+  return { label: role.length ? role[0].toUpperCase() + role.slice(1) : role, color: CUSTOM_ROLE_COLORS[hash] };
+}
 
 const MODULE_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
@@ -94,7 +104,7 @@ export function PermissionsClient() {
       setMatrix((prev) => (prev ? { ...prev, [role]: { ...prev[role], [module]: !canView } } : prev));
       return;
     }
-    setPermMsg(`Permission updated for ${ROLE_META[role].label}`);
+    setPermMsg(`Permission updated for ${roleMeta(role).label}`);
     setTimeout(() => setPermMsg(""), 2000);
   }
 
@@ -185,9 +195,9 @@ export function PermissionsClient() {
                     <td className="p-2 sticky left-0 bg-surface">
                       <span
                         className="text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap"
-                        style={{ background: `${ROLE_META[role].color}22`, color: ROLE_META[role].color }}
+                        style={{ background: `${roleMeta(role).color}22`, color: roleMeta(role).color }}
                       >
-                        {ROLE_META[role].label}
+                        {roleMeta(role).label}
                       </span>
                     </td>
                     {modules.map((m) => (

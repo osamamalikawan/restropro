@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { IdCard, Pencil, ArrowLeft, UserX, RotateCcw } from "lucide-react";
+import { IdCard, Pencil, ArrowLeft, UserX, RotateCcw, Search } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney } from "@/lib/format";
@@ -9,7 +9,7 @@ import { fetchJson } from "@/lib/fetch-json";
 type Employee = {
   id: string;
   name: string;
-  role: "admin" | "manager" | "cashier" | "inventory";
+  role: string;
   status: "active" | "inactive" | "suspended" | "left";
   father_name: string | null;
   cnic_number: string | null;
@@ -19,23 +19,33 @@ type Employee = {
   left_date: string | null;
   is_user: boolean;
 };
+type RoleOption = { id: string; name: string; is_system: boolean };
 type LedgerEntry = { id: string; employee_id: string; type: string; amount: number; note: string | null; txn_date: string };
 type Sale = { cashier_employee_id: string | null; status: string };
 
 const ROLE_COLORS: Record<string, string> = { admin: "crimson", manager: "turmeric", cashier: "basil", inventory: "steel" };
-const ROLE_LABELS: Record<string, string> = { admin: "Admin", manager: "Manager", cashier: "Cashier", inventory: "Inventory" };
+/** Custom roles don't have a fixed color/casing — this falls back to a neutral badge with
+ *  the role name title-cased, rather than only ever rendering the 4 system roles correctly. */
+function roleColor(role: string): string {
+  return ROLE_COLORS[role] ?? "steel";
+}
+function roleLabel(role: string): string {
+  return role.length ? role[0].toUpperCase() + role.slice(1) : role;
+}
 
 export function EmployeesClient({ canManage }: { canManage: boolean }) {
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [roles, setRoles] = useState<RoleOption[]>([]);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"active" | "left">("active");
+  const [search, setSearch] = useState("");
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [fName, setFName] = useState("");
-  const [fRole, setFRole] = useState<Employee["role"]>("cashier");
+  const [fRole, setFRole] = useState("cashier");
   const [fFatherName, setFFatherName] = useState("");
   const [fCnic, setFCnic] = useState("");
   const [fAddress, setFAddress] = useState("");
@@ -47,7 +57,17 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
   const [loadError, setLoadError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  const [newRoleOpen, setNewRoleOpen] = useState(false);
+  const [newRoleName, setNewRoleName] = useState("");
+  const [newRoleError, setNewRoleError] = useState("");
+  const [savingRole, setSavingRole] = useState(false);
+
   const [profileId, setProfileId] = useState<string | null>(null);
+
+  async function loadRoles() {
+    const res = await fetchJson<{ roles: RoleOption[] }>("/api/roles");
+    if (res.ok) setRoles(res.data?.roles ?? []);
+  }
 
   async function load() {
     setLoading(true);
@@ -71,13 +91,41 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
   }
   useEffect(() => {
     load();
+    loadRoles();
   }, []);
 
-  const filtered = useMemo(
-    () => employees.filter((e) => (tab === "left" ? e.status === "left" : e.status !== "left")),
-    [employees, tab]
-  );
+  const filtered = useMemo(() => {
+    const byTab = employees.filter((e) => (tab === "left" ? e.status === "left" : e.status !== "left"));
+    const q = search.trim().toLowerCase();
+    if (!q) return byTab;
+    return byTab.filter((e) => [e.name, e.role].join(" ").toLowerCase().includes(q));
+  }, [employees, tab, search]);
   const leftCount = employees.filter((e) => e.status === "left").length;
+
+  async function createRole() {
+    const name = newRoleName.trim();
+    if (!name) {
+      setNewRoleError("Enter a role name");
+      return;
+    }
+    setSavingRole(true);
+    setNewRoleError("");
+    const res = await fetch("/api/roles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "insert", name }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setSavingRole(false);
+    if (!res.ok) {
+      setNewRoleError(data.error ?? "Could not create role");
+      return;
+    }
+    setNewRoleName("");
+    setNewRoleOpen(false);
+    await loadRoles();
+    setFRole(name);
+  }
 
   function openAdd() {
     setEditingId(null);
@@ -191,7 +239,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
           <div>
             <h1 className="font-display text-2xl font-semibold">{profile.name}</h1>
             <div className="flex gap-2 mt-1">
-              <Badge tone={ROLE_COLORS[profile.role] as any}>{ROLE_LABELS[profile.role]}</Badge>
+              <Badge tone={roleColor(profile.role) as any}>{roleLabel(profile.role)}</Badge>
               {profile.status === "left" ? (
                 <Badge tone="crimson">Left {profile.left_date ? `· ${profile.left_date}` : ""}</Badge>
               ) : (
@@ -312,12 +360,20 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
           </Field>
         </div>
         <Field label="Role">
-          <select value={fRole} onChange={(e) => setFRole(e.target.value as Employee["role"])} className={inputCls}>
-            <option value="admin">Admin</option>
-            <option value="manager">Manager</option>
-            <option value="cashier">Cashier</option>
-            <option value="inventory">Inventory</option>
-          </select>
+          <div className="flex gap-2 items-center">
+            <select value={fRole} onChange={(e) => setFRole(e.target.value)} className={inputCls}>
+              {roles.map((r) => (
+                <option key={r.id} value={r.name}>
+                  {roleLabel(r.name)}
+                </option>
+              ))}
+            </select>
+            {canManage && (
+              <button type="button" onClick={() => setNewRoleOpen(true)} className="shrink-0 text-xs font-medium text-chili-500 hover:underline whitespace-nowrap">
+                + New role
+              </button>
+            )}
+          </div>
         </Field>
         <Field
           label={
@@ -347,6 +403,15 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
       )}
       <Panel loading={loading}>
         <PanelHead title="Employees" subtitle="Full staff roster — mark someone left instead of deleting their record">
+          <div className="relative min-w-[200px] mr-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-ink-faint" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search name or role…"
+              className={`${inputCls} pl-8`}
+            />
+          </div>
           <div className="flex rounded-lg border border-line p-0.5 mr-1">
             <button
               onClick={() => setTab("active")}
@@ -388,7 +453,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
                     </div>
                   </Td>
                   <Td>
-                    <Badge tone={ROLE_COLORS[e.role] as any}>{ROLE_LABELS[e.role]}</Badge>
+                    <Badge tone={roleColor(e.role) as any}>{roleLabel(e.role)}</Badge>
                   </Td>
                   <Td>
                     <Badge tone={e.is_user ? "basil" : "steel"}>{e.is_user ? "User" : "Employee only"}</Badge>
@@ -427,6 +492,32 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
       </Panel>
 
       {renderModal()}
+
+      <Modal
+        busy={savingRole}
+        open={newRoleOpen}
+        onClose={() => setNewRoleOpen(false)}
+        title="New role"
+        width="max-w-sm"
+        footer={
+          <>
+            <button onClick={() => setNewRoleOpen(false)} className={btnGhost}>
+              Cancel
+            </button>
+            <button onClick={createRole} disabled={savingRole} className={btnPrimary}>
+              {savingRole ? "Creating…" : "Create role"}
+            </button>
+          </>
+        }
+      >
+        {newRoleError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{newRoleError}</p>}
+        <Field label="Role name">
+          <input value={newRoleName} onChange={(e) => setNewRoleName(e.target.value)} className={inputCls} placeholder="e.g. Head Chef" />
+        </Field>
+        <p className="text-xs text-ink-faint">
+          New roles start with no module access. Open Users &amp; Permissions afterward to choose what this role can see.
+        </p>
+      </Modal>
     </main>
   );
 }

@@ -13,6 +13,7 @@ import {
   Truck,
   FileText,
   User,
+  KeyRound,
   DollarSign,
   CreditCard,
   MapPin,
@@ -22,7 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export type Role = "admin" | "manager" | "cashier" | "inventory";
+export type Role = string;
 
 /** Sidebar nav modules, ordered/grouped exactly like the prototype's #sidebar. `perm` is the
  *  permission-module key that gates visibility (see ROLE_MODULES below) — matches the
@@ -55,6 +56,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/suppliers", label: "Suppliers", icon: Truck, perm: "suppliers" },
       { href: "/dashboard/supplier-ledger", label: "Supplier Ledger", icon: FileText, perm: "supplierLedger" },
       { href: "/dashboard/employees", label: "Employees", icon: User, perm: "employees" },
+      { href: "/dashboard/users", label: "Users", icon: KeyRound, perm: "employees" },
       { href: "/dashboard/employee-ledger", label: "Employee Ledger", icon: FileText, perm: "employeeLedger" },
       { href: "/dashboard/accounts", label: "Accounts", icon: DollarSign, perm: "accounts" },
       { href: "/dashboard/expenses", label: "Expenses", icon: CreditCard, perm: "expenses" },
@@ -106,6 +108,7 @@ export const VIEW_META: Record<string, { title: string; subtitle: string }> = {
   "/dashboard/suppliers": { title: "Suppliers", subtitle: "Vendors supplying stock and ingredients" },
   "/dashboard/supplier-ledger": { title: "Supplier Ledger", subtitle: "Payments made to suppliers" },
   "/dashboard/employees": { title: "Employees", subtitle: "Staff directory, roles & shift assignment" },
+  "/dashboard/users": { title: "Users", subtitle: "Grant or revoke login access for employees, linked one-to-one" },
   "/dashboard/employee-ledger": { title: "Employee Ledger", subtitle: "Salary, advance & bonus payments" },
   "/dashboard/accounts": { title: "Accounts", subtitle: "Income & expense ledger" },
   "/dashboard/expenses": { title: "Expenses", subtitle: "Regular and recurring restaurant expenses" },

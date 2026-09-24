@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
-import { getPermissionMatrix, setModuleAccess, PERMISSION_MODULES, ROLES, type PermModule, type Role } from "@/lib/permissions";
+import { getPermissionMatrix, setModuleAccess, listRoles, PERMISSION_MODULES, type PermModule, type Role } from "@/lib/permissions";
 
 /** Only Admin can view/edit this page (see hasModuleAccess(..., "admin") gate on the page
  *  itself) — this route re-checks the same thing server-side rather than trusting the page
@@ -10,8 +10,8 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   if (session.role !== "admin") return NextResponse.json({ error: "Admin only" }, { status: 403 });
 
-  const matrix = await getPermissionMatrix(session.restaurantId);
-  return NextResponse.json({ matrix, modules: PERMISSION_MODULES, roles: ROLES });
+  const [matrix, roles] = await Promise.all([getPermissionMatrix(session.restaurantId), listRoles(session.restaurantId)]);
+  return NextResponse.json({ matrix, modules: PERMISSION_MODULES, roles: roles.map((r) => r.name) });
 }
 
 export async function POST(req: Request) {
@@ -27,7 +27,8 @@ export async function POST(req: Request) {
   if (!role || !module || typeof canView !== "boolean") {
     return NextResponse.json({ error: "role, module and canView are required" }, { status: 400 });
   }
-  if (!ROLES.includes(role) || !PERMISSION_MODULES.includes(module)) {
+  const roles = await listRoles(session.restaurantId);
+  if (!roles.some((r) => r.name === role) || !PERMISSION_MODULES.includes(module)) {
     return NextResponse.json({ error: "Unknown role or module" }, { status: 400 });
   }
   if (role === "admin") {

@@ -7,7 +7,10 @@
 export interface StaffSessionPayload {
   restaurantId: string;
   employeeId: string;
-  role: "admin" | "manager" | "cashier" | "inventory";
+  /** Not a fixed union anymore — restaurants can create custom roles (see lib/permissions.ts,
+   *  migration 0014). Whatever string is here is looked up against that tenant's
+   *  role_permissions rows at each permission check; it isn't validated against a fixed set here. */
+  role: string;
   sessionVersion: number;
   issuedAt: number;
   expiresAt: number;

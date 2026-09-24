@@ -1,6 +1,12 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 
-export type Role = "admin" | "manager" | "cashier" | "inventory";
+/** No longer a fixed union — a role is now whatever's in the `roles` table for this tenant
+ *  (the 4 system ones, lazily seeded, plus any admin-created custom ones). Kept as a named
+ *  type alias rather than inlining `string` everywhere so the intent stays clear at each
+ *  call site. */
+export type Role = string;
+export const SYSTEM_ROLES = ["admin", "manager", "cashier", "inventory"] as const;
+export type SystemRole = (typeof SYSTEM_ROLES)[number];
 
 /** Matches nav-config.ts's NavItem.perm values 1:1, and the DB check constraint on
  *  role_permissions.module. "pos" also gates Ticket Rail, "sales" also gates Unpaid Orders,
@@ -13,13 +19,14 @@ export const PERMISSION_MODULES = [
 ] as const;
 export type PermModule = (typeof PERMISSION_MODULES)[number];
 
-export const ROLES: Role[] = ["admin", "manager", "cashier", "inventory"];
-
 /** Default view-access-by-role, ported from the prototype's seeded permission matrix
  *  (scripts/data/seed-data.js — ADMIN/MANAGER/CASHIER/INVENTORY_PERMS). Used purely to seed
  *  a tenant's role_permissions rows the first time anyone reads them — after that, whatever
- *  is in the table (as edited on the Users & Permissions page) is the source of truth. */
-const DEFAULTS: Record<Role, PermModule[] | "all"> = {
+ *  is in the table (as edited on the Users & Permissions page) is the source of truth. A
+ *  custom role has no entry here, which defaultRows() below treats as "starts with zero
+ *  access until Admin configures it in the matrix" — a deliberately safe default for a
+ *  freshly-created role rather than guessing what it should be able to see. */
+const DEFAULTS: Record<SystemRole, PermModule[] | "all"> = {
   admin: "all",
   manager: [
     "dashboard", "pos", "sales", "customers", "inventory", "restock", "suppliers",
@@ -29,10 +36,27 @@ const DEFAULTS: Record<Role, PermModule[] | "all"> = {
   inventory: ["dashboard", "inventory", "restock", "suppliers"],
 };
 
-function defaultRows(restaurantId: string) {
-  const rows: { restaurant_id: string; role: Role; module: PermModule; can_view: boolean }[] = [];
-  for (const role of ROLES) {
-    const allowed = DEFAULTS[role];
+/** Lists this tenant's roles, lazily seeding the 4 system roles on first read (same
+ *  lazy-create-on-read pattern used throughout this codebase — see /api/settings). System
+ *  roles are protected from rename/delete at the /api/roles layer via `is_system`. */
+export async function listRoles(restaurantId: string): Promise<{ id: string; name: string; is_system: boolean }[]> {
+  const admin = createAdminClient();
+  let { data } = await admin.from("roles").select("id, name, is_system").eq("restaurant_id", restaurantId).order("is_system", { ascending: false }).order("name");
+
+  if (!data || data.length === 0) {
+    const { data: created, error } = await admin
+      .from("roles")
+      .insert(SYSTEM_ROLES.map((name) => ({ restaurant_id: restaurantId, name, is_system: true })))
+      .select("id, name, is_system");
+    if (!error) data = created;
+  }
+  return data ?? [];
+}
+
+function defaultRows(restaurantId: string, roleNames: string[]) {
+  const rows: { restaurant_id: string; role: string; module: PermModule; can_view: boolean }[] = [];
+  for (const role of roleNames) {
+    const allowed = DEFAULTS[role as SystemRole] ?? [];
     for (const module of PERMISSION_MODULES) {
       rows.push({ restaurant_id: restaurantId, role, module, can_view: allowed === "all" || allowed.includes(module) });
     }
@@ -40,34 +64,43 @@ function defaultRows(restaurantId: string) {
   return rows;
 }
 
-/** Full role×module matrix for a tenant, seeding the default rows on first read (mirrors
- *  the same lazy-create-on-read pattern /api/settings uses for restaurant_settings). Used
- *  by the Users & Permissions page to render/edit the whole grid. */
-export async function getPermissionMatrix(restaurantId: string): Promise<Record<Role, Record<PermModule, boolean>>> {
+/** Full role×module matrix for a tenant, seeding default rows for any role that doesn't
+ *  have them yet (covers both "brand new tenant, nothing seeded" and "a custom role was
+ *  just created after the table already had other roles' rows" — see getModuleAccess for
+ *  why seeding used to be all-or-nothing and could silently fail for the second case).
+ *  Used by the Users & Permissions page to render/edit the whole grid. */
+export async function getPermissionMatrix(restaurantId: string): Promise<Record<string, Record<PermModule, boolean>>> {
   const admin = createAdminClient();
-  let { data } = await admin
-    .from("role_permissions")
-    .select("role, module, can_view")
-    .eq("restaurant_id", restaurantId);
+  const roles = await listRoles(restaurantId);
+  const roleNames = roles.map((r) => r.name);
 
-  if (!data || data.length === 0) {
-    const rows = defaultRows(restaurantId);
-    const { error } = await admin.from("role_permissions").insert(rows);
-    if (!error) data = rows;
+  const { data } = await admin.from("role_permissions").select("role, module, can_view").eq("restaurant_id", restaurantId);
+
+  const seenRoles = new Set((data ?? []).map((r) => r.role));
+  const missingRoles = roleNames.filter((r) => !seenRoles.has(r));
+  let rows = data ?? [];
+  if (missingRoles.length > 0) {
+    const toInsert = defaultRows(restaurantId, missingRoles);
+    const { error } = await admin.from("role_permissions").insert(toInsert);
+    if (!error) rows = [...rows, ...toInsert];
   }
 
   const matrix = Object.fromEntries(
-    ROLES.map((role) => [role, Object.fromEntries(PERMISSION_MODULES.map((m) => [m, false]))])
-  ) as Record<Role, Record<PermModule, boolean>>;
-  for (const row of data ?? []) {
-    if (matrix[row.role as Role]) matrix[row.role as Role][row.module as PermModule] = row.can_view;
+    roleNames.map((role) => [role, Object.fromEntries(PERMISSION_MODULES.map((m) => [m, false]))])
+  ) as Record<string, Record<PermModule, boolean>>;
+  for (const row of rows) {
+    if (matrix[row.role]) matrix[row.role][row.module as PermModule] = row.can_view;
   }
-  matrix.admin = Object.fromEntries(PERMISSION_MODULES.map((m) => [m, true])) as Record<PermModule, boolean>;
+  if (matrix.admin) matrix.admin = Object.fromEntries(PERMISSION_MODULES.map((m) => [m, true])) as Record<PermModule, boolean>;
   return matrix;
 }
 
 /** Just the current employee's own accessible modules — what the dashboard layout/sidebar
- *  and per-page guards actually need on every request, without pulling the full 4-role grid. */
+ *  and per-page guards actually need on every request, without pulling the full role×module
+ *  grid. Seeds only THIS role's rows if missing (not every role's — the old version tried to
+ *  insert defaults for every known role whenever any one role's rows were absent, which hit
+ *  a primary-key conflict — and therefore silently failed to seed anything — the moment a
+ *  second role already had rows in the table). */
 export async function getModuleAccess(restaurantId: string, role: Role): Promise<Record<PermModule, boolean>> {
   if (role === "admin") {
     return Object.fromEntries(PERMISSION_MODULES.map((m) => [m, true])) as Record<PermModule, boolean>;
@@ -80,9 +113,9 @@ export async function getModuleAccess(restaurantId: string, role: Role): Promise
     .eq("role", role);
 
   if (!data || data.length === 0) {
-    const rows = defaultRows(restaurantId);
+    const rows = defaultRows(restaurantId, [role]);
     const { error } = await admin.from("role_permissions").insert(rows);
-    if (!error) data = rows.filter((r) => r.role === role);
+    if (!error) data = rows;
   }
 
   const access = Object.fromEntries(PERMISSION_MODULES.map((m) => [m, false])) as Record<PermModule, boolean>;
