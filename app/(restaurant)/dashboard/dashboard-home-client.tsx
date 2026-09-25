@@ -131,7 +131,7 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
         <div className="lg:col-span-2 rounded-xl border border-line bg-surface overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-line-soft">
             <h3 className="font-display font-semibold text-sm text-ink-strong">Recent orders</h3>
-            <Link href="/dashboard/sales" className="text-xs text-chili-400 hover:underline">
+            <Link href="/sales" className="text-xs text-chili-400 hover:underline">
               View all →
             </Link>
           </div>
