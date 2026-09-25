@@ -1,10 +1,24 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
+import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
+import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+import { fetchJson } from "@/lib/fetch-json";
+import { Pencil, UserX } from "lucide-react";
 
 type Role = string;
 type Matrix = Record<Role, Record<string, boolean>>;
 type Category = { id: string; name: string };
+
+type Employee = { id: string; name: string; role: string; status: string; is_user: boolean };
+type RoleOption = { id: string; name: string; is_system: boolean };
+type UserRow = {
+  id: string;
+  employee_id: string;
+  is_active: boolean;
+  created_at: string;
+  employees: { name: string; role: string; status: string } | null;
+};
 
 const SYSTEM_ROLE_META: Record<string, { label: string; color: string }> = {
   admin: { label: "Admin", color: "#D9481F" },
@@ -13,9 +27,6 @@ const SYSTEM_ROLE_META: Record<string, { label: string; color: string }> = {
   inventory: { label: "Inventory Manager", color: "#C99A3E" },
 };
 const CUSTOM_ROLE_COLORS = ["#8A6FD1", "#2E8B8B", "#B0556A", "#6F8A4A", "#C97A4A"];
-/** A custom role has no fixed entry above — falls back to a title-cased label and a color
- *  picked deterministically from its name, so it still reads consistently every render
- *  rather than a different color each time. */
 function roleMeta(role: string): { label: string; color: string } {
   if (SYSTEM_ROLE_META[role]) return SYSTEM_ROLE_META[role];
   let hash = 0;
@@ -44,12 +55,117 @@ const MODULE_LABELS: Record<string, string> = {
   admin: "Admin",
 };
 
-/** Matches the prototype's view-admin ("Users & Permissions") 1:1: the role permission
- *  matrix (togglePerm() in the prototype), default shift timings (saveShift()), and
- *  expense categories (addExpenseCategory()/removeExpenseCategory()) — each panel backed by
- *  a real endpoint now (see lib/permissions.ts) instead of the prototype's in-memory tenant
- *  object, so toggling a cell here actually changes what that role can reach. */
-export function PermissionsClient() {
+/**
+ * Matches the prototype's view-admin ("Users & Permissions") 1:1, with the former standalone
+ * Users page folded in as the top panel: system users (grant/revoke login access), the role
+ * permission matrix, default shift timings, and expense categories.
+ */
+export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean }) {
+  // ---- system users (formerly the standalone /dashboard/users page) ----
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [roleOptions, setRoleOptions] = useState<RoleOption[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [usersLoadError, setUsersLoadError] = useState("");
+  const [userSearch, setUserSearch] = useState("");
+
+  const [userFormOpen, setUserFormOpen] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [fEmployeeId, setFEmployeeId] = useState("");
+  const [fRole, setFRole] = useState("");
+  const [fPin, setFPin] = useState("");
+  const [fError, setFError] = useState("");
+  const [savingUser, setSavingUser] = useState(false);
+
+  async function loadUsers() {
+    setUsersLoading(true);
+    setUsersLoadError("");
+    const [uRes, eRes, rRes] = await Promise.all([
+      fetchJson<{ users: UserRow[] }>("/api/users"),
+      fetchJson<{ employees: Employee[] }>("/api/employees"),
+      fetchJson<{ roles: RoleOption[] }>("/api/roles"),
+    ]);
+    if (!uRes.ok) setUsersLoadError(uRes.error);
+    setUsers(uRes.data?.users ?? []);
+    setEmployees(eRes.data?.employees ?? []);
+    setRoleOptions(rRes.data?.roles ?? []);
+    setUsersLoading(false);
+  }
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  const availableEmployees = employees.filter((e) => e.status === "active" && !e.is_user);
+
+  const filteredUsers = useMemo(() => {
+    const q = userSearch.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) => {
+      const haystack = [u.employees?.name ?? "", u.employees?.role ?? ""].join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [users, userSearch]);
+
+  function openAddUser() {
+    setEditingUserId(null);
+    setFEmployeeId(availableEmployees[0]?.id ?? "");
+    setFRole(availableEmployees[0]?.role ?? roleOptions[0]?.name ?? "");
+    setFPin("");
+    setFError("");
+    setUserFormOpen(true);
+  }
+
+  function openEditUser(u: UserRow) {
+    setEditingUserId(u.employee_id);
+    setFEmployeeId(u.employee_id);
+    setFRole(u.employees?.role ?? roleOptions[0]?.name ?? "");
+    setFPin("");
+    setFError("");
+    setUserFormOpen(true);
+  }
+
+  async function saveUser() {
+    if (!fEmployeeId) {
+      setFError("Select an employee");
+      return;
+    }
+    if (!editingUserId && !/^\d{4}$/.test(fPin)) {
+      setFError("A 4-digit PIN is required for a new user");
+      return;
+    }
+    if (fPin && !/^\d{4}$/.test(fPin)) {
+      setFError("PIN must be exactly 4 digits");
+      return;
+    }
+    setSavingUser(true);
+    setFError("");
+    const row: Record<string, unknown> = { id: fEmployeeId, role: fRole };
+    if (fPin) row.pin = fPin;
+    const res = await fetch("/api/employees", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "update", row }),
+    });
+    setSavingUser(false);
+    if (!res.ok) {
+      setFError((await res.json()).error ?? "Could not save");
+      return;
+    }
+    setUserFormOpen(false);
+    await loadUsers();
+  }
+
+  async function revokeUser(u: UserRow) {
+    if (!confirm(`Revoke login access for ${u.employees?.name ?? "this user"}? They'll stay on the employee roster.`)) return;
+    const res = await fetch("/api/employees", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "revokeUser", row: { id: u.employee_id } }),
+    });
+    if (res.ok) await loadUsers();
+  }
+
+  // ---- role permission matrix / shift timings / expense categories (unchanged) ----
   const [modules, setModules] = useState<string[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [matrix, setMatrix] = useState<Matrix | null>(null);
@@ -100,7 +216,6 @@ export function PermissionsClient() {
     if (!res.ok) {
       const data = await res.json();
       setPermMsg(data.error || "Could not save");
-      // revert on failure
       setMatrix((prev) => (prev ? { ...prev, [role]: { ...prev[role], [module]: !canView } } : prev));
       return;
     }
@@ -166,6 +281,81 @@ export function PermissionsClient() {
 
   return (
     <main className="p-6 md:p-8 space-y-5">
+      {/* ---- System users (top panel) ---- */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[220px] max-w-sm">
+          <input
+            value={userSearch}
+            onChange={(e) => setUserSearch(e.target.value)}
+            placeholder="Search name or role…"
+            className={searchInputCls}
+          />
+        </div>
+        {canManageUsers && (
+          <button
+            onClick={openAddUser}
+            disabled={availableEmployees.length === 0}
+            className={`${addBtnCls} ml-auto disabled:opacity-40`}
+            title={availableEmployees.length === 0 ? "Every active employee already has a user account" : undefined}
+          >
+            + Add User
+          </button>
+        )}
+      </div>
+
+      {usersLoadError && (
+        <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-sm text-crimson-400">
+          Couldn&apos;t load users: {usersLoadError}
+        </p>
+      )}
+
+      <Panel loading={usersLoading}>
+        <PanelHead title="System users" subtitle="Employees who currently have a login (PIN) — see the Employees page for the full roster" />
+        <TableScroll>
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-line">
+                <Th>Employee</Th>
+                <Th>Role</Th>
+                <Th>Status</Th>
+                <Th>Added</Th>
+                <Th>Actions</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredUsers.map((u) => (
+                <tr key={u.id} className="border-b border-line last:border-0">
+                  <Td className="font-medium text-ink-strong">{u.employees?.name ?? "—"}</Td>
+                  <Td className="text-ink-mid capitalize">{u.employees?.role ?? "—"}</Td>
+                  <Td>
+                    <Badge tone={u.is_active ? "basil" : "steel"}>{u.is_active ? "Active" : "Revoked"}</Badge>
+                  </Td>
+                  <Td className="text-ink-mid">{u.created_at.slice(0, 10)}</Td>
+                  <Td>
+                    {canManageUsers && (
+                      <div className="flex gap-1.5">
+                        <IconBtn title="Edit (change PIN or role)" onClick={() => openEditUser(u)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </IconBtn>
+                        {u.is_active && (
+                          <IconBtn title="Revoke access" onClick={() => revokeUser(u)}>
+                            <UserX className="h-3.5 w-3.5" />
+                          </IconBtn>
+                        )}
+                      </div>
+                    )}
+                  </Td>
+                </tr>
+              ))}
+              {!usersLoading && filteredUsers.length === 0 && (
+                <EmptyRow colSpan={5} label={userSearch ? "No users match that search." : "No users yet — add one from an existing employee."} />
+              )}
+            </tbody>
+          </table>
+        </TableScroll>
+      </Panel>
+
+      {/* ---- Role permission matrix ---- */}
       <div className="relative rounded-xl border border-line bg-surface p-6">
         <div className="mb-4">
           <h3 className="font-display font-semibold text-ink-strong text-[15px]">Role permissions</h3>
@@ -219,6 +409,7 @@ export function PermissionsClient() {
         )}
       </div>
 
+      {/* ---- Shift timings + expense categories ---- */}
       <div className="grid md:grid-cols-2 gap-5">
         <div className="relative rounded-xl border border-line bg-surface p-6">
           <div className="mb-4">
@@ -297,6 +488,58 @@ export function PermissionsClient() {
           <LoadingOverlay show={addingCategory} />
         </div>
       </div>
+
+      {/* ---- Add / edit user modal ---- */}
+      <Modal
+        busy={savingUser}
+        open={userFormOpen}
+        onClose={() => setUserFormOpen(false)}
+        title={editingUserId ? "Edit user" : "Add user"}
+        footer={
+          <>
+            <button onClick={() => setUserFormOpen(false)} className={btnGhost}>
+              Cancel
+            </button>
+            <button onClick={saveUser} disabled={savingUser} className={btnPrimary}>
+              {savingUser ? "Saving…" : "Save"}
+            </button>
+          </>
+        }
+      >
+        {fError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{fError}</p>}
+        <Field label="Employee">
+          {editingUserId ? (
+            <input value={users.find((u) => u.employee_id === editingUserId)?.employees?.name ?? ""} disabled className={inputCls} />
+          ) : (
+            <select value={fEmployeeId} onChange={(e) => setFEmployeeId(e.target.value)} className={inputCls}>
+              {availableEmployees.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Role">
+          <select value={fRole} onChange={(e) => setFRole(e.target.value)} className={inputCls}>
+            {roleOptions.map((r) => (
+              <option key={r.id} value={r.name}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label={editingUserId ? "New PIN (leave blank to keep current)" : "4-digit PIN"}>
+          <input
+            value={fPin}
+            onChange={(e) => setFPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            inputMode="numeric"
+            maxLength={4}
+            placeholder="••••"
+            className={inputCls}
+          />
+        </Field>
+      </Modal>
     </main>
   );
 }

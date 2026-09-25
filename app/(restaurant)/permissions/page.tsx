@@ -10,5 +10,5 @@ export default async function PermissionsPage() {
   if (!session) redirect("/login");
   if (!(await hasModuleAccess(session.restaurantId, session.role, "admin"))) redirect("/dashboard");
 
-  return <PermissionsClient />;
+  return <PermissionsClient canManageUsers={session.role === "admin" || session.role === "manager"} />;
 }
