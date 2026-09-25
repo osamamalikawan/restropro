@@ -255,7 +255,7 @@ export default function NotificationBell() {
 
           <div className="border-t border-line px-4 py-2.5">
             <Link
-              href="/dashboard/notifications"
+              href="/notifications"
               onClick={() => setOpen(false)}
               className="text-xs font-medium text-ink-mid hover:text-ink-strong"
             >

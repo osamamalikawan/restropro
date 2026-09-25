@@ -189,7 +189,7 @@ export function PosClient({
           <PageLoader label="Loading menu…" />
         ) : products.length === 0 ? (
           <p className="text-ink-faint text-sm">
-            No products yet — add some from <Link href="/dashboard/menu" className="underline">Menu</Link>.
+            No products yet — add some from <Link href="/menu" className="underline">Menu</Link>.
           </p>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">

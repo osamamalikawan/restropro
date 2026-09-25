@@ -3,11 +3,21 @@ import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-
 
 /** Protects the restaurant app. Owner-facing Supabase-Auth routes are protected separately
  *  by RLS + server-side checks in their own layouts; this middleware specifically guards the
- *  PIN-authenticated staff app, since that traffic carries our own cookie, not a Supabase one. */
+ *  PIN-authenticated staff app, since that traffic carries our own cookie, not a Supabase one.
+ *
+ *  Every page under app/(restaurant)/ — dashboard, inventory, employees, accounts, permissions,
+ *  etc. — plus /pos needs this check. Rather than listing each one in `matcher` (which silently
+ *  stops protecting a page the moment it's renamed or moved, as happened when the dashboard/*
+ *  routes were flattened to top-level paths), the matcher below runs on effectively everything
+ *  except static assets and /api, and the small PUBLIC_PATHS allowlist below carves out the
+ *  pages that must stay reachable without a session: the landing page, signup, and both staff
+ *  login screens. Any new page added under (restaurant)/ is protected automatically. */
+const PUBLIC_PATHS = ["/", "/login", "/signup"];
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const isRestaurantApp = pathname.startsWith("/dashboard") || pathname.startsWith("/pos");
-  if (!isRestaurantApp) return NextResponse.next();
+  const isPublic = PUBLIC_PATHS.includes(pathname) || pathname.startsWith("/login/");
+  if (isPublic) return NextResponse.next();
 
   const token = req.cookies.get(STAFF_SESSION_COOKIE)?.value;
   const session = await verifyStaffSessionToken(token);
@@ -25,5 +35,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/pos/:path*"],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
