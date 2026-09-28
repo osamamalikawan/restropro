@@ -77,7 +77,7 @@ export function PrinterTestClient() {
     setUsbBusy(true);
     setUsbStatus(null);
     try {
-      const found = await invokeTauri<UsbDevice[]>("list_usb_printers");
+      const found = await invokeTauri<UsbDevice[]>("list_windows_printers");
       setDevices(found);
       setSelectedIdx(0);
       setUsbStatus({ ok: true, message: `Found ${found.length} USB device(s).` });
