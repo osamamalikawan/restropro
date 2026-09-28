@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-session";
 import { hasModuleAccess } from "@/lib/permissions";
-import { PrinterSettings } from "./Printer-Settings";
+import { PrinterSettings } from "./printer-settings";
 
 export default async function PrinterSettingsPage() {
   const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
