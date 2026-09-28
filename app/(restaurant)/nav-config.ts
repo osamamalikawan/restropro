@@ -38,7 +38,6 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Operate",
     items: [
-      { href: "/printer-test", label: "Printer test", icon: ShoppingCart, perm: "pos" },
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, perm: "dashboard" },
       { href: "/pos", label: "Point of Sale", icon: ShoppingCart, perm: "pos" },
       { href: "/ticket-rail", label: "Ticket Rail", icon: Ticket, perm: "pos" },
