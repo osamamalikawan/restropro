@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Bell,
   type LucideIcon,
+  Printer,
 } from "lucide-react";
 
 export type Role = string;
@@ -75,6 +76,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/notifications", label: "Notifications", icon: Bell, perm: "Notifications"},
       { href: "/settings", label: "Settings", icon: Settings, perm: "settings" },
+      { href: "/printer-settings", label: "Printer Settings", icon: Printer, perm: "settings" },
       { href: "/permissions", label: "Users & Permissions", icon: ShieldCheck, perm: "admin" },
     ],
   },
