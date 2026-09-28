@@ -6,14 +6,6 @@ import { useState } from "react";
  *  through the server. Opening it in a plain browser tab will show the "not available" notice
  *  below instead of the test controls. */
 
-type UsbDevice = {
-  vendor_id: number;
-  product_id: number;
-  manufacturer: string | null;
-  product: string | null;
-  serial: string | null;
-};
-
 function hasTauri(): boolean {
   return typeof window !== "undefined" && !!(window as any).__TAURI__;
 }
@@ -42,11 +34,11 @@ export function PrinterTestClient() {
   const [lanBusy, setLanBusy] = useState(false);
   const [lanStatus, setLanStatus] = useState<{ ok: boolean; message: string } | null>(null);
 
-  // USB state
-  const [devices, setDevices] = useState<UsbDevice[]>([]);
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const [usbBusy, setUsbBusy] = useState(false);
-  const [usbStatus, setUsbStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  // Windows printer (USB / installed driver) state
+  const [printers, setPrinters] = useState<string[]>([]);
+  const [selectedName, setSelectedName] = useState("");
+  const [winBusy, setWinBusy] = useState(false);
+  const [winStatus, setWinStatus] = useState<{ ok: boolean; message: string } | null>(null);
 
   async function testLanConnection() {
     setLanBusy(true);
@@ -73,39 +65,37 @@ export function PrinterTestClient() {
     }
   }
 
-  async function refreshUsbDevices() {
-    setUsbBusy(true);
-    setUsbStatus(null);
+  async function refreshPrinters() {
+    setWinBusy(true);
+    setWinStatus(null);
     try {
-      const found = await invokeTauri<UsbDevice[]>("list_windows_printers");
-      setDevices(found);
-      setSelectedIdx(0);
-      setUsbStatus({ ok: true, message: `Found ${found.length} USB device(s).` });
+      const found = await invokeTauri<string[]>("list_windows_printers");
+      setPrinters(found);
+      setSelectedName(found[0] ?? "");
+      setWinStatus({ ok: true, message: `Found ${found.length} printer(s).` });
     } catch (e: any) {
-      setUsbStatus({ ok: false, message: String(e) });
+      setWinStatus({ ok: false, message: String(e) });
     } finally {
-      setUsbBusy(false);
+      setWinBusy(false);
     }
   }
-  async function printUsb() {
-    const device = devices[selectedIdx];
-    if (!device) {
-      setUsbStatus({ ok: false, message: "Refresh the device list and pick one first." });
+  async function printWindows() {
+    if (!selectedName) {
+      setWinStatus({ ok: false, message: "Refresh the printer list and pick one first." });
       return;
     }
-    setUsbBusy(true);
-    setUsbStatus(null);
+    setWinBusy(true);
+    setWinStatus(null);
     try {
-      await invokeTauri("print_raw_usb", {
-        vendorId: device.vendor_id,
-        productId: device.product_id,
+      await invokeTauri("print_raw_windows", {
+        printerName: selectedName,
         data: buildTestPayload("USB test print"),
       });
-      setUsbStatus({ ok: true, message: "Print job sent." });
+      setWinStatus({ ok: true, message: `Print job sent to "${selectedName}".` });
     } catch (e: any) {
-      setUsbStatus({ ok: false, message: String(e) });
+      setWinStatus({ ok: false, message: String(e) });
     } finally {
-      setUsbBusy(false);
+      setWinBusy(false);
     }
   }
 
@@ -163,46 +153,44 @@ export function PrinterTestClient() {
       </section>
 
       <section className="rounded-xl border border-line bg-surface p-5">
-        <h2 className="font-display font-semibold text-base mb-1">USB printer</h2>
+        <h2 className="font-display font-semibold text-base mb-1">USB / installed printer</h2>
         <p className="text-xs text-ink-mid mb-4">
-          The printer must already be bound to the generic WinUSB driver (via Zadig) — a one-time step per printer.
+          Uses printers already installed in Windows (with their normal driver). Install the printer's driver first,
+          then pick it here — no Zadig needed.
         </p>
         <div className="flex gap-2 mb-3">
           <button
-            onClick={refreshUsbDevices}
-            disabled={!tauriPresent || usbBusy}
+            onClick={refreshPrinters}
+            disabled={!tauriPresent || winBusy}
             className="px-4 py-2 rounded-lg border border-line bg-raised text-sm font-medium disabled:opacity-50"
           >
-            {usbBusy ? "Scanning…" : "Refresh USB devices"}
+            {winBusy ? "Scanning…" : "Refresh printers"}
           </button>
         </div>
-        {devices.length > 0 && (
+        {printers.length > 0 && (
           <div className="flex gap-2 mb-3">
             <select
-              value={selectedIdx}
-              onChange={(e) => setSelectedIdx(Number(e.target.value))}
+              value={selectedName}
+              onChange={(e) => setSelectedName(e.target.value)}
               className="flex-1 rounded-md bg-raised border border-line px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-chili-500"
             >
-              {devices.map((d, i) => (
-                <option key={i} value={i}>
-                  {(d.manufacturer ? d.manufacturer + " " : "") + (d.product ?? "Unknown device")} — {d.vendor_id
-                    .toString(16)
-                    .padStart(4, "0")}
-                  :{d.product_id.toString(16).padStart(4, "0")}
+              {printers.map((name) => (
+                <option key={name} value={name}>
+                  {name}
                 </option>
               ))}
             </select>
             <button
-              onClick={printUsb}
-              disabled={!tauriPresent || usbBusy}
+              onClick={printWindows}
+              disabled={!tauriPresent || winBusy}
               className="px-4 py-2 rounded-lg bg-chili-500 text-white text-sm font-semibold disabled:opacity-50"
             >
-              {usbBusy ? "Printing…" : "Test print"}
+              {winBusy ? "Printing…" : "Test print"}
             </button>
           </div>
         )}
-        {usbStatus && (
-          <p className={`text-xs ${usbStatus.ok ? "text-basil-400" : "text-crimson-400"}`}>{usbStatus.message}</p>
+        {winStatus && (
+          <p className={`text-xs ${winStatus.ok ? "text-basil-400" : "text-crimson-400"}`}>{winStatus.message}</p>
         )}
       </section>
     </main>
