@@ -2,7 +2,17 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { verifyStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-session";
 import { hasModuleAccess } from "@/lib/permissions";
-import { PrinterSettings } from "./printer-settings";
+
+function PrinterSettings() {
+  return (
+    <section className="rounded-xl border border-line bg-surface p-6">
+      <h2 className="font-display text-lg font-semibold">Printer settings</h2>
+      <p className="mt-2 text-sm text-ink-mid">
+        Configure your printer from the computer that will be used to print receipts.
+      </p>
+    </section>
+  );
+}
 
 export default async function PrinterSettingsPage() {
   const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
