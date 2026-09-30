@@ -400,8 +400,7 @@ export function PosClient({
         tableId: tableId || null,
         areaId: areaId || null,
         deliveryCharge: delivery,
-        taxAmount: tax,
-        fbrFee: fee,
+        taxMethod: primaryMethod, // server picks the cash/card rate from this (same rule as the popup)
         customerId: selectedCustomer?.id || null,
         customerName: selectedCustomer ? undefined : custName.trim() || undefined,
         customerPhone: selectedCustomer ? undefined : custPhone.trim() || undefined,
