@@ -1,14 +1,20 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ChevronLeft, ChevronRight, Printer, X } from "lucide-react";
 import { EditOrderModal } from "@/components/edit-order-modal";
 import { LoadingOverlay, PageLoader } from "@/components/ui/loading";
+import { printSale, type SaleSnapshot } from "@/lib/posPrint";
+
+type Kitchen = "New" | "Preparing" | "Completed";
+type OrderType = "dine_in" | "takeaway" | "delivery";
 
 type Sale = {
   id: string;
   order_no: number;
-  order_type: "dine_in" | "takeaway" | "delivery";
+  order_type: OrderType;
   status: "completed" | "unpaid" | "cancelled";
-  kitchen_status: "New" | "Preparing" | "Completed";
+  kitchen_status: Kitchen;
   delivery_charge: number;
   created_at: string;
   customers: { name: string } | null;
@@ -17,70 +23,155 @@ type Sale = {
   sale_items: { product_id: string; name: string; unit_price: number; quantity: number }[];
 };
 
-const COLUMNS: { key: Sale["kitchen_status"]; label: string; hint: string }[] = [
-  { key: "New", label: "Active", hint: "Just fired" },
-  { key: "Preparing", label: "Preparing", hint: "On the line" },
-  { key: "Completed", label: "Completed", hint: "Ready or served" },
+// A cart the POS parked with "Hold" (still open for more items). Lives in this browser's
+// localStorage — same key/shape the POS writes (see app/pos/pos-client.tsx).
+type Held = {
+  id: string;
+  orderType: OrderType;
+  tableId: string;
+  cart: { productId: string; name: string; price: number; qty: number }[];
+  heldAt: number;
+  kitchenStatus?: Kitchen;
+};
+
+type Card = { key: string; col: Kitchen; at: number; sale?: Sale; held?: Held };
+
+const COLUMNS: { key: Kitchen; label: string; pill: string }[] = [
+  { key: "New", label: "Active", pill: "bg-chili-500/20 text-chili-400" },
+  { key: "Preparing", label: "Preparing", pill: "bg-turmeric-500/20 text-turmeric-400" },
+  { key: "Completed", label: "Completed", pill: "bg-basil-500/20 text-basil-400" },
 ];
+const TYPE_LABEL: Record<OrderType, string> = { dine_in: "Dine In", takeaway: "Takeaway", delivery: "Delivery" };
+const BLINK_MS = 15000;
 
-const TYPE_LABEL: Record<Sale["order_type"], string> = { dine_in: "Dine In", takeaway: "Takeaway", delivery: "Delivery" };
+const RT_CSS = `
+.rt-scroll{scrollbar-width:thin;scrollbar-color:rgb(var(--line)) transparent}
+.rt-scroll::-webkit-scrollbar{width:10px}
+.rt-scroll::-webkit-scrollbar-track{background:transparent}
+.rt-scroll::-webkit-scrollbar-thumb{background:rgb(var(--line));border-radius:999px;border:3px solid transparent;background-clip:content-box}
+@keyframes rt-blink{0%,100%{box-shadow:0 0 0 0 rgba(217,72,31,0)}50%{box-shadow:0 0 0 3px rgba(217,72,31,.6)}}
+.rt-blink{animation:rt-blink 1s ease-in-out infinite;border-color:#D9481F!important}
+`;
 
-/**
- * Matches the prototype's ticket-rail.js: three kanban columns (New/Preparing/Completed),
- * move-forward/move-back buttons per card. Auto-refreshes every 5s like the prototype's
- * trStartAutoRefresh(). Scope note: the prototype also shows pre-payment "held" tickets
- * (a cart saved before checkout, still being added to) alongside fired ones — this only
- * shows real sales (including unpaid ones), since a held-cart concept doesn't exist in the
- * data model yet. See migration 0010's header comment.
- */
-export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
+const fmtTime = (ms: number) => new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+
+export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boolean; restaurantId: string }) {
+  const router = useRouter();
+  const heldKey = `rp_pos_held_${restaurantId}`;
+
   const [sales, setSales] = useState<Sale[]>([]);
+  const [held, setHeld] = useState<Held[]>([]);
+  const [tables, setTables] = useState<{ id: string; number: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [taxRate, setTaxRate] = useState(0.05);
+  const [paper, setPaper] = useState("80");
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [blink, setBlink] = useState<Record<string, true>>({});
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overCol, setOverCol] = useState<Kitchen | null>(null);
+  const seen = useRef<Set<string> | null>(null); // null until the first load finishes, so nothing blinks on page open
+
+  function readHeld(): Held[] {
+    try {
+      const raw = localStorage.getItem(heldKey);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+  function writeHeld(next: Held[]) {
+    setHeld(next);
+    try {
+      localStorage.setItem(heldKey, JSON.stringify(next));
+    } catch {}
+  }
+
+  function noteNew(keys: string[]) {
+    if (seen.current === null) {
+      seen.current = new Set(keys);
+      return;
+    }
+    const fresh = keys.filter((k) => !seen.current!.has(k));
+    fresh.forEach((k) => seen.current!.add(k));
+    if (fresh.length === 0) return;
+    setBlink((b) => ({ ...b, ...Object.fromEntries(fresh.map((k) => [k, true as const])) }));
+    setTimeout(() => setBlink((b) => Object.fromEntries(Object.entries(b).filter(([k]) => !fresh.includes(k))) as Record<string, true>), BLINK_MS);
+  }
 
   async function load() {
     const res = await fetch("/api/sales?limit=60");
-    const data = await res.json();
-    if (res.ok) setSales((data.sales ?? []).filter((s: Sale) => s.status !== "cancelled"));
+    const data = await res.json().catch(() => ({}));
+    const list: Sale[] = res.ok ? (data.sales ?? []).filter((s: Sale) => s.status !== "cancelled") : [];
+    if (res.ok) setSales(list);
+    const h = readHeld();
+    setHeld(h);
+    noteNew([...list.map((s) => `sale:${s.id}`), ...h.map((t) => `held:${t.id}`)]);
     setLoading(false);
   }
+
   useEffect(() => {
     load();
+    fetch("/api/tables").then((r) => r.json()).then((d) => setTables(d.tables ?? [])).catch(() => {});
     fetch("/api/settings")
       .then((r) => r.json())
-      .then((d) => d.settings?.tax_rate != null && setTaxRate(Number(d.settings.tax_rate) / 100));
+      .then((d) => {
+        if (d.settings?.tax_rate != null) setTaxRate(Number(d.settings.tax_rate) / 100);
+        if (d.settings?.paper_width) setPaper(String(d.settings.paper_width));
+      })
+      .catch(() => {});
     const id = setInterval(load, 5000);
-    return () => clearInterval(id);
+    const onStorage = (e: StorageEvent) => e.key === heldKey && load();
+    window.addEventListener("storage", onStorage);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("storage", onStorage);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function move(saleId: string, kitchenStatus: string) {
+  const cards: Card[] = [
+    ...sales.map((s): Card => ({ key: `sale:${s.id}`, col: s.kitchen_status, at: new Date(s.created_at).getTime(), sale: s })),
+    ...held.map((t): Card => ({ key: `held:${t.id}`, col: t.kitchenStatus ?? "New", at: t.heldAt, held: t })),
+  ];
+
+  async function moveCard(card: Card, to: Kitchen) {
+    if (card.col === to) return;
+    if (card.held) {
+      writeHeld(readHeld().map((t) => (t.id === card.held!.id ? { ...t, kitchenStatus: to } : t)));
+      return;
+    }
+    const saleId = card.sale!.id;
     setBusyId(saleId);
-    setSales((prev) => prev.map((s) => (s.id === saleId ? { ...s, kitchen_status: kitchenStatus as Sale["kitchen_status"] } : s)));
+    setSales((prev) => prev.map((s) => (s.id === saleId ? { ...s, kitchen_status: to } : s)));
     const res = await fetch("/api/sales/kitchen-status", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ saleId, kitchenStatus }),
+      body: JSON.stringify({ saleId, kitchenStatus: to }),
     });
     if (!res.ok) {
-      setError((await res.json()).error);
+      setError((await res.json().catch(() => ({}))).error || "Couldn't move the ticket");
       await load();
     }
     setBusyId(null);
   }
 
-  async function cancelTicket(saleId: string, orderNo: number) {
-    if (!confirm(`Cancel order #${orderNo}? This restores its inventory and removes it from today's income.`)) return;
-    setBusyId(saleId);
+  async function cancelTicket(card: Card) {
+    if (card.held) {
+      if (confirm("Discard this held ticket?")) writeHeld(readHeld().filter((t) => t.id !== card.held!.id));
+      return;
+    }
+    const s = card.sale!;
+    if (!confirm(`Cancel order #${s.order_no}? This restores its inventory and removes it from today's income.`)) return;
+    setBusyId(s.id);
     const res = await fetch("/api/sales/cancel", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ saleId }),
+      body: JSON.stringify({ saleId: s.id }),
     });
     if (!res.ok) {
-      setError((await res.json()).error);
+      setError((await res.json().catch(() => ({}))).error || "Couldn't cancel the order");
       setBusyId(null);
       return;
     }
@@ -88,102 +179,235 @@ export function TicketRailClient({ canCancel }: { canCancel: boolean }) {
     setBusyId(null);
   }
 
+  async function printKitchen(s: Sale) {
+    setError("");
+    const snap: SaleSnapshot = {
+      restaurantName: "",
+      address: "",
+      phone: "",
+      header: "",
+      footer: "",
+      paper,
+      cashier: s.employees?.name ?? "",
+      orderTypeLabel: TYPE_LABEL[s.order_type] + (s.tables?.number ? ` - Table ${s.tables.number}` : ""),
+      customerName: s.customers?.name ?? "",
+      customerPhone: "",
+      items: s.sale_items.map((i) => ({ name: i.name, qty: i.quantity, price: i.unit_price })),
+      subtotal: 0,
+      delivery: 0,
+      taxLabel: "",
+      tax: 0,
+      fee: 0,
+      total: 0,
+      payments: [],
+    };
+    try {
+      await printSale("kitchen", snap, s.order_no);
+    } catch (e) {
+      setError(`Kitchen slip didn't print: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  const heldTitle = (t: Held) =>
+    t.orderType === "dine_in" ? `Table ${tables.find((x) => x.id === t.tableId)?.number ?? "—"}` : TYPE_LABEL[t.orderType];
+
+  const arrowBtn =
+    "grid h-7 w-7 place-items-center rounded-md border border-line bg-canvas text-ink-mid hover:border-chili-500 hover:text-ink-strong disabled:opacity-40";
+  const iconBtn =
+    "grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-line bg-canvas text-ink-mid hover:border-chili-500 hover:text-ink-strong disabled:opacity-40";
+
   return (
-    <main className="p-6 md:p-8">
-      {error && <p className="text-crimson-400 text-sm mb-3">{error}</p>}
+    <main className="p-4 sm:p-6">
+      <style>{RT_CSS}</style>
+      <p className="mb-4 text-xs text-ink-faint">
+        Drag a ticket to a new column, or use the ‹ › buttons. Held dine-in tickets (still open for more items) show up
+        right alongside fired orders — new tickets blink for 15 seconds.
+      </p>
+
+      {error && (
+        <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-crimson-500/40 bg-crimson-500/10 px-3 py-2 text-sm text-crimson-400">
+          <span>{error}</span>
+          <button onClick={() => setError("")} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <PageLoader label="Loading tickets…" />
       ) : (
-      <div className="grid md:grid-cols-3 gap-5">
-        {COLUMNS.map((col, colIdx) => {
-          const items = sales
-            .filter((s) => s.kitchen_status === col.key)
-            .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-          return (
-            <div key={col.key} className="rounded-xl border border-line bg-surface flex flex-col min-h-[300px]">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-line-soft">
-                <div>
-                  <div className="font-display font-semibold text-sm text-ink-strong">{col.label}</div>
-                  <div className="text-[11px] text-ink-faint">{col.hint}</div>
+        <div className="grid items-start gap-4 md:grid-cols-3">
+          {COLUMNS.map((col, colIdx) => {
+            const items = cards.filter((c) => c.col === col.key).sort((a, b) => b.at - a.at);
+            return (
+              <section
+                key={col.key}
+                onDragOver={(e) => {
+                  if (!dragKey) return;
+                  e.preventDefault();
+                  setOverCol(col.key);
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) setOverCol(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const card = cards.find((c) => c.key === dragKey);
+                  setDragKey(null);
+                  setOverCol(null);
+                  if (card) moveCard(card, col.key);
+                }}
+                className={`rounded-2xl border bg-surface transition-colors ${
+                  overCol === col.key ? "border-chili-500" : "border-line"
+                }`}
+              >
+                <header className="flex items-center justify-between border-b border-line px-5 py-4">
+                  <h2 className="font-display text-base font-semibold">{col.label}</h2>
+                  <span className={`grid h-6 min-w-[24px] place-items-center rounded-full px-1.5 text-xs font-bold ${col.pill}`}>
+                    {items.length}
+                  </span>
+                </header>
+
+                <div className="rt-scroll min-h-[120px] space-y-3 p-3 md:max-h-[calc(100dvh-13rem)] md:overflow-y-auto">
+                  {items.length === 0 && <p className="py-8 text-center text-xs text-ink-faint">No tickets here.</p>}
+                  {items.map((c) => {
+                    const s = c.sale;
+                    const t = c.held;
+                    const lines = s ? s.sale_items.map((i) => ({ q: i.quantity, n: i.name })) : t!.cart.map((i) => ({ q: i.qty, n: i.name }));
+                    return (
+                      <article
+                        key={c.key}
+                        draggable
+                        onDragStart={(e) => {
+                          setDragKey(c.key);
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", c.key);
+                        }}
+                        onDragEnd={() => {
+                          setDragKey(null);
+                          setOverCol(null);
+                        }}
+                        className={`relative cursor-grab rounded-xl border border-line bg-raised p-3.5 active:cursor-grabbing ${
+                          blink[c.key] ? "rt-blink" : ""
+                        } ${dragKey === c.key ? "opacity-50" : ""}`}
+                      >
+                        <div className="mb-1.5 flex items-center justify-between gap-2">
+                          <span className="font-mono text-sm font-bold">{s ? `#${s.order_no}` : heldTitle(t!)}</span>
+                          <div className="flex items-center gap-1.5">
+                            {s?.status === "unpaid" && (
+                              <span className="rounded-full bg-turmeric-500/20 px-2 py-1 text-[10px] font-bold text-turmeric-400">UNPAID</span>
+                            )}
+                            {t ? (
+                              <span className="rounded-full bg-chili-500/20 px-2.5 py-1 text-[10px] font-bold text-chili-400">
+                                HELD — adding items
+                              </span>
+                            ) : (
+                              s?.employees?.name && (
+                                <span className="rounded-full bg-hover px-2.5 py-1 text-[11px] font-semibold text-ink-mid">
+                                  {s.employees.name}
+                                </span>
+                              )
+                            )}
+                          </div>
+                        </div>
+
+                        {s ? (
+                          <p className="text-xs font-medium text-ink-mid">
+                            {TYPE_LABEL[s.order_type]}
+                            {s.tables?.number && ` ${""}· Table ${s.tables.number}`}
+                            {s.customers?.name && ` · ${s.customers.name}`}
+                          </p>
+                        ) : (
+                          <p className="text-xs font-medium text-ink-mid">{TYPE_LABEL[t!.orderType]}</p>
+                        )}
+
+                        <div className="mt-2.5 space-y-0.5 text-xs text-ink-mid">
+                          {lines.slice(0, 6).map((l, i) => (
+                            <div key={i}>
+                              {l.q}× {l.n}
+                            </div>
+                          ))}
+                          {lines.length > 6 && <div className="text-ink-faint">+{lines.length - 6} more</div>}
+                        </div>
+
+                        <div className="mt-3 flex items-center justify-between border-t border-dashed border-line pt-3">
+                          <span className="font-mono text-[11px] text-ink-faint">{fmtTime(c.at)}</span>
+                          <div className="flex gap-1.5">
+                            {colIdx > 0 && (
+                              <button
+                                onClick={() => moveCard(c, COLUMNS[colIdx - 1].key)}
+                                disabled={!!s && busyId === s.id}
+                                className={arrowBtn}
+                                title="Move back"
+                                aria-label="Move back"
+                              >
+                                <ChevronLeft size={14} />
+                              </button>
+                            )}
+                            {colIdx < COLUMNS.length - 1 && (
+                              <button
+                                onClick={() => moveCard(c, COLUMNS[colIdx + 1].key)}
+                                disabled={!!s && busyId === s.id}
+                                className={arrowBtn}
+                                title="Move forward"
+                                aria-label="Move forward"
+                              >
+                                <ChevronRight size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex gap-2">
+                          {t ? (
+                            <button
+                              onClick={() => router.push(`/pos?resume=${encodeURIComponent(t.id)}`)}
+                              className="h-10 flex-1 rounded-lg border border-line bg-canvas text-sm font-bold hover:border-chili-500"
+                            >
+                              Add items / Charge
+                            </button>
+                          ) : (
+                            <>
+                              {canCancel && (
+                                <button
+                                  onClick={() => setEditingSale(s!)}
+                                  disabled={busyId === s!.id}
+                                  className="h-10 flex-1 rounded-lg border border-line bg-canvas text-sm font-bold hover:border-chili-500 disabled:opacity-40"
+                                >
+                                  Edit
+                                </button>
+                              )}
+                              <button
+                                onClick={() => printKitchen(s!)}
+                                className={canCancel ? iconBtn : `${iconBtn} flex-1 w-auto`}
+                                title="Print kitchen slip"
+                                aria-label="Print kitchen slip"
+                              >
+                                <Printer size={15} />
+                              </button>
+                            </>
+                          )}
+                          {(canCancel || t) && (
+                            <button
+                              onClick={() => cancelTicket(c)}
+                              disabled={!!s && busyId === s.id}
+                              className={`${iconBtn} text-crimson-400 hover:border-crimson-500 hover:text-crimson-400`}
+                              title={t ? "Discard held ticket" : "Cancel order"}
+                              aria-label={t ? "Discard held ticket" : "Cancel order"}
+                            >
+                              <X size={15} />
+                            </button>
+                          )}
+                        </div>
+                        {s && <LoadingOverlay show={busyId === s.id} />}
+                      </article>
+                    );
+                  })}
                 </div>
-                <span className="text-xs font-semibold text-ink-mid bg-raised rounded-full w-6 h-6 flex items-center justify-center">
-                  {items.length}
-                </span>
-              </div>
-              <div className="flex-1 p-3 space-y-2.5 overflow-y-auto">
-                {items.length === 0 && <p className="text-xs text-ink-faint text-center py-6">No tickets here.</p>}
-                {items.map((s) => (
-                  <div key={s.id} className="relative rounded-lg border border-line bg-raised p-3">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="font-mono text-xs font-semibold">#{s.order_no}</span>
-                      {s.status === "unpaid" && (
-                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-turmeric-500/20 text-turmeric-400">UNPAID</span>
-                      )}
-                    </div>
-                    <div className="text-xs text-ink-mid mb-1.5">
-                      {TYPE_LABEL[s.order_type]}
-                      {s.tables?.number && ` · Table ${s.tables.number}`}
-                      {s.customers?.name && ` · ${s.customers.name}`}
-                    </div>
-                    {s.employees?.name && <div className="text-[10px] text-ink-faint mb-1.5">{s.employees.name}</div>}
-                    <div className="text-[11px] text-ink-faint space-y-0.5 mb-2">
-                      {s.sale_items.slice(0, 4).map((it, i) => (
-                        <div key={i}>
-                          {it.quantity}× {it.name}
-                        </div>
-                      ))}
-                      {s.sale_items.length > 4 && <div>+{s.sale_items.length - 4} more</div>}
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div className="flex gap-1">
-                        {colIdx > 0 && (
-                          <button
-                            onClick={() => move(s.id, COLUMNS[colIdx - 1].key)}
-                            disabled={busyId === s.id}
-                            className="w-6 h-6 rounded bg-canvas border border-line text-xs hover:border-chili-500 disabled:opacity-40"
-                            title="Move back"
-                          >
-                            ‹
-                          </button>
-                        )}
-                        {colIdx < COLUMNS.length - 1 && (
-                          <button
-                            onClick={() => move(s.id, COLUMNS[colIdx + 1].key)}
-                            disabled={busyId === s.id}
-                            className="w-6 h-6 rounded bg-canvas border border-line text-xs hover:border-chili-500 disabled:opacity-40"
-                            title="Move forward"
-                          >
-                            ›
-                          </button>
-                        )}
-                      </div>
-                      {canCancel && (
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setEditingSale(s)}
-                            disabled={busyId === s.id}
-                            className="text-[11px] text-ink-faint hover:text-chili-400 disabled:opacity-40"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => cancelTicket(s.id, s.order_no)}
-                            disabled={busyId === s.id}
-                            className="text-[11px] text-ink-faint hover:text-crimson-400 disabled:opacity-40"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                    <LoadingOverlay show={busyId === s.id} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+              </section>
+            );
+          })}
+        </div>
       )}
 
       {editingSale && (

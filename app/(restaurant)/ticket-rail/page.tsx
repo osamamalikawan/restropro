@@ -10,5 +10,10 @@ export default async function TicketRailPage() {
   if (!session) redirect("/login");
   if (!(await hasModuleAccess(session.restaurantId, session.role, "pos"))) redirect("/dashboard");
 
-  return <TicketRailClient canCancel={session.role === "admin" || session.role === "manager"} />;
+  return (
+    <TicketRailClient
+      restaurantId={session.restaurantId}
+      canCancel={session.role === "admin" || session.role === "manager"}
+    />
+  );
 }
