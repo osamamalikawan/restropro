@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "min_shell_version": "0.1.0",
+  "url": "https://github.com/osamamalikawan/restropro/releases/download/latest/restropro-web-1.0.0.zip",
+  "sha256": "2f077bd2e9f5ad5cfc7dca6402b29834e725a5c730f313d9e8dfd20cec2c2cbd",
+  "notes": "Initial offline POS bundle"
+}
