@@ -1,10 +1,11 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Minus, Pause, Plus, ShoppingBag, X } from "lucide-react";
+import { ArrowLeft, Minus, Pause, Plus, Search, ShoppingBag, X } from "lucide-react";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
+import { printSale, type SaleSnapshot, type SaveAction } from "@/lib/posPrint";
 
 type Product = {
   id: string;
@@ -19,6 +20,18 @@ type CartLine = { productId: string; name: string; price: number; qty: number };
 type Table = { id: string; number: string; seats: number };
 type Area = { id: string; name: string; delivery_fee: number };
 type OrderType = "dine_in" | "takeaway" | "delivery";
+type Customer = { id: string; name: string; phone: string; address?: string | null };
+type PayRow = { id: number; method: string; amount: string };
+type PosSettings = {
+  cashTaxRate: number; // percent
+  cardTaxRate: number; // percent
+  fbrFee: number; // 0 unless FBR is enabled
+  showKitchenPrint: boolean;
+  showPrintInvoice: boolean;
+  receiptHeader: string;
+  receiptFooter: string;
+  paper: string;
+};
 type HeldTicket = {
   id: string;
   orderType: OrderType;
@@ -36,6 +49,7 @@ const categoryOf = (p: Product) => {
   return name || "Other";
 };
 const TYPE_TAG: Record<OrderType, string> = { dine_in: "Dine in", takeaway: "Takeaway", delivery: "Delivery" };
+const LABEL = "block text-[11px] font-bold uppercase tracking-wide text-ink-faint";
 const FIELD =
   "w-full rounded-lg bg-raised border border-line px-3 py-2.5 text-sm outline-none focus:border-chili-500 transition-colors";
 
@@ -51,28 +65,41 @@ export function PosClient({
   const [products, setProducts] = useState<Product[] | null>(null);
   const [tables, setTables] = useState<Table[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
-  const [taxRate, setTaxRate] = useState(0.05); // replaced with the tenant's real rate once Settings loads
+  const [settings, setSettings] = useState<PosSettings>({
+    cashTaxRate: 5,
+    cardTaxRate: 5,
+    fbrFee: 0,
+    showKitchenPrint: true,
+    showPrintInvoice: true,
+    receiptHeader: "",
+    receiptFooter: "",
+    paper: "80",
+  }); // replaced with the tenant's real values once Settings loads
+  const [profile, setProfile] = useState({ address: "", phone: "" });
   const [cart, setCart] = useState<CartLine[]>([]);
   const [orderType, setOrderType] = useState<OrderType>("takeaway");
   const [tableId, setTableId] = useState("");
   const [areaId, setAreaId] = useState("");
   const [deliveryCharge, setDeliveryCharge] = useState(0);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState("Cash");
   const [paymentMethods, setPaymentMethods] = useState<string[]>(["Cash"]);
-  const [amountReceived, setAmountReceived] = useState("0");
+  const [payRows, setPayRows] = useState<PayRow[]>([{ id: 1, method: "Cash", amount: "" }]);
   const [custSearch, setCustSearch] = useState("");
-  const [custResults, setCustResults] = useState<{ id: string; name: string; phone: string }[]>([]);
-  const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; phone: string } | null>(null);
-  const [newCustName, setNewCustName] = useState("");
-  const [newCustPhone, setNewCustPhone] = useState("");
-  const [showNewCustFields, setShowNewCustFields] = useState(false);
+  const [custResults, setCustResults] = useState<Customer[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [custName, setCustName] = useState("");
+  const [custPhone, setCustPhone] = useState("");
+  const [custAddress, setCustAddress] = useState("");
+  const [pendingAction, setPendingAction] = useState<SaveAction | null>(null);
+  const [printNote, setPrintNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [lastReceipt, setLastReceipt] = useState<{ orderNo: number; total: number; balance: number } | null>(null);
   const [error, setError] = useState("");
 
   // UI-only state (no effect on checkout payload)
   const [category, setCategory] = useState("All");
+  const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [sheetOpen, setSheetOpen] = useState(false); // mobile order sheet
   const [held, setHeld] = useState<HeldTicket[]>([]);
   const [heldLoaded, setHeldLoaded] = useState(false);
@@ -95,13 +122,25 @@ export function PosClient({
     fetch("/api/tables").then((r) => r.json()).then((d) => setTables(d.tables ?? []));
     fetch("/api/delivery-areas").then((r) => r.json()).then((d) => setAreas(d.areas ?? []));
     fetch("/api/settings").then((r) => r.json()).then((d) => {
-      if (d.settings?.tax_rate != null) setTaxRate(Number(d.settings.tax_rate) / 100);
+      const st = d.settings ?? {};
+      const legacy = st.tax_rate != null ? Number(st.tax_rate) : 5; // older tenants only have a single tax_rate
+      setSettings({
+        cashTaxRate: st.cash_tax_rate != null ? Number(st.cash_tax_rate) : legacy,
+        cardTaxRate: st.card_tax_rate != null ? Number(st.card_tax_rate) : legacy,
+        fbrFee: st.fbr_enabled ? Number(st.fbr_fee) || 0 : 0,
+        showKitchenPrint: st.pos_show_kitchen_print !== false,
+        showPrintInvoice: st.pos_show_print_invoice !== false,
+        receiptHeader: st.receipt_header ?? "",
+        receiptFooter: st.receipt_footer ?? "",
+        paper: String(st.paper_width ?? "80"),
+      });
+      setProfile({ address: d.restaurant?.address ?? "", phone: d.restaurant?.phone ?? "" });
     });
     fetch("/api/payment-methods").then((r) => r.json()).then((d) => {
       const names = (d.methods ?? []).map((m: { name: string }) => m.name);
       if (names.length) {
         setPaymentMethods(names);
-        setPaymentMethod(names[0]);
+        setPayRows([{ id: 1, method: names[0], amount: "" }]);
       }
     });
 
@@ -110,6 +149,19 @@ export function PosClient({
       stop();
     };
   }, [restaurantId]);
+
+  // "/" jumps to the search box (like most POS / admin tools)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (e.key === "/" && !(t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Held tickets live in this browser only (per restaurant) — they are parked carts, not saved sales.
   const heldKey = `rp_pos_held_${restaurantId}`;
@@ -170,18 +222,58 @@ export function PosClient({
     const data = await res.json();
     if (res.ok) setCustResults(data.customers ?? []);
   }
-  function selectCustomer(c: { id: string; name: string; phone: string }) {
+  function selectCustomer(c: Customer) {
     setSelectedCustomer(c);
+    setCustName(c.name ?? "");
+    setCustPhone(c.phone ?? "");
+    setCustAddress(c.address ?? "");
     setCustResults([]);
     setCustSearch("");
-    setShowNewCustFields(false);
+  }
+  function newCustomer() {
+    setSelectedCustomer(null);
+    setCustName("");
+    setCustPhone("");
+    setCustAddress("");
+    setCustResults([]);
+    setCustSearch("");
+  }
+  // editing name/phone after picking a saved customer means it's no longer that customer
+  function editCust(setter: (v: string) => void, v: string) {
+    setter(v);
+    if (selectedCustomer) setSelectedCustomer(null);
+  }
+
+  function updatePayRow(id: number, patch: Partial<PayRow>) {
+    setPayRows((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+  function addPayRow() {
+    setPayRows((rows) => {
+      const unused = paymentMethods.find((m) => !rows.some((r) => r.method === m)) ?? paymentMethods[0] ?? "Cash";
+      return [...rows, { id: Date.now(), method: unused, amount: "" }];
+    });
+  }
+  function removePayRow(id: number) {
+    setPayRows((rows) => (rows.length > 1 ? rows.filter((r) => r.id !== id) : rows));
   }
 
   const subtotal = cart.reduce((s, l) => s + l.price * l.qty, 0);
-  const tax = Math.round(subtotal * taxRate);
   const delivery = orderType === "delivery" ? deliveryCharge : 0;
-  const total = subtotal + tax + delivery;
   const itemCount = cart.reduce((s, l) => s + l.qty, 0);
+
+  // Tax follows how the customer pays: the method carrying the most money decides cash vs card rate.
+  const primaryMethod = (() => {
+    const paidRows = payRows.filter((r) => Number(r.amount) > 0).sort((a, b) => Number(b.amount) - Number(a.amount));
+    return (paidRows[0] ?? payRows[0])?.method ?? "Cash";
+  })();
+  const isCash = /cash/i.test(primaryMethod);
+  const taxPct = isCash ? settings.cashTaxRate : settings.cardTaxRate;
+  const taxLabel = `${isCash ? "Cash" : "Card"} tax (${taxPct}%)`;
+  const tax = Math.round((subtotal * taxPct) / 100);
+  const fee = settings.fbrFee;
+  const total = subtotal + tax + delivery + fee;
+  const paid = payRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const remaining = total - paid;
 
   // ---- held tickets ----
   function snapshot(): HeldTicket {
@@ -228,20 +320,42 @@ export function PosClient({
   }
   function heldTotal(t: HeldTicket) {
     const sub = t.cart.reduce((s, l) => s + l.price * l.qty, 0);
-    return sub + Math.round(sub * taxRate) + (t.orderType === "delivery" ? t.deliveryCharge : 0);
+    return sub + (t.orderType === "delivery" ? t.deliveryCharge : 0); // before tax — tax depends on how it gets paid
   }
 
-  async function completeSale() {
+  async function completeSale(action: SaveAction) {
     if (orderType === "dine_in" && !tableId) {
       setError("Select a table first");
       return;
     }
-    const received = Number(amountReceived);
-    if (Number.isNaN(received) || received < 0) {
-      setError("Enter a valid amount received");
+    if (payRows.some((r) => r.amount !== "" && (Number.isNaN(Number(r.amount)) || Number(r.amount) < 0))) {
+      setError("Enter valid payment amounts");
       return;
     }
+    const payments = payRows.map((r) => ({ method: r.method, amount: Number(r.amount) || 0 })).filter((x) => x.amount > 0);
+    const tb = tables.find((x) => x.id === tableId);
+    const snap: SaleSnapshot = {
+      restaurantName,
+      address: profile.address,
+      phone: profile.phone,
+      header: settings.receiptHeader,
+      footer: settings.receiptFooter,
+      paper: settings.paper,
+      cashier: cashierName,
+      orderTypeLabel: orderType === "dine_in" ? (tb ? `Dine in - Table ${tb.number}` : "Dine in") : TYPE_TAG[orderType],
+      customerName: custName.trim(),
+      customerPhone: custPhone.trim(),
+      items: cart.map((l) => ({ name: l.name, price: l.price, qty: l.qty })),
+      subtotal,
+      delivery,
+      taxLabel,
+      tax,
+      fee,
+      total,
+      payments,
+    };
     setSubmitting(true);
+    setPendingAction(action);
     setError("");
     const res = await fetch("/api/sales", {
       method: "POST",
@@ -249,30 +363,47 @@ export function PosClient({
       body: JSON.stringify({
         orderType,
         items: cart.map((l) => ({ productId: l.productId, name: l.name, price: l.price, qty: l.qty })),
-        payments: received > 0 ? [{ method: paymentMethod, amount: received }] : [],
+        payments,
         tableId: tableId || null,
         areaId: areaId || null,
         deliveryCharge: delivery,
+        taxAmount: tax,
+        fbrFee: fee,
         customerId: selectedCustomer?.id || null,
-        customerName: selectedCustomer ? undefined : newCustName || undefined,
-        customerPhone: selectedCustomer ? undefined : newCustPhone || undefined,
+        customerName: selectedCustomer ? undefined : custName.trim() || undefined,
+        customerPhone: selectedCustomer ? undefined : custPhone.trim() || undefined,
+        customerAddress: custAddress.trim() || undefined,
       }),
     });
     const data = await res.json();
-    setSubmitting(false);
     if (!res.ok) {
+      setSubmitting(false);
+      setPendingAction(null);
       setError(data.error || "Checkout failed");
       return;
     }
+
+    // The sale is saved at this point — a printer problem must never undo or block it.
+    let note = "";
+    if (action !== "save") {
+      try {
+        await printSale(action, snap, data.orderNo);
+      } catch (e) {
+        note = `Sale saved, but the ${action === "kitchen" ? "kitchen slip" : "invoice"} didn't print: ${
+          e instanceof Error ? e.message : String(e)
+        }`;
+      }
+    }
+    setPrintNote(note);
+    setSubmitting(false);
+    setPendingAction(null);
     setLastReceipt({ orderNo: data.orderNo, total: data.total, balance: data.balance ?? 0 });
     setCart([]);
     setIsResumed(false);
     setCheckoutOpen(false);
     setSheetOpen(false);
-    setSelectedCustomer(null);
-    setNewCustName("");
-    setNewCustPhone("");
-    setShowNewCustFields(false);
+    newCustomer();
+    setPayRows([{ id: 1, method: paymentMethods[0] ?? "Cash", amount: "" }]);
   }
 
   const ORDER_TYPES: { id: OrderType; label: string; icon: string }[] = [
@@ -287,7 +418,10 @@ export function PosClient({
     names.sort((a, b) => (a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b)));
     return names;
   }, [available]);
-  const visible = category === "All" ? available : available.filter((p) => categoryOf(p) === category);
+  const q = search.trim().toLowerCase();
+  const visible = available.filter(
+    (p) => (category === "All" || categoryOf(p) === category) && (!q || p.name.toLowerCase().includes(q))
+  );
   const qtyInCart = (id: string) => cart.find((l) => l.productId === id)?.qty ?? 0;
 
   return (
@@ -316,8 +450,11 @@ export function PosClient({
         {lastReceipt && (
           <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-basil-500/40 bg-basil-500/10 px-4 py-2.5 text-sm text-basil-400">
             <span>
-              Order #{lastReceipt.orderNo} {lastReceipt.balance > 0 ? "saved" : "completed"} — Rs {fmt(lastReceipt.total)}
-              {lastReceipt.balance > 0 && ` (Rs ${fmt(lastReceipt.balance)} still due)`}
+              <span>
+                Order #{lastReceipt.orderNo} {lastReceipt.balance > 0 ? "saved" : "completed"} — Rs {fmt(lastReceipt.total)}
+                {lastReceipt.balance > 0 && ` (Rs ${fmt(lastReceipt.balance)} still due)`}
+              </span>
+              {printNote && <span className="block mt-0.5 text-turmeric-400">{printNote}</span>}
             </span>
             <button onClick={() => setLastReceipt(null)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100">
               <X size={16} />
@@ -374,6 +511,39 @@ export function PosClient({
               {t.label}
             </button>
           ))}
+        </div>
+
+        {/* search */}
+        <div className="relative mb-3">
+          <Search size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-faint" />
+          <input
+            ref={searchRef}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setSearch("");
+              // Enter on a single match adds it straight to the cart — fast for regulars
+              if (e.key === "Enter" && visible.length === 1) {
+                addToCart(visible[0]);
+                setSearch("");
+              }
+            }}
+            placeholder="Search menu…  ( / )"
+            aria-label="Search menu"
+            className="w-full rounded-xl border border-line bg-surface py-2.5 pl-10 pr-10 text-sm outline-none transition-colors placeholder:text-ink-faint focus:border-chili-500"
+          />
+          {search && (
+            <button
+              onClick={() => {
+                setSearch("");
+                searchRef.current?.focus();
+              }}
+              aria-label="Clear search"
+              className="absolute right-2.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-ink-faint hover:text-ink-strong"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
 
         {/* categories */}
@@ -441,7 +611,11 @@ export function PosClient({
                 </button>
               );
             })}
-            {visible.length === 0 && <p className="col-span-full text-sm text-ink-faint">Nothing in this category.</p>}
+            {visible.length === 0 && (
+              <p className="col-span-full text-sm text-ink-faint">
+                {q ? `No items match “${search.trim()}”.` : "Nothing in this category."}
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -467,7 +641,7 @@ export function PosClient({
       <aside
         className={`flex flex-col border border-line bg-surface p-4 sm:p-5 transition-[transform,visibility] duration-300
           fixed inset-x-0 bottom-0 z-40 max-h-[88dvh] rounded-t-2xl shadow-2xl
-          md:static md:z-auto md:m-4 md:ml-0 md:w-[340px] md:shrink-0 md:self-start md:max-h-[calc(100dvh-2rem)] md:translate-y-0 md:rounded-2xl md:shadow-none md:visible lg:w-[370px]
+          md:static md:z-auto md:m-0 md:h-[100dvh] md:max-h-none md:w-[340px] md:shrink-0 md:translate-y-0 md:rounded-none md:border-y-0 md:border-r-0 md:shadow-none md:visible lg:w-[370px]
           ${sheetOpen ? "translate-y-0 max-md:visible" : "translate-y-full max-md:invisible max-md:[transition-delay:0s,.3s]"}`}
       >
         <div className="flex items-start justify-between mb-3">
@@ -494,17 +668,6 @@ export function PosClient({
             ))}
           </select>
         )}
-        {orderType === "delivery" && (
-          <select value={areaId} onChange={(e) => onAreaChange(e.target.value)} className={`${FIELD} mb-3`}>
-            <option value="">Select area…</option>
-            {areas.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} — Rs {a.delivery_fee}
-              </option>
-            ))}
-          </select>
-        )}
-
         <div className="mb-3 rounded-lg border border-line bg-raised/60 px-3 py-2.5 text-xs text-ink-faint">
           Customer info is collected at checkout.
         </div>
@@ -580,7 +743,7 @@ export function PosClient({
           <button
             disabled={cart.length === 0}
             onClick={() => {
-              setAmountReceived(String(total));
+              setPayRows([{ id: 1, method: paymentMethods[0] ?? "Cash", amount: "" }]);
               setError("");
               setCheckoutOpen(true);
             }}
@@ -591,59 +754,39 @@ export function PosClient({
         </div>
       </aside>
 
-      {/* ================= checkout modal (same logic, restyled) ================= */}
+      {/* ================= checkout modal ================= */}
       {checkoutOpen && (
         <div
-          className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 sm:p-4"
+          className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm sm:p-4"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget && !submitting) setCheckoutOpen(false);
           }}
         >
-          <div className="relative w-full sm:max-w-sm max-h-[92dvh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-line bg-surface p-5 space-y-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-            <h3 className="font-display text-lg font-semibold">Payment</h3>
-
-            <div className="rounded-lg bg-raised/60 border border-line px-3 py-2.5 space-y-1 text-sm">
-              <div className="flex justify-between text-ink-mid">
-                <span>Subtotal</span>
-                <span className="font-mono">Rs {fmt(subtotal)}</span>
-              </div>
-              {delivery > 0 && (
-                <div className="flex justify-between text-ink-mid">
-                  <span>Delivery</span>
-                  <span className="font-mono">Rs {fmt(delivery)}</span>
-                </div>
-              )}
-              <div className="flex justify-between text-ink-mid">
-                <span>Tax ({(taxRate * 100).toFixed(1)}%)</span>
-                <span className="font-mono">Rs {fmt(tax)}</span>
-              </div>
-              <div className="flex justify-between border-t border-dashed border-line pt-1.5 font-semibold">
-                <span>Total due</span>
-                <span className="font-mono">Rs {fmt(total)}</span>
-              </div>
+          <div className="relative flex w-full sm:max-w-[460px] max-h-[94dvh] flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-line bg-surface shadow-2xl">
+            <div className="flex items-center justify-between border-b border-line px-5 py-4">
+              <h3 className="font-display text-lg font-semibold">Checkout</h3>
+              <button
+                onClick={() => !submitting && setCheckoutOpen(false)}
+                aria-label="Close checkout"
+                className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-raised text-ink-mid hover:text-ink-strong"
+              >
+                <X size={16} />
+              </button>
             </div>
 
-            <div>
-              <label className="text-xs uppercase tracking-wide text-ink-faint">Customer</label>
-              {selectedCustomer ? (
-                <div className="flex items-center justify-between rounded-lg bg-raised border border-line px-3 py-2.5 mt-1 text-sm">
-                  <span>
-                    {selectedCustomer.name} <span className="text-ink-faint">· {selectedCustomer.phone}</span>
-                  </span>
-                  <button onClick={() => setSelectedCustomer(null)} className="text-ink-faint hover:text-crimson-400">
-                    ✕
-                  </button>
-                </div>
-              ) : (
-                <>
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              {/* customer */}
+              <div>
+                <label className={LABEL}>Customer</label>
+                <div className="relative mt-2">
                   <input
                     value={custSearch}
                     onChange={(e) => searchCustomers(e.target.value)}
                     placeholder="Search by name or phone…"
-                    className={`${FIELD} mt-1`}
+                    className={FIELD}
                   />
                   {custResults.length > 0 && (
-                    <div className="mt-1 max-h-32 overflow-y-auto rounded-lg border border-line">
+                    <div className="absolute inset-x-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-line bg-surface shadow-xl">
                       {custResults.map((c) => (
                         <button
                           key={c.id}
@@ -655,65 +798,199 @@ export function PosClient({
                       ))}
                     </div>
                   )}
+                </div>
+                <button
+                  type="button"
+                  onClick={newCustomer}
+                  className="mt-2.5 rounded-lg border border-line bg-raised hover:bg-hover px-3 py-2 text-xs font-bold"
+                >
+                  + New customer
+                </button>
+
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className={LABEL}>Name</label>
+                    <input
+                      value={custName}
+                      onChange={(e) => editCust(setCustName, e.target.value)}
+                      placeholder="Walk-in"
+                      className={`${FIELD} mt-1.5`}
+                    />
+                  </div>
+                  <div>
+                    <label className={LABEL}>Phone (unique)</label>
+                    <input
+                      value={custPhone}
+                      onChange={(e) => editCust(setCustPhone, e.target.value)}
+                      inputMode="tel"
+                      placeholder="03xx-xxxxxxx"
+                      className={`${FIELD} mt-1.5`}
+                    />
+                  </div>
+                  <div>
+                    <label className={LABEL}>Address</label>
+                    <input
+                      value={custAddress}
+                      onChange={(e) => setCustAddress(e.target.value)}
+                      placeholder="House / street"
+                      className={`${FIELD} mt-1.5`}
+                    />
+                  </div>
+                  <div>
+                    <label className={LABEL}>Area</label>
+                    <select
+                      value={areaId}
+                      onChange={(e) => onAreaChange(e.target.value)}
+                      disabled={orderType !== "delivery"}
+                      className={`${FIELD} mt-1.5 disabled:opacity-60`}
+                    >
+                      <option value="">No delivery area</option>
+                      {areas.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name} — Rs {a.delivery_fee}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <p className="mt-3 text-xs text-ink-faint">
+                  {orderType === "dine_in"
+                    ? `Dine in${tables.find((t) => t.id === tableId) ? ` · Table ${tables.find((t) => t.id === tableId)!.number}` : ""}`
+                    : TYPE_TAG[orderType]}
+                </p>
+              </div>
+
+              {/* totals */}
+              <div className="border-t border-line pt-4 space-y-2 text-sm">
+                <div className="flex justify-between text-ink-mid">
+                  <span>Subtotal</span>
+                  <span>Rs {fmt(subtotal)}</span>
+                </div>
+                {delivery > 0 && (
+                  <div className="flex justify-between text-ink-mid">
+                    <span>Delivery</span>
+                    <span>Rs {fmt(delivery)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-ink-mid">
+                  <span>{taxLabel}</span>
+                  <span>Rs {fmt(tax)}</span>
+                </div>
+                {fee > 0 && (
+                  <div className="flex justify-between text-ink-mid">
+                    <span>FBR invoicing fee</span>
+                    <span>Rs {fmt(fee)}</span>
+                  </div>
+                )}
+                <div className="flex items-baseline justify-between border-t border-dashed border-line pt-2.5">
+                  <span className="font-mono text-base font-bold">Total due</span>
+                  <span className="font-mono text-lg font-bold">Rs {fmt(total)}</span>
+                </div>
+              </div>
+
+              {/* split payment */}
+              <div>
+                <label className={LABEL}>Split payment</label>
+                <div className="mt-2 space-y-2">
+                  {payRows.map((r) => (
+                    <div key={r.id} className="flex items-center gap-2">
+                      <select
+                        value={r.method}
+                        onChange={(e) => updatePayRow(r.id, { method: e.target.value })}
+                        className={`${FIELD} flex-1 min-w-0`}
+                      >
+                        {paymentMethods.map((m) => (
+                          <option key={m}>{m}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        value={r.amount}
+                        placeholder="0"
+                        onChange={(e) => updatePayRow(r.id, { amount: e.target.value })}
+                        className={`${FIELD} w-28 shrink-0`}
+                      />
+                      {payRows.length > 1 && (
+                        <button
+                          onClick={() => removePayRow(r.id)}
+                          aria-label="Remove payment method"
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-faint hover:text-crimson-400"
+                        >
+                          <X size={15} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2.5 flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setShowNewCustFields((v) => !v)}
-                    className="text-xs text-ink-faint hover:text-ink-strong underline mt-1"
+                    onClick={addPayRow}
+                    className="rounded-lg border border-line bg-raised hover:bg-hover px-3 py-2 text-xs font-bold"
                   >
-                    + New customer
+                    + Add payment method
                   </button>
-                  {showNewCustFields && (
-                    <div className="grid grid-cols-2 gap-2 mt-2">
-                      <input value={newCustName} onChange={(e) => setNewCustName(e.target.value)} placeholder="Name" className={FIELD} />
-                      <input value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} placeholder="Phone" className={FIELD} />
-                    </div>
+                  {remaining > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const last = payRows[payRows.length - 1];
+                        updatePayRow(last.id, { amount: String((Number(last.amount) || 0) + remaining) });
+                      }}
+                      className="rounded-lg px-2 py-2 text-xs font-semibold text-basil-400 hover:underline"
+                    >
+                      Fill remaining
+                    </button>
                   )}
-                </>
+                </div>
+              </div>
+
+              <div className="border-t border-dashed border-line pt-3 text-xs font-semibold">
+                {remaining > 0 ? (
+                  <span className="text-crimson-400">Remaining: Rs {fmt(remaining)}</span>
+                ) : remaining < 0 ? (
+                  <span className="text-basil-400">Change: Rs {fmt(-remaining)}</span>
+                ) : (
+                  <span className="text-basil-400">Paid in full</span>
+                )}
+                {remaining > 0 && paid > 0 && (
+                  <span className="ml-2 font-normal text-turmeric-400">— left as an unpaid balance (see Unpaid Orders)</span>
+                )}
+              </div>
+
+              {error && <p className="text-crimson-400 text-sm">{error}</p>}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+              {settings.showKitchenPrint && (
+                <button
+                  onClick={() => completeSale("kitchen")}
+                  disabled={submitting}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-raised hover:bg-hover px-4 py-2.5 text-sm font-bold disabled:opacity-50"
+                >
+                  {pendingAction === "kitchen" ? <Spinner size={14} /> : <span aria-hidden>🧑‍🍳</span>}
+                  Kitchen Print
+                </button>
               )}
-            </div>
-
-            <div>
-              <label className="text-xs uppercase tracking-wide text-ink-faint">Payment method</label>
-              <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className={`${FIELD} mt-1`}>
-                {paymentMethods.map((m) => (
-                  <option key={m}>{m}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs uppercase tracking-wide text-ink-faint">Amount received</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={amountReceived}
-                onChange={(e) => setAmountReceived(e.target.value)}
-                className={`${FIELD} mt-1`}
-              />
-              {Number(amountReceived) < total && (
-                <p className="text-xs text-turmeric-400 mt-1">
-                  Rs {fmt(Math.max(total - (Number(amountReceived) || 0), 0))} will be left as an unpaid balance — collectable
-                  later from Unpaid Orders.
-                </p>
+              {settings.showPrintInvoice && (
+                <button
+                  onClick={() => completeSale("invoice")}
+                  disabled={submitting}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-raised hover:bg-hover px-4 py-2.5 text-sm font-bold disabled:opacity-50"
+                >
+                  {pendingAction === "invoice" ? <Spinner size={14} /> : <span aria-hidden>🧾</span>}
+                  Print Invoice
+                </button>
               )}
-            </div>
-
-            {error && <p className="text-crimson-400 text-sm">{error}</p>}
-            <div className="flex gap-2">
               <button
-                onClick={() => setCheckoutOpen(false)}
+                onClick={() => completeSale("save")}
                 disabled={submitting}
-                className="flex-1 rounded-xl bg-raised hover:bg-hover border border-line py-3 font-semibold disabled:opacity-50"
+                className="inline-flex flex-1 sm:flex-none items-center justify-center gap-1.5 rounded-xl bg-basil-500 hover:bg-basil-600 px-6 py-2.5 text-sm font-bold text-white disabled:opacity-50"
               >
-                Cancel
-              </button>
-              <button
-                onClick={completeSale}
-                disabled={submitting}
-                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-chili-500 hover:bg-chili-600 disabled:opacity-50 text-white font-semibold py-3"
-              >
-                {submitting && <Spinner size={14} />}
-                Confirm
+                {pendingAction === "save" && <Spinner size={14} />}
+                Save
               </button>
             </div>
             <LoadingOverlay show={submitting} />
