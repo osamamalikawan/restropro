@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Minus, Pause, Plus, Search, ShoppingBag, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Minus, Pause, Plus, Search, ShoppingBag, X } from "lucide-react";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
@@ -50,17 +50,50 @@ const categoryOf = (p: Product) => {
 };
 const TYPE_TAG: Record<OrderType, string> = { dine_in: "Dine in", takeaway: "Takeaway", delivery: "Delivery" };
 const LABEL = "block text-[11px] font-bold uppercase tracking-wide text-ink-faint";
-const FIELD =
-  "w-full rounded-lg bg-raised border border-line px-3 py-2.5 text-sm outline-none focus:border-chili-500 transition-colors";
+// FIELD_BASE has no width so a caller can pick w-full / w-28 / flex-1 without the two fighting in CSS
+const FIELD_BASE =
+  "min-w-0 rounded-lg bg-raised border border-line px-3 py-2.5 text-sm outline-none focus:border-chili-500 transition-colors";
+const FIELD = `w-full ${FIELD_BASE}`;
+
+/** Themed select: native control (keeps mobile pickers) with the OS arrow replaced by ours. */
+function SelectField({
+  className = "",
+  children,
+  ...props
+}: React.SelectHTMLAttributes<HTMLSelectElement> & { children: React.ReactNode }) {
+  return (
+    <div className={`relative min-w-0 ${className}`}>
+      <select {...props} className={`rp-select ${FIELD_BASE} w-full cursor-pointer appearance-none pr-9 disabled:opacity-60`}>
+        {children}
+      </select>
+      <ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-faint" />
+    </div>
+  );
+}
+
+// Scoped to the POS (kept here so no global stylesheet / other page is touched). Uses the theme
+// tokens, so it follows light/dark automatically.
+const POS_CSS = `
+.rp-scroll{scrollbar-width:thin;scrollbar-color:rgb(var(--line)) transparent}
+.rp-scroll::-webkit-scrollbar{width:10px;height:10px}
+.rp-scroll::-webkit-scrollbar-track{background:transparent}
+.rp-scroll::-webkit-scrollbar-thumb{background:rgb(var(--line));border-radius:999px;border:3px solid transparent;background-clip:content-box}
+.rp-scroll::-webkit-scrollbar-thumb:hover{background:rgb(var(--ink-faint));background-clip:content-box;border:3px solid transparent}
+.rp-select option{background:rgb(var(--bg-surface));color:rgb(var(--ink-strong))}
+`;
 
 export function PosClient({
   restaurantId,
   restaurantName,
   cashierName,
+  withShell = false,
 }: {
   restaurantId: string;
   restaurantName: string;
   cashierName: string;
+  /** true when rendered inside the dashboard shell (sidebar + topbar) — the shell already
+   *  provides the header/back navigation, so the POS drops its own top bar and fits under it. */
+  withShell?: boolean;
 }) {
   const [products, setProducts] = useState<Product[] | null>(null);
   const [tables, setTables] = useState<Table[]>([]);
@@ -425,10 +458,16 @@ export function PosClient({
   const qtyInCart = (id: string) => cart.find((l) => l.productId === id)?.qty ?? 0;
 
   return (
-    <main className="h-[100dvh] bg-canvas text-ink-strong flex flex-col md:flex-row md:overflow-hidden">
+    <main
+      className={`${
+        withShell ? "h-[calc(100dvh-4rem)]" : "h-[100dvh]"
+      } bg-canvas text-ink-strong flex flex-col md:flex-row overflow-hidden`}
+    >
+      <style>{POS_CSS}</style>
       {/* ================= LEFT: menu ================= */}
-      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-3 sm:p-5 pb-24 md:pb-5">
-        {/* top bar */}
+      <div className="rp-scroll flex-1 min-w-0 min-h-0 overflow-y-auto p-3 sm:p-5 pb-24 md:pb-5">
+        {/* top bar (standalone/desktop-app mode only — inside the shell the header provides this) */}
+        {!withShell && (
         <div className="flex items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3 min-w-0">
             <Link
@@ -445,6 +484,7 @@ export function PosClient({
           </div>
           <ThemeToggle />
         </div>
+        )}
 
         {/* last sale banner */}
         {lastReceipt && (
@@ -494,24 +534,6 @@ export function PosClient({
             })}
           </div>
         )}
-
-        {/* order type */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-4">
-          {ORDER_TYPES.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => selectOrderType(t.id)}
-              className={`flex flex-col items-center justify-center gap-1 rounded-xl border py-2.5 sm:py-4 text-xs sm:text-sm font-semibold transition-colors ${
-                orderType === t.id
-                  ? "bg-chili-500/15 border-chili-500 text-chili-400"
-                  : "bg-surface border-line text-ink-mid hover:border-chili-500/60"
-              }`}
-            >
-              <span className="text-base sm:text-lg leading-none">{t.icon}</span>
-              {t.label}
-            </button>
-          ))}
-        </div>
 
         {/* search */}
         <div className="relative mb-3">
@@ -641,38 +663,47 @@ export function PosClient({
       <aside
         className={`flex flex-col border border-line bg-surface p-4 sm:p-5 transition-[transform,visibility] duration-300
           fixed inset-x-0 bottom-0 z-40 max-h-[88dvh] rounded-t-2xl shadow-2xl
-          md:static md:z-auto md:m-0 md:h-[100dvh] md:max-h-none md:w-[340px] md:shrink-0 md:translate-y-0 md:rounded-none md:border-y-0 md:border-r-0 md:shadow-none md:visible lg:w-[370px]
+          md:static md:z-auto md:m-0 md:max-h-none md:w-[340px] md:shrink-0 md:translate-y-0 md:rounded-none md:border-y-0 md:border-r-0 md:shadow-none md:visible lg:w-[370px]
           ${sheetOpen ? "translate-y-0 max-md:visible" : "translate-y-full max-md:invisible max-md:[transition-delay:0s,.3s]"}`}
       >
-        <div className="flex items-start justify-between mb-3">
-          <div>
-            <h2 className="font-display text-lg font-semibold leading-tight">Current order</h2>
-            <p className="text-xs text-ink-faint">{isResumed ? "Resumed ticket" : "New ticket"}</p>
+        <div className="mb-3 flex items-center gap-2">
+          <div className="grid flex-1 grid-cols-3 gap-2">
+            {ORDER_TYPES.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => selectOrderType(t.id)}
+                className={`flex flex-col items-center justify-center gap-0.5 rounded-xl border py-2.5 text-xs font-semibold transition-colors ${
+                  orderType === t.id
+                    ? "bg-chili-500/15 border-chili-500 text-chili-400"
+                    : "bg-raised border-line text-ink-mid hover:border-chili-500/60"
+                }`}
+              >
+                <span className="text-base leading-none">{t.icon}</span>
+                {t.label}
+              </button>
+            ))}
           </div>
           <button
             onClick={() => setSheetOpen(false)}
             aria-label="Close order"
-            className="md:hidden grid place-items-center w-8 h-8 rounded-lg bg-raised text-ink-mid"
+            className="md:hidden grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-raised text-ink-mid"
           >
             <X size={16} />
           </button>
         </div>
 
         {orderType === "dine_in" && (
-          <select value={tableId} onChange={(e) => setTableId(e.target.value)} className={`${FIELD} mb-3`}>
+          <SelectField value={tableId} onChange={(e) => setTableId(e.target.value)} className="mb-3">
             <option value="">Select table…</option>
             {tables.map((t) => (
               <option key={t.id} value={t.id}>
                 Table {t.number} ({t.seats} seats)
               </option>
             ))}
-          </select>
+          </SelectField>
         )}
-        <div className="mb-3 rounded-lg border border-line bg-raised/60 px-3 py-2.5 text-xs text-ink-faint">
-          Customer info is collected at checkout.
-        </div>
 
-        <div className="flex-1 min-h-[80px] overflow-y-auto">
+        <div className="rp-scroll flex-1 min-h-[80px] overflow-y-auto">
           {cart.length === 0 ? (
             <p className="py-4 text-sm text-ink-faint">Tap a product to start an order.</p>
           ) : (
@@ -774,7 +805,7 @@ export function PosClient({
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+            <div className="rp-scroll flex-1 overflow-y-auto overflow-x-hidden px-5 py-4 space-y-4">
               {/* customer */}
               <div>
                 <label className={LABEL}>Customer</label>
@@ -807,7 +838,7 @@ export function PosClient({
                   + New customer
                 </button>
 
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 [&>div]:min-w-0">
                   <div>
                     <label className={LABEL}>Name</label>
                     <input
@@ -838,11 +869,11 @@ export function PosClient({
                   </div>
                   <div>
                     <label className={LABEL}>Area</label>
-                    <select
+                    <SelectField
                       value={areaId}
                       onChange={(e) => onAreaChange(e.target.value)}
                       disabled={orderType !== "delivery"}
-                      className={`${FIELD} mt-1.5 disabled:opacity-60`}
+                      className="mt-1.5"
                     >
                       <option value="">No delivery area</option>
                       {areas.map((a) => (
@@ -850,7 +881,7 @@ export function PosClient({
                           {a.name} — Rs {a.delivery_fee}
                         </option>
                       ))}
-                    </select>
+                    </SelectField>
                   </div>
                 </div>
                 <p className="mt-3 text-xs text-ink-faint">
@@ -894,15 +925,15 @@ export function PosClient({
                 <div className="mt-2 space-y-2">
                   {payRows.map((r) => (
                     <div key={r.id} className="flex items-center gap-2">
-                      <select
+                      <SelectField
                         value={r.method}
                         onChange={(e) => updatePayRow(r.id, { method: e.target.value })}
-                        className={`${FIELD} flex-1 min-w-0`}
+                        className="flex-1"
                       >
                         {paymentMethods.map((m) => (
                           <option key={m}>{m}</option>
                         ))}
-                      </select>
+                      </SelectField>
                       <input
                         type="number"
                         inputMode="decimal"
@@ -910,7 +941,7 @@ export function PosClient({
                         value={r.amount}
                         placeholder="0"
                         onChange={(e) => updatePayRow(r.id, { amount: e.target.value })}
-                        className={`${FIELD} w-28 shrink-0`}
+                        className={`${FIELD_BASE} w-28 shrink-0`}
                       />
                       {payRows.length > 1 && (
                         <button

@@ -1,7 +1,35 @@
 // POS receipt / kitchen-slip builders (plain ASCII ESC/POS) + the glue that sends them to the
 // right printer role. Printer connections themselves are configured in Printer settings and
 // stored per machine — see app/(restaurant)/printer-settings/printers.ts.
-import { hasTauri, printToRole } from "@/app/(restaurant)/printer-settings/printers";
+
+// NOTE: deliberately self-contained (same localStorage keys + Tauri commands as
+// app/(restaurant)/printer-settings/printers.ts). The offline desktop build moves the whole
+// app/(restaurant) folder away, so the POS must not import from it.
+type PrinterConfig =
+  | { mode: "none" }
+  | { mode: "usb"; printerName: string }
+  | { mode: "lan"; ip: string; port: number };
+
+const hasTauri = () => typeof window !== "undefined" && !!(window as any).__TAURI__;
+
+function loadPrinterConfig(role: "receipt" | "kitchen"): PrinterConfig {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(`restropro.printer.${role}`) || "null");
+    if (parsed?.mode === "usb" && typeof parsed.printerName === "string") return parsed;
+    if (parsed?.mode === "lan" && typeof parsed.ip === "string") return { mode: "lan", ip: parsed.ip, port: Number(parsed.port) || 9100 };
+  } catch {}
+  return { mode: "none" };
+}
+
+async function printToRole(role: "receipt" | "kitchen", data: number[]): Promise<void> {
+  const invoke = (window as any).__TAURI__?.core?.invoke;
+  if (!invoke) throw new Error("Tauri bridge not found — open this in the desktop app.");
+  const c = loadPrinterConfig(role);
+  if (c.mode === "usb") await invoke("print_raw_windows", { printerName: c.printerName, data });
+  else if (c.mode === "lan") await invoke("print_raw", { ip: c.ip, port: c.port, data });
+  else throw new Error(`no ${role === "kitchen" ? "kitchen" : "receipt"} printer is set up (Printer settings)`);
+}
+
 
 export type SaveAction = "save" | "kitchen" | "invoice";
 
