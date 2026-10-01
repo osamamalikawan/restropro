@@ -4,8 +4,8 @@ import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 
 export default function OwnerLoginPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('xoro1101@yahoo.com');
+  const [password, setPassword] = useState('1101RestroPro!');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(true);
