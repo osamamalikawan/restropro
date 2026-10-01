@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireDevice } from "@/lib/auth/require-device";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getPermissionMatrix } from "@/lib/permissions";
+import { computeStatus } from "@/lib/subscription";
 
 /** Everything the desktop POS needs to run offline, in one round trip. The device calls this
  *  on activation, then whenever it is online (see restropro-desk/src/sync.rs). The response is
@@ -35,6 +37,17 @@ export async function GET(req: Request) {
   const failed = [restaurant, products, tables, areas, methods, staff, customers, settingsRes].find((r) => r.error);
   if (failed?.error) return NextResponse.json({ error: failed.error.message }, { status: 500 });
 
+  const [permissionMatrix, subRes] = await Promise.all([
+    getPermissionMatrix(rid),
+    admin
+      .from("subscriptions")
+      .select("current_period_end, grace_until, status")
+      .eq("restaurant_id", rid)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
   let settings = settingsRes.data;
   if (!settings) {
     const { data: created } = await admin.from("restaurant_settings").insert({ restaurant_id: rid }).select("*").single();
@@ -51,5 +64,8 @@ export async function GET(req: Request) {
     paymentMethods: methods.data ?? [],
     customers: customers.data ?? [],
     staffRoster: staff.data ?? [],
+    /** role -> module -> can_view, so the desktop sidebar and page guards work offline */
+    permissionMatrix,
+    subStatus: subRes.data ? computeStatus(subRes.data) : "expired",
   });
 }

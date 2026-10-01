@@ -1,4 +1,5 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
+import { requireDevice } from "./require-device";
 import { verifyStaffSessionToken, STAFF_SESSION_COOKIE, type StaffSessionPayload } from "./staff-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeStatus, isUsable } from "@/lib/subscription";
@@ -27,7 +28,7 @@ async function queryWithRetry<T>(run: () => PromiseLike<{ data: T | null; error:
 export async function requireStaffSession(): Promise<StaffSessionPayload | null> {
   const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
   const session = await verifyStaffSessionToken(token);
-  if (!session) return null;
+  if (!session) return requireDeviceStaffSession();
 
   const admin = createAdminClient();
   const employee = await queryWithRetry<{ status: string; session_version: number }>(() =>
@@ -80,5 +81,37 @@ export async function resolveStaffContext() {
     subStatus,
     modulePerms,
     shift: settings ? { start: settings.shift_start as string, end: settings.shift_end as string } : null,
+  };
+}
+
+
+/** Desktop app path: no browser cookie, so the app sends its activated-device token plus the id
+ *  of the cashier signed in on that device (PIN checked on the device — see restropro-desk
+ *  staff_auth.rs). The device is the trust anchor: the owner activated it, and the owner can
+ *  revoke it (devices.revoked_at). The employee's role, status and the restaurant are still
+ *  re-read from the database on every request, so permissions and deactivation take effect
+ *  immediately, and an employee id from a different restaurant is rejected. */
+async function requireDeviceStaffSession(): Promise<StaffSessionPayload | null> {
+  const h = await headers();
+  const staffId = h.get("x-staff-id");
+  if (!staffId || !(h.get("authorization") ?? "").toLowerCase().startsWith("bearer ")) return null;
+
+  const auth = await requireDevice(new Request("http://internal", { headers: { authorization: h.get("authorization")! } }));
+  if (!auth.ok) return null;
+
+  const admin = createAdminClient();
+  const employee = await queryWithRetry<{ id: string; role: string; status: string; session_version: number; restaurant_id: string }>(() =>
+    admin.from("employees").select("id, role, status, session_version, restaurant_id").eq("id", staffId).single()
+  );
+  if (!employee || employee.status !== "active" || employee.restaurant_id !== auth.device.restaurantId) return null;
+
+  const now = Date.now();
+  return {
+    restaurantId: employee.restaurant_id,
+    employeeId: employee.id,
+    role: employee.role,
+    sessionVersion: employee.session_version,
+    issuedAt: now,
+    expiresAt: now + 60_000,
   };
 }

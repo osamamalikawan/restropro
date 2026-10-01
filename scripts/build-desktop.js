@@ -1,106 +1,98 @@
 // scripts/build-desktop.js
 //
 // Builds a static export of the web app for bundling into the Tauri desktop shell.
-// Only POS (and the login flow that gets a cashier there) needs to work offline, so this
-// temporarily removes everything that can't survive `output: 'export'` (API routes, the
-// signup Server Action, and every (restaurant)/* page that reads the server-side
-// staff-session cookie), swaps in desktop-only client-component versions of the POS and
-// login pages, builds, then restores everything so the web/Vercel build is completely
-// unaffected.
+//
+// The desktop bundle has no server, so everything that needs one is swapped out for the
+// duration of the build and restored afterwards (the web/Vercel build is never affected):
+//   - app/api and app/signup are removed (API routes / Server Actions can't be exported).
+//   - Every `<name>.desktop.tsx` next to a `<name>.tsx` (page.desktop.tsx, layout.desktop.tsx)
+//     replaces it. Those are client components that read the signed-in cashier from the device
+//     instead of a cookie; the screens they render are the SAME *-client.tsx components as the
+//     web app, so the UI is identical. Their /api/* calls go through the desktop fetch bridge.
+//   - Any page.tsx under app/(restaurant) that has no desktop variant is excluded, so a new web
+//     page can't break the desktop export (add a page.desktop.tsx to include it).
 
 const fs = require('fs');
+const path = require('path');
 const { execSync } = require('child_process');
 
 const webConfigBackup = '.next.config.web.backup.js';
+const BACKUP_SUFFIX = '.webbak';
 
 const apiDir = 'app/api';
 const apiBackup = '.api-backup';
-
 const signupDir = 'app/signup';
 const signupBackup = '.signup-backup';
 
-const restaurantDir = 'app/(restaurant)';
-const restaurantBackup = '.restaurant-backup';
+const moved = []; // [from, to] pairs to undo, in order
+const copied = []; // files created from *.desktop.tsx, deleted on restore
 
-const posPage = 'app/pos/page.tsx';
-const posPageDesktop = 'app/pos/page.desktop.tsx';
-const posPageBackup = '.pos-page-backup.tsx';
-
-const loginPage = 'app/login/page.tsx';
-const loginPageDesktop = 'app/login/page.desktop.tsx';
-const loginPageBackup = '.login-page-backup.tsx';
-
-const staffPage = 'app/login/staff/page.tsx';
-const staffPageDesktop = 'app/login/staff/page.desktop.tsx';
-const staffPageBackup = '.staff-page-backup.tsx';
-
-function moveIfExists(from, to) {
-  if (fs.existsSync(from)) {
-    fs.renameSync(from, to);
-    return true;
-  }
-  return false;
+function moveAway(from, to) {
+  if (!fs.existsSync(from)) return false;
+  fs.renameSync(from, to);
+  moved.push([from, to]);
+  return true;
 }
 
-/** Backs up `realPage`, copies `desktopPage` into its place if one exists. Returns whether
- *  `realPage` existed (so restoreAll knows whether to put it back). Warns instead of failing
- *  if the desktop variant is missing, so a build never silently ships with a stale page. */
-function swapInDesktopPage(realPage, desktopPage, backupPage) {
-  let hadRealPage = false;
-  if (fs.existsSync(realPage)) {
-    fs.renameSync(realPage, backupPage);
-    hadRealPage = true;
+function walk(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walk(full, out);
+    else out.push(full);
   }
-  if (fs.existsSync(desktopPage)) {
-    fs.copyFileSync(desktopPage, realPage);
-  } else if (hadRealPage) {
-    console.warn(`Warning: ${desktopPage} not found — ${realPage} will build with no page.tsx.`);
-  }
-  return hadRealPage;
+  return out;
 }
 
-function restoreSwappedPage(realPage, backupPage, hadRealPage) {
-  if (!hadRealPage) return;
-  if (fs.existsSync(realPage)) fs.unlinkSync(realPage);
-  fs.renameSync(backupPage, realPage);
+function swapDesktopVariants() {
+  const files = walk('app');
+  const desktopFiles = files.filter((f) => /\.desktop\.tsx$/.test(f));
+  const swapped = new Set();
+
+  for (const desktop of desktopFiles) {
+    const real = desktop.replace(/\.desktop\.tsx$/, '.tsx');
+    if (fs.existsSync(real)) moveAway(real, real + BACKUP_SUFFIX);
+    fs.copyFileSync(desktop, real);
+    copied.push(real);
+    swapped.add(real);
+  }
+
+  // Server-only pages of the dashboard section with no desktop variant: leave them out.
+  for (const f of files) {
+    const norm = f.split(path.sep).join('/');
+    if (norm.startsWith('app/(restaurant)/') && /\/page\.tsx$/.test(norm) && !swapped.has(f)) {
+      console.warn(`Skipping ${norm}: no page.desktop.tsx, so it is left out of the desktop app.`);
+      moveAway(f, f + BACKUP_SUFFIX);
+    }
+  }
+  console.log(`Swapped in ${desktopFiles.length} desktop page/layout variants.`);
+}
+
+function restoreAll() {
+  for (const f of copied) {
+    if (fs.existsSync(f)) fs.unlinkSync(f);
+  }
+  for (const [from, to] of moved.slice().reverse()) {
+    if (fs.existsSync(to)) fs.renameSync(to, from);
+  }
+  if (fs.existsSync(webConfigBackup)) {
+    fs.copyFileSync(webConfigBackup, 'next.config.js');
+    fs.unlinkSync(webConfigBackup);
+  }
 }
 
 // --- swap in desktop config -------------------------------------------------
 fs.copyFileSync('next.config.js', webConfigBackup);
 fs.copyFileSync('next.config.desktop.js', 'next.config.js');
 
-// --- remove everything that can't survive static export --------------------
-const hadApi = moveIfExists(apiDir, apiBackup);
-const hadSignup = moveIfExists(signupDir, signupBackup);
-const hadRestaurant = moveIfExists(restaurantDir, restaurantBackup);
-
-// --- swap POS and the login flow for their desktop-only client-component versions ----
-const hadPosPage = swapInDesktopPage(posPage, posPageDesktop, posPageBackup);
-const hadLoginPage = swapInDesktopPage(loginPage, loginPageDesktop, loginPageBackup);
-const hadStaffPage = swapInDesktopPage(staffPage, staffPageDesktop, staffPageBackup);
-
-// --- clear stale cached build/type data -------------------------------------
-// Leftover .next/ from a previous dev or web build still references files we just
-// moved out (app/api/*/route.ts etc.), which makes Next's type checker fail trying
-// to resolve modules that, from this build's perspective, no longer exist.
-if (fs.existsSync('.next')) {
-  fs.rmSync('.next', { recursive: true, force: true });
-}
-
-function restoreAll() {
-  restoreSwappedPage(staffPage, staffPageBackup, hadStaffPage);
-  restoreSwappedPage(loginPage, loginPageBackup, hadLoginPage);
-  restoreSwappedPage(posPage, posPageBackup, hadPosPage);
-
-  if (hadRestaurant) fs.renameSync(restaurantBackup, restaurantDir);
-  if (hadSignup) fs.renameSync(signupBackup, signupDir);
-  if (hadApi) fs.renameSync(apiBackup, apiDir);
-
-  fs.copyFileSync(webConfigBackup, 'next.config.js');
-  fs.unlinkSync(webConfigBackup);
-}
-
 try {
+  moveAway(apiDir, apiBackup);
+  moveAway(signupDir, signupBackup);
+  swapDesktopVariants();
+
+  // Leftover .next/ from a previous dev or web build still references files we just moved out,
+  // which makes Next's type checker fail resolving modules that no longer exist.
+  if (fs.existsSync('.next')) fs.rmSync('.next', { recursive: true, force: true });
+
   execSync('next build', { stdio: 'inherit' });
   console.log('Desktop static export built at ./out');
 } finally {

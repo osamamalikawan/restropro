@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "@/lib/platform";
 import { usePathname, useRouter } from "next/navigation";
 import { NAV_GROUPS, canAccess, type Role } from "./nav-config";
 
@@ -35,6 +37,16 @@ export function Sidebar({
 
   async function logout() {
     setLoggingOut(true);
+    if (isTauri()) {
+      // Desktop: the session lives in the app, not in a cookie — drop it and show the PIN screen.
+      try {
+        await invoke("staff_logout");
+      } catch {
+        /* still leave */
+      }
+      window.location.href = "/login/staff";
+      return;
+    }
     await fetch("/api/staff/logout", { method: "POST" });
     router.push("/login");
     router.refresh();

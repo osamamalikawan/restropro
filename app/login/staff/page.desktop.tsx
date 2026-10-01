@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
+import { desktopHome } from '@/lib/desktop/context';
 
 type Employee = { id: string; name: string; role: string };
 
@@ -29,7 +30,7 @@ export default function StaffPickerPage() {
     setPinError('');
     try {
       await invoke('verify_staff_pin', { employeeId: selected.id, pin });
-      router.push('/pos');
+      router.push(await desktopHome());
     } catch (err) {
       setPinError(typeof err === 'string' ? err : 'Incorrect PIN — try again');
       setPin('');

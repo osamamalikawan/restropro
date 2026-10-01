@@ -1,0 +1,991 @@
+diff --git a/app/(restaurant)/accounts/page.desktop.tsx b/app/(restaurant)/accounts/page.desktop.tsx
+new file mode 100644
+index 0000000..8f13565
+--- /dev/null
++++ b/app/(restaurant)/accounts/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { AccountsClient } from "./accounts-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function AccountsPage() {
++  return (
++    <DesktopGuard roles={["admin", "manager"]}>{(c) => (
++      <AccountsClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/customers/page.desktop.tsx b/app/(restaurant)/customers/page.desktop.tsx
+new file mode 100644
+index 0000000..6034189
+--- /dev/null
++++ b/app/(restaurant)/customers/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { CustomersClient } from "./customers-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function CustomersPage() {
++  return (
++    <DesktopGuard >{(c) => (
++      <CustomersClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/dashboard/page.desktop.tsx b/app/(restaurant)/dashboard/page.desktop.tsx
+new file mode 100644
+index 0000000..5b2389f
+--- /dev/null
++++ b/app/(restaurant)/dashboard/page.desktop.tsx
+@@ -0,0 +1,9 @@
++'use client';
++import { DashboardHomeClient } from "./dashboard-home-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function RestaurantDashboard() {
++  return (
++    <DesktopGuard>{(c) => <DashboardHomeClient employeeName={c.employeeName} role={c.role} />}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/employee-ledger/page.desktop.tsx b/app/(restaurant)/employee-ledger/page.desktop.tsx
+new file mode 100644
+index 0000000..1500e62
+--- /dev/null
++++ b/app/(restaurant)/employee-ledger/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { EmployeeLedgerClient } from "./employee-ledger-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function EmployeeLedgerPage() {
++  return (
++    <DesktopGuard roles={["admin", "manager"]}>{(c) => (
++      <EmployeeLedgerClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/employees/page.desktop.tsx b/app/(restaurant)/employees/page.desktop.tsx
+new file mode 100644
+index 0000000..2c01904
+--- /dev/null
++++ b/app/(restaurant)/employees/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { EmployeesClient } from "./employees-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function EmployeesPage() {
++  return (
++    <DesktopGuard module="employees">{(c) => (
++      <EmployeesClient canManage={c.isAdminOrManager} />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/expenses/page.desktop.tsx b/app/(restaurant)/expenses/page.desktop.tsx
+new file mode 100644
+index 0000000..b6ed5ef
+--- /dev/null
++++ b/app/(restaurant)/expenses/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { ExpensesClient } from "./expenses-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function ExpensesPage() {
++  return (
++    <DesktopGuard roles={["admin", "manager"]}>{(c) => (
++      <ExpensesClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/inventory/page.desktop.tsx b/app/(restaurant)/inventory/page.desktop.tsx
+new file mode 100644
+index 0000000..7807782
+--- /dev/null
++++ b/app/(restaurant)/inventory/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { InventoryClient } from "./inventory-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function InventoryPage() {
++  return (
++    <DesktopGuard roles={["admin", "manager", "inventory"]}>{(c) => (
++      <InventoryClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/layout.desktop.tsx b/app/(restaurant)/layout.desktop.tsx
+new file mode 100644
+index 0000000..cdcc59a
+--- /dev/null
++++ b/app/(restaurant)/layout.desktop.tsx
+@@ -0,0 +1,43 @@
++"use client";
++import { useEffect, useState } from "react";
++import { DashboardShell } from "./shell";
++import { DesktopCtxProvider, loadDesktopContext, type DesktopCtx } from "@/lib/desktop/context";
++import { DesktopSyncBar } from "@/components/desktop-sync-bar";
++
++/** Desktop version of layout.tsx: same sidebar + top bar (DashboardShell), but the session comes
++ *  from the device (Rust) instead of a server cookie, so it also works offline. */
++export default function DesktopDashboardLayout({ children }: { children: React.ReactNode }) {
++  const [ctx, setCtx] = useState<DesktopCtx | null>(null);
++
++  useEffect(() => {
++    loadDesktopContext()
++      .then((c) => {
++        if (!c) window.location.href = "/login/staff";
++        else setCtx(c);
++      })
++      .catch(() => {
++        window.location.href = "/login/staff";
++      });
++  }, []);
++
++  if (!ctx) return null;
++
++  return (
++    <DesktopCtxProvider value={ctx}>
++      <DashboardShell
++        role={ctx.role}
++        restaurantName={ctx.restaurantName}
++        employeeName={ctx.employeeName}
++        employeeId={ctx.employeeId}
++        subStatus={ctx.subStatus}
++        modulePerms={ctx.modulePerms}
++        shiftLabel={ctx.shiftLabel}
++      >
++        <div className="px-4 pt-3 md:px-6">
++          <DesktopSyncBar />
++        </div>
++        {children}
++      </DashboardShell>
++    </DesktopCtxProvider>
++  );
++}
+diff --git a/app/(restaurant)/menu/page.desktop.tsx b/app/(restaurant)/menu/page.desktop.tsx
+new file mode 100644
+index 0000000..a7fd3fe
+--- /dev/null
++++ b/app/(restaurant)/menu/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { MenuClient } from "./menu-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function MenuPage() {
++  return (
++    <DesktopGuard roles={["admin", "manager"]}>{(c) => (
++      <MenuClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/notifications/page.desktop.tsx b/app/(restaurant)/notifications/page.desktop.tsx
+new file mode 100644
+index 0000000..ff07fe4
+--- /dev/null
++++ b/app/(restaurant)/notifications/page.desktop.tsx
+@@ -0,0 +1,17 @@
++'use client';
++import NotificationsClient from "./notifications-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function NotificationsPage() {
++  return (
++    <DesktopGuard>{() => (
++      <main className="p-6">
++        <header className="mb-6">
++          <h1 className="font-display text-2xl text-ink-strong">Notifications</h1>
++          <p className="mt-1 text-sm text-ink-mid">Announcements sent to this restaurant by Restro Pro.</p>
++        </header>
++        <NotificationsClient />
++      </main>
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/payment-methods/page.desktop.tsx b/app/(restaurant)/payment-methods/page.desktop.tsx
+new file mode 100644
+index 0000000..64a0691
+--- /dev/null
++++ b/app/(restaurant)/payment-methods/page.desktop.tsx
+@@ -0,0 +1,12 @@
++'use client';
++import { useEffect } from "react";
++import { useRouter } from "next/navigation";
++
++/** Payment Methods lives inside Settings; this keeps old links working. */
++export default function PaymentMethodsRedirect() {
++  const router = useRouter();
++  useEffect(() => {
++    router.replace("/settings#payment-methods");
++  }, [router]);
++  return null;
++}
+diff --git a/app/(restaurant)/permissions/page.desktop.tsx b/app/(restaurant)/permissions/page.desktop.tsx
+new file mode 100644
+index 0000000..4b8b78a
+--- /dev/null
++++ b/app/(restaurant)/permissions/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { PermissionsClient } from "./permissions-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function PermissionsPage() {
++  return (
++    <DesktopGuard module="admin">{(c) => (
++      <PermissionsClient canManageUsers={c.isAdminOrManager} />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/printer-settings/page.desktop.tsx b/app/(restaurant)/printer-settings/page.desktop.tsx
+new file mode 100644
+index 0000000..7635a1c
+--- /dev/null
++++ b/app/(restaurant)/printer-settings/page.desktop.tsx
+@@ -0,0 +1,15 @@
++'use client';
++import { PrinterSettings } from "./printer-settings-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function PrinterSettingsPage() {
++  return (
++    <DesktopGuard module="settings">{() => (
++      <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
++        <h1 className="font-display text-2xl font-bold mb-1">Printer settings</h1>
++        <p className="text-sm text-ink-mid mb-6">Saved per computer, since a USB or network printer only makes sense on the PC that reaches it.</p>
++        <PrinterSettings />
++      </main>
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/products/page.desktop.tsx b/app/(restaurant)/products/page.desktop.tsx
+new file mode 100644
+index 0000000..342f33e
+--- /dev/null
++++ b/app/(restaurant)/products/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { ProductsClient } from "./products-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function ProductsPage() {
++  return (
++    <DesktopGuard module="products">{(c) => (
++      <ProductsClient canEdit={c.isAdminOrManager} />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/recipes-production/page.desktop.tsx b/app/(restaurant)/recipes-production/page.desktop.tsx
+new file mode 100644
+index 0000000..8ebe71a
+--- /dev/null
++++ b/app/(restaurant)/recipes-production/page.desktop.tsx
+@@ -0,0 +1,12 @@
++'use client';
++import { RecipesProductionClient } from "./recipes-production-client";
++import { Suspense } from "react";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function RecipesProductionPage() {
++  return (
++    <DesktopGuard module="recipes">{(c) => (
++      <Suspense><RecipesProductionClient /></Suspense>
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/restock/page.desktop.tsx b/app/(restaurant)/restock/page.desktop.tsx
+new file mode 100644
+index 0000000..158ebe7
+--- /dev/null
++++ b/app/(restaurant)/restock/page.desktop.tsx
+@@ -0,0 +1,12 @@
++'use client';
++import { RestockClient } from "./restock-client";
++import { Suspense } from "react";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function RestockPage() {
++  return (
++    <DesktopGuard roles={["admin", "manager", "inventory"]}>{(c) => (
++      <Suspense><RestockClient /></Suspense>
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/sales/page.desktop.tsx b/app/(restaurant)/sales/page.desktop.tsx
+new file mode 100644
+index 0000000..dd405da
+--- /dev/null
++++ b/app/(restaurant)/sales/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { SalesClient } from "./sales-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function SalesPage() {
++  return (
++    <DesktopGuard module="sales">{(c) => (
++      <SalesClient canCancel={c.isAdminOrManager} />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/settings/page.desktop.tsx b/app/(restaurant)/settings/page.desktop.tsx
+new file mode 100644
+index 0000000..ce6d96b
+--- /dev/null
++++ b/app/(restaurant)/settings/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { SettingsClient } from "./settings-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function SettingsPage() {
++  return (
++    <DesktopGuard anyModule={["settings", "tables"]}>{(c) => (
++      <SettingsClient canSettings={c.can("settings")} canTables={c.can("tables")} canManageTables={c.isAdminOrManager} />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/sidebar.tsx b/app/(restaurant)/sidebar.tsx
+index 8f0ac9a..5915186 100644
+--- a/app/(restaurant)/sidebar.tsx
++++ b/app/(restaurant)/sidebar.tsx
+@@ -1,6 +1,8 @@
+ "use client";
+ import { useState } from "react";
+ import Link from "next/link";
++import { invoke } from "@tauri-apps/api/core";
++import { isTauri } from "@/lib/platform";
+ import { usePathname, useRouter } from "next/navigation";
+ import { NAV_GROUPS, canAccess, type Role } from "./nav-config";
+ 
+@@ -35,6 +37,16 @@ export function Sidebar({
+ 
+   async function logout() {
+     setLoggingOut(true);
++    if (isTauri()) {
++      // Desktop: the session lives in the app, not in a cookie — drop it and show the PIN screen.
++      try {
++        await invoke("staff_logout");
++      } catch {
++        /* still leave */
++      }
++      window.location.href = "/login/staff";
++      return;
++    }
+     await fetch("/api/staff/logout", { method: "POST" });
+     router.push("/login");
+     router.refresh();
+diff --git a/app/(restaurant)/supplier-ledger/page.desktop.tsx b/app/(restaurant)/supplier-ledger/page.desktop.tsx
+new file mode 100644
+index 0000000..878c17a
+--- /dev/null
++++ b/app/(restaurant)/supplier-ledger/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { SupplierLedgerClient } from "./supplier-ledger-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function SupplierLedgerPage() {
++  return (
++    <DesktopGuard roles={["admin", "manager"]}>{(c) => (
++      <SupplierLedgerClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/suppliers/page.desktop.tsx b/app/(restaurant)/suppliers/page.desktop.tsx
+new file mode 100644
+index 0000000..c70b6c0
+--- /dev/null
++++ b/app/(restaurant)/suppliers/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { SuppliersClient } from "./suppliers-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function SuppliersPage() {
++  return (
++    <DesktopGuard roles={["admin", "manager", "inventory"]}>{(c) => (
++      <SuppliersClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/tables-delivery/page.desktop.tsx b/app/(restaurant)/tables-delivery/page.desktop.tsx
+new file mode 100644
+index 0000000..6506cec
+--- /dev/null
++++ b/app/(restaurant)/tables-delivery/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { TablesDeliveryClient } from "./tables-delivery-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function TablesDeliveryPage() {
++  return (
++    <DesktopGuard roles={["admin", "manager"]}>{(c) => (
++      <TablesDeliveryClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/ticket-rail/page.desktop.tsx b/app/(restaurant)/ticket-rail/page.desktop.tsx
+new file mode 100644
+index 0000000..88a7a87
+--- /dev/null
++++ b/app/(restaurant)/ticket-rail/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { TicketRailClient } from "./ticket-rail-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function TicketRailPage() {
++  return (
++    <DesktopGuard module="pos">{(c) => (
++      <TicketRailClient restaurantId={c.restaurantId} canCancel={c.isAdminOrManager} />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/unpaid-orders/page.desktop.tsx b/app/(restaurant)/unpaid-orders/page.desktop.tsx
+new file mode 100644
+index 0000000..4a607a0
+--- /dev/null
++++ b/app/(restaurant)/unpaid-orders/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { UnpaidOrdersClient } from "./unpaid-orders-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function UnpaidOrdersPage() {
++  return (
++    <DesktopGuard module="sales">{(c) => (
++      <UnpaidOrdersClient />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/(restaurant)/users/page.desktop.tsx b/app/(restaurant)/users/page.desktop.tsx
+new file mode 100644
+index 0000000..b3036b1
+--- /dev/null
++++ b/app/(restaurant)/users/page.desktop.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import { UsersClient } from "./users-client";
++import { DesktopGuard } from "@/components/desktop-guard";
++
++export default function UsersPage() {
++  return (
++    <DesktopGuard module="employees">{(c) => (
++      <UsersClient canManage={c.isAdminOrManager} />
++    )}</DesktopGuard>
++  );
++}
+diff --git a/app/api/device/sync/route.ts b/app/api/device/sync/route.ts
+index 38857e0..f11561d 100644
+--- a/app/api/device/sync/route.ts
++++ b/app/api/device/sync/route.ts
+@@ -1,6 +1,8 @@
+ import { NextResponse } from "next/server";
+ import { requireDevice } from "@/lib/auth/require-device";
+ import { createAdminClient } from "@/lib/supabase/admin";
++import { getPermissionMatrix } from "@/lib/permissions";
++import { computeStatus } from "@/lib/subscription";
+ 
+ /** Everything the desktop POS needs to run offline, in one round trip. The device calls this
+  *  on activation, then whenever it is online (see restropro-desk/src/sync.rs). The response is
+@@ -35,6 +37,17 @@ export async function GET(req: Request) {
+   const failed = [restaurant, products, tables, areas, methods, staff, customers, settingsRes].find((r) => r.error);
+   if (failed?.error) return NextResponse.json({ error: failed.error.message }, { status: 500 });
+ 
++  const [permissionMatrix, subRes] = await Promise.all([
++    getPermissionMatrix(rid),
++    admin
++      .from("subscriptions")
++      .select("current_period_end, grace_until, status")
++      .eq("restaurant_id", rid)
++      .order("created_at", { ascending: false })
++      .limit(1)
++      .maybeSingle(),
++  ]);
++
+   let settings = settingsRes.data;
+   if (!settings) {
+     const { data: created } = await admin.from("restaurant_settings").insert({ restaurant_id: rid }).select("*").single();
+@@ -51,5 +64,8 @@ export async function GET(req: Request) {
+     paymentMethods: methods.data ?? [],
+     customers: customers.data ?? [],
+     staffRoster: staff.data ?? [],
++    /** role -> module -> can_view, so the desktop sidebar and page guards work offline */
++    permissionMatrix,
++    subStatus: subRes.data ? computeStatus(subRes.data) : "expired",
+   });
+ }
+diff --git a/app/layout.tsx b/app/layout.tsx
+index 5d39341..7b53600 100644
+--- a/app/layout.tsx
++++ b/app/layout.tsx
+@@ -1,6 +1,7 @@
+ import type { Metadata } from "next";
+ import { Fraunces, Public_Sans, IBM_Plex_Mono } from "next/font/google";
+ import "./globals.css";
++import { DesktopBridge } from "@/components/desktop-bridge";
+ 
+ const fraunces = Fraunces({
+   subsets: ["latin"],
+@@ -49,6 +50,7 @@ export default function RootLayout({ children }: { children: React.ReactNode })
+         />
+       </head>
+       <body className={`${fraunces.variable} ${publicSans.variable} ${plexMono.variable} font-body`}>
++        <DesktopBridge />
+         {children}
+         <script
+           dangerouslySetInnerHTML={{
+diff --git a/app/login/staff/page.desktop.tsx b/app/login/staff/page.desktop.tsx
+index 16fc0f6..41fd89d 100644
+--- a/app/login/staff/page.desktop.tsx
++++ b/app/login/staff/page.desktop.tsx
+@@ -2,6 +2,7 @@
+ import { useEffect, useState } from 'react';
+ import { useRouter } from 'next/navigation';
+ import { invoke } from '@tauri-apps/api/core';
++import { desktopHome } from '@/lib/desktop/context';
+ 
+ type Employee = { id: string; name: string; role: string };
+ 
+@@ -29,7 +30,7 @@ export default function StaffPickerPage() {
+     setPinError('');
+     try {
+       await invoke('verify_staff_pin', { employeeId: selected.id, pin });
+-      router.push('/pos');
++      router.push(await desktopHome());
+     } catch (err) {
+       setPinError(typeof err === 'string' ? err : 'Incorrect PIN — try again');
+       setPin('');
+diff --git a/components/desktop-bridge.tsx b/components/desktop-bridge.tsx
+new file mode 100644
+index 0000000..f1f29a2
+--- /dev/null
++++ b/components/desktop-bridge.tsx
+@@ -0,0 +1,11 @@
++"use client";
++import { installDesktopFetch } from "@/lib/desktop/fetch-bridge";
++
++// Installed at module load (before any screen's effects run) and again on render, in case the
++// module was evaluated during a static-export pass with no window. A no-op in the browser.
++installDesktopFetch();
++
++export function DesktopBridge() {
++  installDesktopFetch();
++  return null;
++}
+diff --git a/components/desktop-guard.tsx b/components/desktop-guard.tsx
+new file mode 100644
+index 0000000..069d823
+--- /dev/null
++++ b/components/desktop-guard.tsx
+@@ -0,0 +1,35 @@
++"use client";
++import { useEffect } from "react";
++import { useRouter } from "next/navigation";
++import { useDesktopCtx, type DesktopCtx } from "@/lib/desktop/context";
++
++/** The desktop counterpart of the access checks at the top of each server page.tsx
++ *  (hasModuleAccess / role lists). Not allowed -> back to the dashboard, like the web redirect.
++ *  The server re-checks the role on every API call, so this is for the UI, not the security. */
++export function DesktopGuard({
++  module,
++  anyModule,
++  roles,
++  children,
++}: {
++  module?: string;
++  anyModule?: string[];
++  roles?: string[];
++  children: (ctx: DesktopCtx) => React.ReactNode;
++}) {
++  const ctx = useDesktopCtx();
++  const router = useRouter();
++
++  const allowed =
++    !!ctx &&
++    (module ? ctx.can(module) : true) &&
++    (anyModule ? anyModule.some((m) => ctx.can(m)) : true) &&
++    (roles ? roles.includes(ctx.role) : true);
++
++  useEffect(() => {
++    if (ctx && !allowed) router.replace("/dashboard");
++  }, [ctx, allowed, router]);
++
++  if (!ctx || !allowed) return null;
++  return <>{children(ctx)}</>;
++}
+diff --git a/lib/auth/require-staff.ts b/lib/auth/require-staff.ts
+index ab658e0..69d68d0 100644
+--- a/lib/auth/require-staff.ts
++++ b/lib/auth/require-staff.ts
+@@ -1,4 +1,5 @@
+-import { cookies } from "next/headers";
++import { cookies, headers } from "next/headers";
++import { requireDevice } from "./require-device";
+ import { verifyStaffSessionToken, STAFF_SESSION_COOKIE, type StaffSessionPayload } from "./staff-session";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ import { computeStatus, isUsable } from "@/lib/subscription";
+@@ -27,7 +28,7 @@ async function queryWithRetry<T>(run: () => PromiseLike<{ data: T | null; error:
+ export async function requireStaffSession(): Promise<StaffSessionPayload | null> {
+   const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
+   const session = await verifyStaffSessionToken(token);
+-  if (!session) return null;
++  if (!session) return requireDeviceStaffSession();
+ 
+   const admin = createAdminClient();
+   const employee = await queryWithRetry<{ status: string; session_version: number }>(() =>
+@@ -82,3 +83,35 @@ export async function resolveStaffContext() {
+     shift: settings ? { start: settings.shift_start as string, end: settings.shift_end as string } : null,
+   };
+ }
++
++
++/** Desktop app path: no browser cookie, so the app sends its activated-device token plus the id
++ *  of the cashier signed in on that device (PIN checked on the device — see restropro-desk
++ *  staff_auth.rs). The device is the trust anchor: the owner activated it, and the owner can
++ *  revoke it (devices.revoked_at). The employee's role, status and the restaurant are still
++ *  re-read from the database on every request, so permissions and deactivation take effect
++ *  immediately, and an employee id from a different restaurant is rejected. */
++async function requireDeviceStaffSession(): Promise<StaffSessionPayload | null> {
++  const h = await headers();
++  const staffId = h.get("x-staff-id");
++  if (!staffId || !(h.get("authorization") ?? "").toLowerCase().startsWith("bearer ")) return null;
++
++  const auth = await requireDevice(new Request("http://internal", { headers: { authorization: h.get("authorization")! } }));
++  if (!auth.ok) return null;
++
++  const admin = createAdminClient();
++  const employee = await queryWithRetry<{ id: string; role: string; status: string; session_version: number; restaurant_id: string }>(() =>
++    admin.from("employees").select("id, role, status, session_version, restaurant_id").eq("id", staffId).single()
++  );
++  if (!employee || employee.status !== "active" || employee.restaurant_id !== auth.device.restaurantId) return null;
++
++  const now = Date.now();
++  return {
++    restaurantId: employee.restaurant_id,
++    employeeId: employee.id,
++    role: employee.role,
++    sessionVersion: employee.session_version,
++    issuedAt: now,
++    expiresAt: now + 60_000,
++  };
++}
+diff --git a/lib/desktop/context.tsx b/lib/desktop/context.tsx
+new file mode 100644
+index 0000000..14105e8
+--- /dev/null
++++ b/lib/desktop/context.tsx
+@@ -0,0 +1,66 @@
++"use client";
++import { createContext, useContext } from "react";
++import { invoke } from "@tauri-apps/api/core";
++import { fmtTime } from "@/lib/format";
++
++/** Who is signed in on this desktop and what they may open — assembled entirely from local data
++ *  (the session held by the Rust side + the last sync), so it works offline. */
++export type DesktopCtx = {
++  employeeId: string;
++  employeeName: string;
++  role: string;
++  restaurantId: string;
++  restaurantName: string;
++  subStatus: string;
++  modulePerms: Record<string, boolean>;
++  shiftLabel: string | null;
++  isAdminOrManager: boolean;
++  /** same rule as the server's hasModuleAccess(): admin sees everything */
++  can: (module: string) => boolean;
++};
++
++type LocalSession = { employee_id: string; name: string; role: string; restaurant_id: string; restaurant_name: string };
++
++// What a cashier gets if the first sync hasn't delivered the permission matrix yet.
++const FALLBACK_PERMS: Record<string, boolean> = { dashboard: true, pos: true, sales: true, customers: true, tables: true };
++
++export async function loadDesktopContext(): Promise<DesktopCtx | null> {
++  const session = await invoke<LocalSession | null>("get_local_session");
++  if (!session) return null;
++
++  const [matrix, settings, meta] = await Promise.all([
++    invoke<Record<string, Record<string, boolean>>>("get_cached_data", { kind: "permissions" }).catch(() => ({})),
++    invoke<{ settings?: { shift_start?: string; shift_end?: string } }>("get_cached_data", { kind: "settings" }).catch(() => ({})),
++    invoke<{ subStatus?: string }>("get_cached_data", { kind: "meta" }).catch(() => ({})),
++  ]);
++
++  const role = session.role;
++  const modulePerms = role === "admin" ? {} : (matrix as Record<string, Record<string, boolean>>)[role] ?? FALLBACK_PERMS;
++  const st = (settings as { settings?: { shift_start?: string; shift_end?: string } }).settings;
++
++  return {
++    employeeId: session.employee_id,
++    employeeName: session.name,
++    role,
++    restaurantId: session.restaurant_id,
++    restaurantName: session.restaurant_name,
++    subStatus: (meta as { subStatus?: string }).subStatus ?? "active",
++    modulePerms,
++    shiftLabel: st?.shift_start && st?.shift_end ? `${fmtTime(st.shift_start)} – ${fmtTime(st.shift_end)}` : null,
++    isAdminOrManager: role === "admin" || role === "manager",
++    can: (module) => role === "admin" || !!modulePerms[module],
++  };
++}
++
++/** Where to land after the PIN screen: the dashboard (same as the web app) when the role may
++ *  open it, otherwise straight to the POS. */
++export async function desktopHome(): Promise<string> {
++  const ctx = await loadDesktopContext();
++  return ctx && !ctx.can("dashboard") ? "/pos" : "/dashboard";
++}
++
++const Ctx = createContext<DesktopCtx | null>(null);
++export const DesktopCtxProvider = Ctx.Provider;
++export function useDesktopCtx() {
++  return useContext(Ctx);
++}
+diff --git a/lib/desktop/fetch-bridge.ts b/lib/desktop/fetch-bridge.ts
+new file mode 100644
+index 0000000..370fc9a
+--- /dev/null
++++ b/lib/desktop/fetch-bridge.ts
+@@ -0,0 +1,58 @@
++import { invoke } from "@tauri-apps/api/core";
++
++/** Desktop app only. The bundled screens call `fetch("/api/...")` exactly like the web app, but
++ *  there is no web server behind the desktop bundle (it is a static export served from the app
++ *  itself). This replaces window.fetch for same-origin /api/ calls with a Tauri command that
++ *  forwards the request to the cloud server using the activated device's credentials, and turns
++ *  the answer back into a normal Response — so every existing screen works without changes.
++ *  Offline, the command fails and the caller sees an ordinary network error (TypeError). */
++const NO_BODY_STATUSES = new Set([101, 204, 205, 304]);
++
++type ApiReply = { status: number; content_type: string | null; body: string };
++
++export function installDesktopFetch() {
++  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
++  const w = window as unknown as { __rpFetchBridge?: boolean };
++  if (w.__rpFetchBridge) return;
++  w.__rpFetchBridge = true;
++
++  const original = window.fetch.bind(window);
++
++  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
++    const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
++    const url = new URL(href, window.location.href);
++    if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
++      return original(input, init);
++    }
++
++    const request = input instanceof Request ? input : null;
++    const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
++    const headers = new Headers(init?.headers ?? request?.headers);
++    let body: string | null = null;
++    const rawBody = init?.body ?? (request && method !== "GET" && method !== "HEAD" ? await request.clone().text() : undefined);
++    if (rawBody != null) {
++      if (typeof rawBody !== "string") {
++        // FormData / Blob (image upload) can't cross the bridge yet — fail like a network error.
++        throw new TypeError("Uploading files is not supported in the desktop app yet");
++      }
++      body = rawBody;
++    }
++
++    let reply: ApiReply;
++    try {
++      reply = await invoke<ApiReply>("api_request", {
++        method,
++        path: url.pathname + url.search,
++        body,
++        contentType: headers.get("content-type"),
++      });
++    } catch (e) {
++      throw new TypeError(typeof e === "string" ? e : "Network request failed");
++    }
++
++    return new Response(NO_BODY_STATUSES.has(reply.status) ? null : reply.body, {
++      status: reply.status,
++      headers: reply.content_type ? { "content-type": reply.content_type } : undefined,
++    });
++  };
++}
+diff --git a/scripts/build-desktop.js b/scripts/build-desktop.js
+index bf8d891..e78ce31 100644
+--- a/scripts/build-desktop.js
++++ b/scripts/build-desktop.js
+@@ -1,108 +1,100 @@
+ // scripts/build-desktop.js
+ //
+ // Builds a static export of the web app for bundling into the Tauri desktop shell.
+-// Only POS (and the login flow that gets a cashier there) needs to work offline, so this
+-// temporarily removes everything that can't survive `output: 'export'` (API routes, the
+-// signup Server Action, and every (restaurant)/* page that reads the server-side
+-// staff-session cookie), swaps in desktop-only client-component versions of the POS and
+-// login pages, builds, then restores everything so the web/Vercel build is completely
+-// unaffected.
++//
++// The desktop bundle has no server, so everything that needs one is swapped out for the
++// duration of the build and restored afterwards (the web/Vercel build is never affected):
++//   - app/api and app/signup are removed (API routes / Server Actions can't be exported).
++//   - Every `<name>.desktop.tsx` next to a `<name>.tsx` (page.desktop.tsx, layout.desktop.tsx)
++//     replaces it. Those are client components that read the signed-in cashier from the device
++//     instead of a cookie; the screens they render are the SAME *-client.tsx components as the
++//     web app, so the UI is identical. Their /api/* calls go through the desktop fetch bridge.
++//   - Any page.tsx under app/(restaurant) that has no desktop variant is excluded, so a new web
++//     page can't break the desktop export (add a page.desktop.tsx to include it).
+ 
+ const fs = require('fs');
++const path = require('path');
+ const { execSync } = require('child_process');
+ 
+ const webConfigBackup = '.next.config.web.backup.js';
++const BACKUP_SUFFIX = '.webbak';
+ 
+ const apiDir = 'app/api';
+ const apiBackup = '.api-backup';
+-
+ const signupDir = 'app/signup';
+ const signupBackup = '.signup-backup';
+ 
+-const restaurantDir = 'app/(restaurant)';
+-const restaurantBackup = '.restaurant-backup';
+-
+-const posPage = 'app/pos/page.tsx';
+-const posPageDesktop = 'app/pos/page.desktop.tsx';
+-const posPageBackup = '.pos-page-backup.tsx';
++const moved = []; // [from, to] pairs to undo, in order
++const copied = []; // files created from *.desktop.tsx, deleted on restore
+ 
+-const loginPage = 'app/login/page.tsx';
+-const loginPageDesktop = 'app/login/page.desktop.tsx';
+-const loginPageBackup = '.login-page-backup.tsx';
+-
+-const staffPage = 'app/login/staff/page.tsx';
+-const staffPageDesktop = 'app/login/staff/page.desktop.tsx';
+-const staffPageBackup = '.staff-page-backup.tsx';
++function moveAway(from, to) {
++  if (!fs.existsSync(from)) return false;
++  fs.renameSync(from, to);
++  moved.push([from, to]);
++  return true;
++}
+ 
+-function moveIfExists(from, to) {
+-  if (fs.existsSync(from)) {
+-    fs.renameSync(from, to);
+-    return true;
++function walk(dir, out = []) {
++  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
++    const full = path.join(dir, entry.name);
++    if (entry.isDirectory()) walk(full, out);
++    else out.push(full);
+   }
+-  return false;
++  return out;
+ }
+ 
+-/** Backs up `realPage`, copies `desktopPage` into its place if one exists. Returns whether
+- *  `realPage` existed (so restoreAll knows whether to put it back). Warns instead of failing
+- *  if the desktop variant is missing, so a build never silently ships with a stale page. */
+-function swapInDesktopPage(realPage, desktopPage, backupPage) {
+-  let hadRealPage = false;
+-  if (fs.existsSync(realPage)) {
+-    fs.renameSync(realPage, backupPage);
+-    hadRealPage = true;
++function swapDesktopVariants() {
++  const files = walk('app');
++  const desktopFiles = files.filter((f) => /\.desktop\.tsx$/.test(f));
++  const swapped = new Set();
++
++  for (const desktop of desktopFiles) {
++    const real = desktop.replace(/\.desktop\.tsx$/, '.tsx');
++    if (fs.existsSync(real)) moveAway(real, real + BACKUP_SUFFIX);
++    fs.copyFileSync(desktop, real);
++    copied.push(real);
++    swapped.add(real);
+   }
+-  if (fs.existsSync(desktopPage)) {
+-    fs.copyFileSync(desktopPage, realPage);
+-  } else if (hadRealPage) {
+-    console.warn(`Warning: ${desktopPage} not found — ${realPage} will build with no page.tsx.`);
++
++  // Server-only pages of the dashboard section with no desktop variant: leave them out.
++  for (const f of files) {
++    const norm = f.split(path.sep).join('/');
++    if (norm.startsWith('app/(restaurant)/') && /\/page\.tsx$/.test(norm) && !swapped.has(f)) {
++      console.warn(`Skipping ${norm}: no page.desktop.tsx, so it is left out of the desktop app.`);
++      moveAway(f, f + BACKUP_SUFFIX);
++    }
+   }
+-  return hadRealPage;
++  console.log(`Swapped in ${desktopFiles.length} desktop page/layout variants.`);
+ }
+ 
+-function restoreSwappedPage(realPage, backupPage, hadRealPage) {
+-  if (!hadRealPage) return;
+-  if (fs.existsSync(realPage)) fs.unlinkSync(realPage);
+-  fs.renameSync(backupPage, realPage);
++function restoreAll() {
++  for (const f of copied) {
++    if (fs.existsSync(f)) fs.unlinkSync(f);
++  }
++  for (const [from, to] of moved.slice().reverse()) {
++    if (fs.existsSync(to)) fs.renameSync(to, from);
++  }
++  if (fs.existsSync(webConfigBackup)) {
++    fs.copyFileSync(webConfigBackup, 'next.config.js');
++    fs.unlinkSync(webConfigBackup);
++  }
+ }
+ 
+ // --- swap in desktop config -------------------------------------------------
+ fs.copyFileSync('next.config.js', webConfigBackup);
+ fs.copyFileSync('next.config.desktop.js', 'next.config.js');
+ 
+-// --- remove everything that can't survive static export --------------------
+-const hadApi = moveIfExists(apiDir, apiBackup);
+-const hadSignup = moveIfExists(signupDir, signupBackup);
+-const hadRestaurant = moveIfExists(restaurantDir, restaurantBackup);
+-
+-// --- swap POS and the login flow for their desktop-only client-component versions ----
+-const hadPosPage = swapInDesktopPage(posPage, posPageDesktop, posPageBackup);
+-const hadLoginPage = swapInDesktopPage(loginPage, loginPageDesktop, loginPageBackup);
+-const hadStaffPage = swapInDesktopPage(staffPage, staffPageDesktop, staffPageBackup);
+-
+-// --- clear stale cached build/type data -------------------------------------
+-// Leftover .next/ from a previous dev or web build still references files we just
+-// moved out (app/api/*/route.ts etc.), which makes Next's type checker fail trying
+-// to resolve modules that, from this build's perspective, no longer exist.
+-if (fs.existsSync('.next')) {
+-  fs.rmSync('.next', { recursive: true, force: true });
+-}
+-
+-function restoreAll() {
+-  restoreSwappedPage(staffPage, staffPageBackup, hadStaffPage);
+-  restoreSwappedPage(loginPage, loginPageBackup, hadLoginPage);
+-  restoreSwappedPage(posPage, posPageBackup, hadPosPage);
+-
+-  if (hadRestaurant) fs.renameSync(restaurantBackup, restaurantDir);
+-  if (hadSignup) fs.renameSync(signupBackup, signupDir);
+-  if (hadApi) fs.renameSync(apiBackup, apiDir);
++try {
++  moveAway(apiDir, apiBackup);
++  moveAway(signupDir, signupBackup);
++  swapDesktopVariants();
+ 
+-  fs.copyFileSync(webConfigBackup, 'next.config.js');
+-  fs.unlinkSync(webConfigBackup);
+-}
++  // Leftover .next/ from a previous dev or web build still references files we just moved out,
++  // which makes Next's type checker fail resolving modules that no longer exist.
++  if (fs.existsSync('.next')) fs.rmSync('.next', { recursive: true, force: true });
+ 
+-try {
+   execSync('next build', { stdio: 'inherit' });
+   console.log('Desktop static export built at ./out');
+ } finally {
+   restoreAll();
+-}
+\ No newline at end of file
++}

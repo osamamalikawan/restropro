@@ -1,0 +1,52 @@
+--- a/app/pos/pos-client.tsx
++++ b/app/pos/pos-client.tsx
+@@ -6,6 +6,7 @@
+ import { ThemeToggle } from "@/components/theme-toggle";
+ import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
+ import { printSale, type SaleSnapshot, type SaveAction } from "@/lib/posPrint";
++import { invoke } from "@tauri-apps/api/core";
+ import { DesktopSyncBar } from "@/components/desktop-sync-bar";
+ import {
+   getProducts,
+@@ -503,13 +504,34 @@
+         {!withShell && (
+         <div className="flex items-center justify-between gap-3 mb-4">
+           <div className="flex items-center gap-3 min-w-0">
+-            <Link
+-              href="/dashboard"
+-              aria-label="Back to dashboard"
+-              className="shrink-0 grid place-items-center w-9 h-9 rounded-lg border border-line bg-surface text-ink-mid hover:text-ink-strong hover:border-chili-500 transition-colors"
+-            >
+-              <ArrowLeft size={16} />
+-            </Link>
++            {isTauri() ? (
++              // The desktop app has no dashboard (it is not part of the offline bundle), so this
++              // button signs the cashier out and returns to the PIN screen instead.
++              <button
++                type="button"
++                aria-label="Switch cashier"
++                title="Switch cashier"
++                onClick={async () => {
++                  try {
++                    await invoke("staff_logout");
++                  } catch {
++                    /* still go back to the PIN screen */
++                  }
++                  window.location.href = "/login/staff";
++                }}
++                className="shrink-0 grid place-items-center w-9 h-9 rounded-lg border border-line bg-surface text-ink-mid hover:text-ink-strong hover:border-chili-500 transition-colors"
++              >
++                <ArrowLeft size={16} />
++              </button>
++            ) : (
++              <Link
++                href="/dashboard"
++                aria-label="Back to dashboard"
++                className="shrink-0 grid place-items-center w-9 h-9 rounded-lg border border-line bg-surface text-ink-mid hover:text-ink-strong hover:border-chili-500 transition-colors"
++              >
++                <ArrowLeft size={16} />
++              </Link>
++            )}
+             <div className="min-w-0">
+               <h1 className="font-display text-lg font-semibold leading-tight truncate">{restaurantName} — POS</h1>
+               <p className="text-ink-faint text-xs truncate">Cashier: {cashierName}</p>

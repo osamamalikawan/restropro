@@ -1,7 +1,6 @@
 {
-  "version": "1.0.2",
-  "min_shell_version": "0.1.0",
-  "url": "https://github.com/osamamalikawan/restropro/releases/download/latest/restropro-web-1.0.2.zip",
-  "sha256": "067e8ee6f9dd0182f456bd5f5a39e5eb878d542d1652d5e6ea544f9471f8dbcb",
-  "notes": "Desktop login/activation flow"
+  "version": "1.0.3",
+  "min_shell_version": "0.2.0",
+  "url": "https://github.com/osamamalikawan/restropro/releases/download/v1.0.3/restropro-bundle-1.0.3.zip",
+  "sha256": "0737ca0c253543f4296b6eb97526c1d0e7aada71ea565a86e2fdb8cab6c9833b"
 }
