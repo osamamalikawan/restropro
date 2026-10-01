@@ -6,7 +6,7 @@ import { PosClient } from './pos-client';
 interface LocalSession {
   restaurant_id: string;
   restaurant_name: string;
-  cashier_name: string;
+  name: string;
 }
 
 export default function PosPage() {
@@ -29,7 +29,7 @@ export default function PosPage() {
     <PosClient
       restaurantId={ctx.restaurant_id}
       restaurantName={ctx.restaurant_name}
-      cashierName={ctx.cashier_name}
+      cashierName={ctx.name}
     />
   );
 }

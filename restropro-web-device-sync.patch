@@ -1,0 +1,761 @@
+diff --git a/app/api/device/activate/route.ts b/app/api/device/activate/route.ts
+index b13e217..46ff64a 100644
+--- a/app/api/device/activate/route.ts
++++ b/app/api/device/activate/route.ts
+@@ -37,7 +37,13 @@ export async function POST(req: Request) {
+ 
+     const deviceToken = generateToken();
+     const tokenHash = await hashToken(deviceToken);
+-    await admin.from("devices").insert({ restaurant_id: restaurant.id, token_hash: tokenHash });
++    const { error: insertError } = await admin.from("devices").insert({ restaurant_id: restaurant.id, token_hash: tokenHash });
++    if (insertError) {
++      // Previously ignored: activation "succeeded" with a token that was never stored, so the
++      // device could never authenticate afterwards. Fail loudly instead.
++      console.error("Device activation: could not store device", insertError);
++      return NextResponse.json({ error: "Could not register this device. Please try again." }, { status: 500 });
++    }
+ 
+     const { data: staffRoster } = await admin
+       .from("employees")
+diff --git a/app/api/device/sales/route.ts b/app/api/device/sales/route.ts
+new file mode 100644
+index 0000000..805a6f2
+--- /dev/null
++++ b/app/api/device/sales/route.ts
+@@ -0,0 +1,149 @@
++import { NextResponse } from "next/server";
++import { requireDevice } from "@/lib/auth/require-device";
++import { createAdminClient } from "@/lib/supabase/admin";
++import { hasModuleAccess } from "@/lib/permissions";
++
++type OfflineSale = {
++  clientSaleId: string;
++  cashierEmployeeId: string;
++  soldAt?: string;
++  orderType: string;
++  items: { productId: string; name: string; price: number; qty: number }[];
++  payments?: { method: string; amount: number }[];
++  taxMethod?: string;
++  tableId?: string | null;
++  areaId?: string | null;
++  deliveryCharge?: number;
++  customerId?: string | null;
++  customerName?: string;
++  customerPhone?: string;
++  customerAddress?: string;
++};
++
++type SaleResult =
++  | { clientSaleId: string; ok: true; orderNo: number | string; total: number; status: string; balance: number; duplicate?: boolean }
++  | { clientSaleId: string; ok: false; error: string; retryable: boolean };
++
++const MAX_BATCH = 50;
++const BACKDATE_LIMIT_MS = 4 * 24 * 60 * 60 * 1000; // devices must sync every 3 days; small margin on top
++const STALE_CLAIM_MS = 10 * 60 * 1000;
++
++/** Upload of sales rung up while the desktop was offline. Same business logic as POST
++ *  /api/sales (tax rate from settings, atomic create_sale RPC) but authenticated by device
++ *  token + the cashier's employee id, and idempotent on clientSaleId. Returns one result per
++ *  sale so the device can mark each as synced / rejected independently. */
++export async function POST(req: Request) {
++  const auth = await requireDevice(req);
++  if (!auth.ok) return NextResponse.json({ error: auth.error, code: auth.code }, { status: auth.status });
++  const { restaurantId, deviceId } = auth.device;
++
++  const body = (await req.json().catch(() => ({}))) as { sales?: OfflineSale[] };
++  const sales = body.sales;
++  if (!Array.isArray(sales) || sales.length === 0 || sales.length > MAX_BATCH) {
++    return NextResponse.json({ error: `Send between 1 and ${MAX_BATCH} sales` }, { status: 400 });
++  }
++
++  const admin = createAdminClient();
++  const { data: st } = await admin.from("restaurant_settings").select("*").eq("restaurant_id", restaurantId).maybeSingle();
++
++  const cashierCache = new Map<string, { ok: boolean; reason?: string }>();
++  async function cashierAllowed(employeeId: string) {
++    const hit = cashierCache.get(employeeId);
++    if (hit) return hit;
++    const { data: emp } = await admin
++      .from("employees")
++      .select("role, status")
++      .eq("id", employeeId)
++      .eq("restaurant_id", restaurantId)
++      .maybeSingle();
++    let res: { ok: boolean; reason?: string };
++    if (!emp) res = { ok: false, reason: "Cashier not found for this restaurant" };
++    else if (!(await hasModuleAccess(restaurantId, emp.role, "pos"))) res = { ok: false, reason: "Cashier is not permitted to use the POS" };
++    else res = { ok: true }; // status is not enforced: a sale already rung up offline must not be lost because the employee was deactivated since
++    cashierCache.set(employeeId, res);
++    return res;
++  }
++
++  const results: SaleResult[] = [];
++  for (const s of sales) {
++    const id = typeof s?.clientSaleId === "string" ? s.clientSaleId : "";
++    const reject = (error: string, retryable = false) => results.push({ clientSaleId: id, ok: false, error, retryable });
++
++    if (!id || id.length > 100) { reject("Missing clientSaleId"); continue; }
++    if (!Array.isArray(s.items) || s.items.length === 0) { reject("Order must have at least one item"); continue; }
++    if (!["dine_in", "takeaway", "delivery"].includes(s.orderType)) { reject("Invalid order type"); continue; }
++    if (!s.cashierEmployeeId) { reject("Missing cashier"); continue; }
++
++    const who = await cashierAllowed(s.cashierEmployeeId);
++    if (!who.ok) { reject(who.reason ?? "Not permitted"); continue; }
++
++    // Claim the id first. A unique-violation means this sale was already uploaded (or is in flight).
++    const { error: claimError } = await admin
++      .from("device_sale_receipts")
++      .insert({ restaurant_id: restaurantId, client_sale_id: id, device_id: deviceId });
++    if (claimError) {
++      const { data: prior } = await admin
++        .from("device_sale_receipts")
++        .select("result, created_at")
++        .eq("restaurant_id", restaurantId)
++        .eq("client_sale_id", id)
++        .maybeSingle();
++      if (prior?.result) {
++        results.push({ clientSaleId: id, ok: true, duplicate: true, ...(prior.result as { orderNo: number | string; total: number; status: string; balance: number }) });
++      } else if (prior && Date.now() - new Date(prior.created_at).getTime() < STALE_CLAIM_MS) {
++        reject("This sale is still being processed — retrying shortly", true);
++      } else {
++        reject("Could not confirm whether this sale was saved. Check Sales on the web app before re-entering it.");
++      }
++      continue;
++    }
++
++    const payments = s.payments ?? [];
++    const method = [...payments].sort((a, c) => c.amount - a.amount)[0]?.method ?? s.taxMethod ?? "Cash";
++    const legacy = st?.tax_rate != null ? Number(st.tax_rate) : 5;
++    const pct = /cash/i.test(method)
++      ? st?.cash_tax_rate != null ? Number(st.cash_tax_rate) : legacy
++      : st?.card_tax_rate != null ? Number(st.card_tax_rate) : legacy;
++
++    const { data, error } = await admin.rpc("create_sale", {
++      p_restaurant_id: restaurantId,
++      p_cashier_employee_id: s.cashierEmployeeId,
++      p_order_type: s.orderType,
++      p_items: s.items,
++      p_payments: payments,
++      p_tax_rate: pct / 100,
++      p_table_id: s.tableId || null,
++      p_area_id: s.areaId || null,
++      p_delivery_charge: s.orderType === "delivery" ? s.deliveryCharge ?? 0 : 0,
++      p_customer_id: s.customerId || null,
++      p_customer_name: s.customerName || null,
++      p_customer_phone: s.customerPhone || null,
++      p_customer_address: s.customerAddress || null,
++    });
++
++    if (error) {
++      // Release the claim so the cashier can fix the cause (e.g. stock) and retry the same sale.
++      await admin.from("device_sale_receipts").delete().eq("restaurant_id", restaurantId).eq("client_sale_id", id);
++      reject(error.message);
++      continue;
++    }
++
++    const r = Array.isArray(data) ? data[0] : data;
++    const result = { orderNo: r.order_no, total: r.total, status: r.status, balance: r.balance ?? 0 };
++    await admin.from("device_sale_receipts").update({ result }).eq("restaurant_id", restaurantId).eq("client_sale_id", id);
++
++    // Keep the real sale time for reports (create_sale stamps "now"). Best effort, clamped.
++    const soldAt = s.soldAt ? new Date(s.soldAt).getTime() : NaN;
++    if (Number.isFinite(soldAt) && soldAt <= Date.now() && Date.now() - soldAt <= BACKDATE_LIMIT_MS) {
++      await admin
++        .from("sales")
++        .update({ created_at: new Date(soldAt).toISOString() })
++        .eq("restaurant_id", restaurantId)
++        .eq("order_no", r.order_no);
++    }
++
++    results.push({ clientSaleId: id, ok: true, ...result });
++  }
++
++  return NextResponse.json({ results });
++}
+diff --git a/app/api/device/sync/route.ts b/app/api/device/sync/route.ts
+new file mode 100644
+index 0000000..38857e0
+--- /dev/null
++++ b/app/api/device/sync/route.ts
+@@ -0,0 +1,55 @@
++import { NextResponse } from "next/server";
++import { requireDevice } from "@/lib/auth/require-device";
++import { createAdminClient } from "@/lib/supabase/admin";
++
++/** Everything the desktop POS needs to run offline, in one round trip. The device calls this
++ *  on activation, then whenever it is online (see restropro-desk/src/sync.rs). The response is
++ *  stored verbatim in the device's local database, so keep the shapes identical to the staff
++ *  routes the POS screen already understands (/api/products, /api/tables, ...). */
++export async function GET(req: Request) {
++  const auth = await requireDevice(req);
++  if (!auth.ok) return NextResponse.json({ error: auth.error, code: auth.code }, { status: auth.status });
++  const rid = auth.device.restaurantId;
++  const admin = createAdminClient();
++
++  const [restaurant, products, tables, areas, methods, staff, customers, settingsRes] = await Promise.all([
++    admin.from("restaurants").select("name, address, phone, slug").eq("id", rid).single(),
++    admin
++      .from("products")
++      .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name)")
++      .eq("restaurant_id", rid)
++      .order("name"),
++    admin.from("tables").select("id, number, seats, is_active").eq("restaurant_id", rid).order("number"),
++    admin.from("delivery_areas").select("id, name, delivery_fee, is_active").eq("restaurant_id", rid).order("name"),
++    admin.from("payment_methods").select("id, name").eq("restaurant_id", rid).order("name"),
++    admin.from("employees").select("id, name, role, pin_hash, status").eq("restaurant_id", rid).not("pin_hash", "is", null),
++    admin
++      .from("customers")
++      .select("id, name, phone, address, area_id, delivery_areas(name)")
++      .eq("restaurant_id", rid)
++      .order("name")
++      .limit(5000),
++    admin.from("restaurant_settings").select("*").eq("restaurant_id", rid).maybeSingle(),
++  ]);
++
++  const failed = [restaurant, products, tables, areas, methods, staff, customers, settingsRes].find((r) => r.error);
++  if (failed?.error) return NextResponse.json({ error: failed.error.message }, { status: 500 });
++
++  let settings = settingsRes.data;
++  if (!settings) {
++    const { data: created } = await admin.from("restaurant_settings").insert({ restaurant_id: rid }).select("*").single();
++    settings = created;
++  }
++
++  return NextResponse.json({
++    serverTime: new Date().toISOString(),
++    restaurant: restaurant.data,
++    settings: settings ?? {},
++    products: products.data ?? [],
++    tables: tables.data ?? [],
++    areas: areas.data ?? [],
++    paymentMethods: methods.data ?? [],
++    customers: customers.data ?? [],
++    staffRoster: staff.data ?? [],
++  });
++}
+diff --git a/app/login/page.desktop.tsx b/app/login/page.desktop.tsx
+index 636969f..4dd5641 100644
+--- a/app/login/page.desktop.tsx
++++ b/app/login/page.desktop.tsx
+@@ -4,8 +4,8 @@ import { useRouter } from 'next/navigation';
+ import { invoke } from '@tauri-apps/api/core';
+ 
+ export default function OwnerLoginPage() {
+-  const [email, setEmail] = useState('xoro1101@yahoo.com');
+-  const [password, setPassword] = useState('1101RestroPro!');
++  const [email, setEmail] = useState('');
++  const [password, setPassword] = useState('');
+   const [error, setError] = useState('');
+   const [loading, setLoading] = useState(false);
+   const [checking, setChecking] = useState(true);
+diff --git a/app/pos/page.desktop.tsx b/app/pos/page.desktop.tsx
+index 2c62db9..d6bc1a1 100644
+--- a/app/pos/page.desktop.tsx
++++ b/app/pos/page.desktop.tsx
+@@ -6,7 +6,7 @@ import { PosClient } from './pos-client';
+ interface LocalSession {
+   restaurant_id: string;
+   restaurant_name: string;
+-  cashier_name: string;
++  name: string;
+ }
+ 
+ export default function PosPage() {
+@@ -29,7 +29,7 @@ export default function PosPage() {
+     <PosClient
+       restaurantId={ctx.restaurant_id}
+       restaurantName={ctx.restaurant_name}
+-      cashierName={ctx.cashier_name}
++      cashierName={ctx.name}
+     />
+   );
+ }
+\ No newline at end of file
+diff --git a/app/pos/pos-client.tsx b/app/pos/pos-client.tsx
+index 71d6341..9b2cc06 100644
+--- a/app/pos/pos-client.tsx
++++ b/app/pos/pos-client.tsx
+@@ -6,6 +6,17 @@ import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
+ import { ThemeToggle } from "@/components/theme-toggle";
+ import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
+ import { printSale, type SaleSnapshot, type SaveAction } from "@/lib/posPrint";
++import { DesktopSyncBar } from "@/components/desktop-sync-bar";
++import {
++  getProducts,
++  getTables,
++  getAreas,
++  getSettings,
++  getPaymentMethods,
++  searchCustomers as searchCustomersData,
++  submitSale,
++  isTauri,
++} from "@/lib/posData";
+ 
+ type Product = {
+   id: string;
+@@ -126,7 +137,8 @@ export function PosClient({
+   const [pendingAction, setPendingAction] = useState<SaveAction | null>(null);
+   const [printNote, setPrintNote] = useState("");
+   const [submitting, setSubmitting] = useState(false);
+-  const [lastReceipt, setLastReceipt] = useState<{ orderNo: number; total: number; balance: number } | null>(null);
++  const [lastReceipt, setLastReceipt] = useState<{ orderNo: number | string; total: number; balance: number; offline?: boolean } | null>(null);
++  const saleIdRef = useRef<string>(typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now()));
+   const [error, setError] = useState("");
+ 
+   // UI-only state (no effect on checkout payload)
+@@ -141,20 +153,36 @@ export function PosClient({
+ 
+   useEffect(() => {
+     let cancelled = false;
+-    (async () => {
+-      const local = await readFast<Product>("products", restaurantId);
+-      if (!cancelled) setProducts(local);
+-      await pullAndCache("products", restaurantId);
+-      const refreshed = await readFast<Product>("products", restaurantId);
+-      if (!cancelled) setProducts(refreshed);
+-    })();
+-    const stop = startBackgroundSync("products", restaurantId);
++    let stop = () => {};
+ 
+-    // Tables/areas are low-frequency admin data (rarely change during a shift) — plain fetch
+-    // is fine here, same reasoning as the Menu/Inventory back-office screens.
+-    fetch("/api/tables").then((r) => r.json()).then((d) => setTables(d.tables ?? []));
+-    fetch("/api/delivery-areas").then((r) => r.json()).then((d) => setAreas(d.areas ?? []));
+-    fetch("/api/settings").then((r) => r.json()).then((d) => {
++    if (isTauri()) {
++      // Desktop: the local database (filled by the Rust sync) is the only source. Re-read it
++      // periodically so a sync that finishes while the screen is open shows up without a reload.
++      const loadLocal = async () => {
++        const [p, t, a] = await Promise.all([getProducts(), getTables(), getAreas()]);
++        if (cancelled) return;
++        setProducts(p);
++        setTables(t.filter((x: any) => x.is_active !== false));
++        setAreas(a.filter((x: any) => x.is_active !== false));
++      };
++      loadLocal().catch(() => {});
++      const timer = setInterval(() => loadLocal().catch(() => {}), 20_000);
++      stop = () => clearInterval(timer);
++    } else {
++      (async () => {
++        const local = await readFast<Product>("products", restaurantId);
++        if (!cancelled) setProducts(local);
++        await pullAndCache("products", restaurantId);
++        const refreshed = await readFast<Product>("products", restaurantId);
++        if (!cancelled) setProducts(refreshed);
++      })();
++      stop = startBackgroundSync("products", restaurantId);
++      getTables().then((t) => !cancelled && setTables(t)).catch(() => {});
++      getAreas().then((a) => !cancelled && setAreas(a)).catch(() => {});
++    }
++
++    getSettings().then((d) => {
++      if (cancelled) return;
+       const st = d.settings ?? {};
+       const legacy = st.tax_rate != null ? Number(st.tax_rate) : 5; // older tenants only have a single tax_rate
+       setSettings({
+@@ -168,14 +196,15 @@ export function PosClient({
+         paper: String(st.paper_width ?? "80"),
+       });
+       setProfile({ address: d.restaurant?.address ?? "", phone: d.restaurant?.phone ?? "" });
+-    });
+-    fetch("/api/payment-methods").then((r) => r.json()).then((d) => {
+-      const names = (d.methods ?? []).map((m: { name: string }) => m.name);
++    }).catch(() => {});
++    getPaymentMethods().then((methods) => {
++      if (cancelled) return;
++      const names = methods.map((m) => m.name);
+       if (names.length) {
+         setPaymentMethods(names);
+         setPayRows([{ id: 1, method: names[0], amount: "" }]);
+       }
+-    });
++    }).catch(() => {});
+ 
+     return () => {
+       cancelled = true;
+@@ -251,9 +280,11 @@ export function PosClient({
+       setCustResults([]);
+       return;
+     }
+-    const res = await fetch(`/api/customers?q=${encodeURIComponent(q)}`);
+-    const data = await res.json();
+-    if (res.ok) setCustResults(data.customers ?? []);
++    try {
++      setCustResults(await searchCustomersData(q));
++    } catch {
++      /* keep the previous results */
++    }
+   }
+   function selectCustomer(c: Customer) {
+     setSelectedCustomer(c);
+@@ -390,10 +421,10 @@ export function PosClient({
+     setSubmitting(true);
+     setPendingAction(action);
+     setError("");
+-    const res = await fetch("/api/sales", {
+-      method: "POST",
+-      headers: { "content-type": "application/json" },
+-      body: JSON.stringify({
++    const paidNow = payments.reduce((sum, x) => sum + x.amount, 0);
++    const result = await submitSale(
++      {
++        clientSaleId: saleIdRef.current,
+         orderType,
+         items: cart.map((l) => ({ productId: l.productId, name: l.name, price: l.price, qty: l.qty })),
+         payments,
+@@ -405,15 +436,18 @@ export function PosClient({
+         customerName: selectedCustomer ? undefined : custName.trim() || undefined,
+         customerPhone: selectedCustomer ? undefined : custPhone.trim() || undefined,
+         customerAddress: custAddress.trim() || undefined,
+-      }),
+-    });
+-    const data = await res.json();
+-    if (!res.ok) {
++      },
++      total,
++      paidNow
++    );
++    if (!result.ok) {
+       setSubmitting(false);
+       setPendingAction(null);
+-      setError(data.error || "Checkout failed");
++      setError(result.error || "Checkout failed");
+       return;
+     }
++    saleIdRef.current = crypto.randomUUID(); // next sale gets a fresh id; a failed attempt above keeps its id so a retry can't double-post
++    const data = { orderNo: result.orderNo ?? "", total: result.total ?? total, balance: result.balance ?? 0, offline: !!result.offline };
+ 
+     // The sale is saved at this point — a printer problem must never undo or block it.
+     let note = "";
+@@ -429,7 +463,7 @@ export function PosClient({
+     setPrintNote(note);
+     setSubmitting(false);
+     setPendingAction(null);
+-    setLastReceipt({ orderNo: data.orderNo, total: data.total, balance: data.balance ?? 0 });
++    setLastReceipt({ orderNo: data.orderNo, total: data.total, balance: data.balance ?? 0, offline: data.offline });
+     setCart([]);
+     setIsResumed(false);
+     setCheckoutOpen(false);
+@@ -485,6 +519,8 @@ export function PosClient({
+         </div>
+         )}
+ 
++        <DesktopSyncBar />
++
+         {/* last sale banner */}
+         {lastReceipt && (
+           <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-basil-500/40 bg-basil-500/10 px-4 py-2.5 text-sm text-basil-400">
+@@ -492,6 +528,7 @@ export function PosClient({
+               <span>
+                 Order #{lastReceipt.orderNo} {lastReceipt.balance > 0 ? "saved" : "completed"} — Rs {fmt(lastReceipt.total)}
+                 {lastReceipt.balance > 0 && ` (Rs ${fmt(lastReceipt.balance)} still due)`}
++                {lastReceipt.offline && " — saved on this device, uploads when online"}
+               </span>
+               {printNote && <span className="block mt-0.5 text-turmeric-400">{printNote}</span>}
+             </span>
+diff --git a/components/desktop-sync-bar.tsx b/components/desktop-sync-bar.tsx
+new file mode 100644
+index 0000000..a16c112
+--- /dev/null
++++ b/components/desktop-sync-bar.tsx
+@@ -0,0 +1,97 @@
++"use client";
++import { useCallback, useEffect, useState } from "react";
++import { invoke } from "@tauri-apps/api/core";
++import { isTauri } from "@/lib/posData";
++
++type SyncStatus = {
++  last_sync_at: string | null;
++  hours_since_sync: number | null;
++  hours_left: number | null;
++  pending_sales: number;
++  rejected_sales: number;
++  locked: boolean;
++  lock_reason: string | null;
++  last_error: string | null;
++};
++
++/** Desktop-only strip: shows when the POS last synced, how many sales are waiting to upload,
++ *  and blocks the screen once the 3-day offline limit is reached (the Rust side enforces the
++ *  same rule, so hiding this component doesn't unlock selling). */
++export function DesktopSyncBar() {
++  const [st, setSt] = useState<SyncStatus | null>(null);
++  const [busy, setBusy] = useState(false);
++  const [msg, setMsg] = useState("");
++
++  const refresh = useCallback(() => {
++    invoke<SyncStatus>("get_sync_status").then(setSt).catch(() => {});
++  }, []);
++
++  useEffect(() => {
++    if (!isTauri()) return;
++    refresh();
++    const t = setInterval(refresh, 30_000);
++    return () => clearInterval(t);
++  }, [refresh]);
++
++  async function syncNow(retryRejected = false) {
++    setBusy(true);
++    setMsg("");
++    try {
++      setSt(await invoke<SyncStatus>("sync_now", { retryRejected }));
++    } catch (e) {
++      setMsg(typeof e === "string" ? e : "Sync failed");
++      refresh();
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  if (!isTauri() || !st) return null;
++
++  const warn = st.pending_sales > 0 || st.rejected_sales > 0 || (st.hours_left ?? 99) <= 24;
++  const label = st.last_sync_at
++    ? `Synced ${st.hours_since_sync === 0 ? "just now" : `${st.hours_since_sync}h ago`}`
++    : "Never synced";
++
++  return (
++    <>
++      {st.locked && (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
++          <div className="max-w-sm rounded-2xl border border-line bg-surface p-6 text-center">
++            <h2 className="font-display text-lg font-semibold mb-2">Sync required</h2>
++            <p className="text-sm text-ink-faint mb-4">{st.lock_reason}</p>
++            {st.pending_sales > 0 && (
++              <p className="text-sm mb-4">{st.pending_sales} sale(s) are saved on this device and will upload during the sync.</p>
++            )}
++            {msg && <p className="text-sm text-chili-500 mb-3">{msg}</p>}
++            <button
++              onClick={() => syncNow()}
++              disabled={busy}
++              className="rounded-lg bg-chili-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
++            >
++              {busy ? "Syncing…" : "Sync now"}
++            </button>
++          </div>
++        </div>
++      )}
++      <div
++        className={`mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-xs ${
++          warn ? "border-turmeric-400/50 text-turmeric-400" : "border-line text-ink-faint"
++        }`}
++      >
++        <span>{label}</span>
++        {st.hours_left != null && st.hours_left <= 24 && <span>· {st.hours_left}h left before sync is required</span>}
++        {st.pending_sales > 0 && <span>· {st.pending_sales} sale(s) waiting to upload</span>}
++        {st.rejected_sales > 0 && (
++          <button className="underline" onClick={() => syncNow(true)} disabled={busy}>
++            {st.rejected_sales} rejected — retry
++          </button>
++        )}
++        {(st.last_error || msg) && <span className="truncate">· {msg || st.last_error}</span>}
++        <button className="ml-auto underline" onClick={() => syncNow()} disabled={busy}>
++          {busy ? "Syncing…" : "Sync now"}
++        </button>
++      </div>
++    </>
++  );
++}
+diff --git a/lib/auth/require-device.ts b/lib/auth/require-device.ts
+new file mode 100644
+index 0000000..c2fbdd1
+--- /dev/null
++++ b/lib/auth/require-device.ts
+@@ -0,0 +1,52 @@
++import { createAdminClient } from "@/lib/supabase/admin";
++import { computeStatus, isUsable } from "@/lib/subscription";
++
++export type DeviceContext = { deviceId: string; restaurantId: string };
++export type DeviceAuth =
++  | { ok: true; device: DeviceContext }
++  | { ok: false; status: number; code: string; error: string };
++
++async function sha256Hex(s: string): Promise<string> {
++  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
++  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
++}
++
++/** Auth for the desktop app's /api/device/* routes (the counterpart of requireStaffSession).
++ *  The desktop sends `Authorization: Bearer <deviceToken>` — the token issued once by
++ *  /api/device/activate. We hash it and look it up; the plain token is never stored.
++ *  Also refuses devices of inactive restaurants / expired subscriptions, so a cut-off
++ *  tenant stops syncing even though the device itself is still valid. */
++export async function requireDevice(req: Request): Promise<DeviceAuth> {
++  const header = req.headers.get("authorization") ?? "";
++  const token = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
++  if (!token) return { ok: false, status: 401, code: "missing_token", error: "Device token required" };
++
++  const admin = createAdminClient();
++  const { data: device } = await admin
++    .from("devices")
++    .select("id, restaurant_id, revoked_at")
++    .eq("token_hash", await sha256Hex(token))
++    .maybeSingle();
++  if (!device || device.revoked_at) {
++    return { ok: false, status: 401, code: "device_revoked", error: "This device is no longer authorised. Activate it again." };
++  }
++
++  const { data: restaurant } = await admin.from("restaurants").select("status").eq("id", device.restaurant_id).single();
++  if (!restaurant || restaurant.status !== "active") {
++    return { ok: false, status: 403, code: "restaurant_inactive", error: "This restaurant account is not active." };
++  }
++
++  const { data: sub } = await admin
++    .from("subscriptions")
++    .select("current_period_end, grace_until, status")
++    .eq("restaurant_id", device.restaurant_id)
++    .order("created_at", { ascending: false })
++    .limit(1)
++    .single();
++  if (sub && !isUsable(computeStatus(sub))) {
++    return { ok: false, status: 402, code: "subscription_expired", error: "Subscription expired. Renew to keep syncing." };
++  }
++
++  await admin.from("devices").update({ last_seen_at: new Date().toISOString() }).eq("id", device.id);
++  return { ok: true, device: { deviceId: device.id, restaurantId: device.restaurant_id } };
++}
+diff --git a/lib/posData.ts b/lib/posData.ts
+index b9e9821..7578c14 100644
+--- a/lib/posData.ts
++++ b/lib/posData.ts
+@@ -1,50 +1,81 @@
+ import { invoke } from "@tauri-apps/api/core";
+ 
+-function isTauri(): boolean {
++/** Data access for the POS screen. In the desktop app (Tauri) everything is read from / written
++ *  to the local database through Rust commands — there is no web server behind the bundled UI,
++ *  so `/api/*` does not exist there. In the browser the same functions call the web API. */
++export function isTauri(): boolean {
+   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+ }
+ 
++export async function getProducts() {
++  if (isTauri()) return invoke<any[]>("get_cached_data", { kind: "products" });
++  const r = await fetch("/api/products");
++  const d = await r.json();
++  return d.products ?? [];
++}
++
+ export async function getTables() {
+-  if (isTauri()) return invoke<{ id: string; number: string }[]>("get_cached_tables");
++  if (isTauri()) return invoke<any[]>("get_cached_data", { kind: "tables" });
+   const r = await fetch("/api/tables");
+   const d = await r.json();
+   return d.tables ?? [];
+ }
+ 
+ export async function getAreas() {
+-  if (isTauri()) return invoke<{ id: string; name: string }[]>("get_cached_areas");
++  if (isTauri()) return invoke<any[]>("get_cached_data", { kind: "areas" });
+   const r = await fetch("/api/delivery-areas");
+   const d = await r.json();
+   return d.areas ?? [];
+ }
+ 
+-export async function getSettings() {
+-  if (isTauri()) return invoke<{ tax_rate: number }>("get_cached_settings");
++/** Same shape as GET /api/settings: { restaurant, settings }. */
++export async function getSettings(): Promise<{ restaurant?: any; settings?: any }> {
++  if (isTauri()) return invoke("get_cached_data", { kind: "settings" });
+   const r = await fetch("/api/settings");
+-  const d = await r.json();
+-  return d.settings ?? {};
++  return r.json();
+ }
+ 
+-export async function getPaymentMethods() {
+-  if (isTauri()) return invoke<{ name: string }[]>("get_cached_payment_methods");
++export async function getPaymentMethods(): Promise<{ id?: string; name: string }[]> {
++  if (isTauri()) return invoke("get_cached_data", { kind: "payment_methods" });
+   const r = await fetch("/api/payment-methods");
+   const d = await r.json();
+   return d.methods ?? [];
+ }
+ 
+ export async function searchCustomers(q: string) {
+-  if (isTauri()) return invoke<{ id: string; name: string; phone: string }[]>("search_local_customers", { q });
++  if (isTauri()) return invoke<any[]>("search_local_customers", { q });
+   const r = await fetch(`/api/customers?q=${encodeURIComponent(q)}`);
+   const d = await r.json();
+   return d.customers ?? [];
+ }
+ 
+-export async function submitSale(payload: unknown) {
+-  if (isTauri()) return invoke("create_local_sale", { payload });
++export type SaleResult = {
++  ok: boolean;
++  error?: string;
++  orderNo?: number | string;
++  total?: number;
++  balance?: number;
++  /** true when the sale was only saved on this device and will upload on the next sync */
++  offline?: boolean;
++};
++
++/** `payload.clientSaleId` makes the upload idempotent: re-sending the same id never creates a
++ *  second sale. `localTotal` is only used on the desktop, where the server hasn't computed it yet. */
++export async function submitSale(payload: Record<string, unknown>, localTotal: number, paid: number): Promise<SaleResult> {
++  if (isTauri()) {
++    try {
++      const r = await invoke<{ orderNo: string; offline: boolean }>("create_local_sale", { payload });
++      return { ok: true, orderNo: r.orderNo, offline: r.offline, total: localTotal, balance: Math.max(0, localTotal - paid) };
++    } catch (e) {
++      return { ok: false, error: typeof e === "string" ? e : e instanceof Error ? e.message : "Could not save the sale" };
++    }
++  }
+   const r = await fetch("/api/sales", {
+     method: "POST",
+     headers: { "content-type": "application/json" },
+     body: JSON.stringify(payload),
+   });
+-  return r.json();
+-}
+\ No newline at end of file
++  const d = await r.json();
++  if (!r.ok) return { ok: false, error: d.error || "Checkout failed" };
++  return { ok: true, orderNo: d.orderNo, total: d.total, balance: d.balance ?? 0 };
++}
+diff --git a/supabase/migrations/0015_devices.sql b/supabase/migrations/0015_devices.sql
+new file mode 100644
+index 0000000..8194e22
+--- /dev/null
++++ b/supabase/migrations/0015_devices.sql
+@@ -0,0 +1,38 @@
++-- =====================================================================
++-- RESTRO PRO — Supabase migration 0015
++-- Desktop (Tauri) POS devices.
++-- 1. `devices`: one row per activated desktop install. Only the SHA-256 hash of the
++--    long-lived device token is stored (the token itself lives in the OS keychain on the
++--    device). Setting revoked_at cuts a device off at its next sync.
++-- 2. `device_sale_receipts`: idempotency ledger for sales rung up offline and uploaded
++--    later. (restaurant_id, client_sale_id) is claimed BEFORE create_sale() runs, so a
++--    retry after a timeout / dropped connection can never create the sale twice.
++-- Both tables are service-role only (RLS on, no policies except super-admin read).
++-- =====================================================================
++
++create table if not exists devices (
++  id uuid primary key default gen_random_uuid(),
++  restaurant_id uuid not null references restaurants(id) on delete cascade,
++  token_hash text not null unique,
++  created_at timestamptz not null default now(),
++  last_seen_at timestamptz,
++  revoked_at timestamptz
++);
++create index if not exists ix_devices_restaurant on devices(restaurant_id);
++
++alter table devices enable row level security;
++drop policy if exists devices_super_admin_read on devices;
++create policy devices_super_admin_read on devices for select using (is_super_admin());
++
++create table if not exists device_sale_receipts (
++  restaurant_id uuid not null references restaurants(id) on delete cascade,
++  client_sale_id text not null,
++  device_id uuid references devices(id) on delete set null,
++  result jsonb,
++  created_at timestamptz not null default now(),
++  primary key (restaurant_id, client_sale_id)
++);
++
++alter table device_sale_receipts enable row level security;
++drop policy if exists device_sale_receipts_super_admin_read on device_sale_receipts;
++create policy device_sale_receipts_super_admin_read on device_sale_receipts for select using (is_super_admin());

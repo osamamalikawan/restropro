@@ -37,7 +37,13 @@ export async function POST(req: Request) {
 
     const deviceToken = generateToken();
     const tokenHash = await hashToken(deviceToken);
-    await admin.from("devices").insert({ restaurant_id: restaurant.id, token_hash: tokenHash });
+    const { error: insertError } = await admin.from("devices").insert({ restaurant_id: restaurant.id, token_hash: tokenHash });
+    if (insertError) {
+      // Previously ignored: activation "succeeded" with a token that was never stored, so the
+      // device could never authenticate afterwards. Fail loudly instead.
+      console.error("Device activation: could not store device", insertError);
+      return NextResponse.json({ error: "Could not register this device. Please try again." }, { status: 500 });
+    }
 
     const { data: staffRoster } = await admin
       .from("employees")

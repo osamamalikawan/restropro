@@ -6,6 +6,17 @@ import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
 import { printSale, type SaleSnapshot, type SaveAction } from "@/lib/posPrint";
+import { DesktopSyncBar } from "@/components/desktop-sync-bar";
+import {
+  getProducts,
+  getTables,
+  getAreas,
+  getSettings,
+  getPaymentMethods,
+  searchCustomers as searchCustomersData,
+  submitSale,
+  isTauri,
+} from "@/lib/posData";
 
 type Product = {
   id: string;
@@ -126,7 +137,8 @@ export function PosClient({
   const [pendingAction, setPendingAction] = useState<SaveAction | null>(null);
   const [printNote, setPrintNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [lastReceipt, setLastReceipt] = useState<{ orderNo: number; total: number; balance: number } | null>(null);
+  const [lastReceipt, setLastReceipt] = useState<{ orderNo: number | string; total: number; balance: number; offline?: boolean } | null>(null);
+  const saleIdRef = useRef<string>(typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now()));
   const [error, setError] = useState("");
 
   // UI-only state (no effect on checkout payload)
@@ -141,20 +153,36 @@ export function PosClient({
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const local = await readFast<Product>("products", restaurantId);
-      if (!cancelled) setProducts(local);
-      await pullAndCache("products", restaurantId);
-      const refreshed = await readFast<Product>("products", restaurantId);
-      if (!cancelled) setProducts(refreshed);
-    })();
-    const stop = startBackgroundSync("products", restaurantId);
+    let stop = () => {};
 
-    // Tables/areas are low-frequency admin data (rarely change during a shift) — plain fetch
-    // is fine here, same reasoning as the Menu/Inventory back-office screens.
-    fetch("/api/tables").then((r) => r.json()).then((d) => setTables(d.tables ?? []));
-    fetch("/api/delivery-areas").then((r) => r.json()).then((d) => setAreas(d.areas ?? []));
-    fetch("/api/settings").then((r) => r.json()).then((d) => {
+    if (isTauri()) {
+      // Desktop: the local database (filled by the Rust sync) is the only source. Re-read it
+      // periodically so a sync that finishes while the screen is open shows up without a reload.
+      const loadLocal = async () => {
+        const [p, t, a] = await Promise.all([getProducts(), getTables(), getAreas()]);
+        if (cancelled) return;
+        setProducts(p);
+        setTables(t.filter((x: any) => x.is_active !== false));
+        setAreas(a.filter((x: any) => x.is_active !== false));
+      };
+      loadLocal().catch(() => {});
+      const timer = setInterval(() => loadLocal().catch(() => {}), 20_000);
+      stop = () => clearInterval(timer);
+    } else {
+      (async () => {
+        const local = await readFast<Product>("products", restaurantId);
+        if (!cancelled) setProducts(local);
+        await pullAndCache("products", restaurantId);
+        const refreshed = await readFast<Product>("products", restaurantId);
+        if (!cancelled) setProducts(refreshed);
+      })();
+      stop = startBackgroundSync("products", restaurantId);
+      getTables().then((t) => !cancelled && setTables(t)).catch(() => {});
+      getAreas().then((a) => !cancelled && setAreas(a)).catch(() => {});
+    }
+
+    getSettings().then((d) => {
+      if (cancelled) return;
       const st = d.settings ?? {};
       const legacy = st.tax_rate != null ? Number(st.tax_rate) : 5; // older tenants only have a single tax_rate
       setSettings({
@@ -168,14 +196,15 @@ export function PosClient({
         paper: String(st.paper_width ?? "80"),
       });
       setProfile({ address: d.restaurant?.address ?? "", phone: d.restaurant?.phone ?? "" });
-    });
-    fetch("/api/payment-methods").then((r) => r.json()).then((d) => {
-      const names = (d.methods ?? []).map((m: { name: string }) => m.name);
+    }).catch(() => {});
+    getPaymentMethods().then((methods) => {
+      if (cancelled) return;
+      const names = methods.map((m) => m.name);
       if (names.length) {
         setPaymentMethods(names);
         setPayRows([{ id: 1, method: names[0], amount: "" }]);
       }
-    });
+    }).catch(() => {});
 
     return () => {
       cancelled = true;
@@ -251,9 +280,11 @@ export function PosClient({
       setCustResults([]);
       return;
     }
-    const res = await fetch(`/api/customers?q=${encodeURIComponent(q)}`);
-    const data = await res.json();
-    if (res.ok) setCustResults(data.customers ?? []);
+    try {
+      setCustResults(await searchCustomersData(q));
+    } catch {
+      /* keep the previous results */
+    }
   }
   function selectCustomer(c: Customer) {
     setSelectedCustomer(c);
@@ -390,10 +421,10 @@ export function PosClient({
     setSubmitting(true);
     setPendingAction(action);
     setError("");
-    const res = await fetch("/api/sales", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    const paidNow = payments.reduce((sum, x) => sum + x.amount, 0);
+    const result = await submitSale(
+      {
+        clientSaleId: saleIdRef.current,
         orderType,
         items: cart.map((l) => ({ productId: l.productId, name: l.name, price: l.price, qty: l.qty })),
         payments,
@@ -405,15 +436,18 @@ export function PosClient({
         customerName: selectedCustomer ? undefined : custName.trim() || undefined,
         customerPhone: selectedCustomer ? undefined : custPhone.trim() || undefined,
         customerAddress: custAddress.trim() || undefined,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
+      },
+      total,
+      paidNow
+    );
+    if (!result.ok) {
       setSubmitting(false);
       setPendingAction(null);
-      setError(data.error || "Checkout failed");
+      setError(result.error || "Checkout failed");
       return;
     }
+    saleIdRef.current = crypto.randomUUID(); // next sale gets a fresh id; a failed attempt above keeps its id so a retry can't double-post
+    const data = { orderNo: result.orderNo ?? "", total: result.total ?? total, balance: result.balance ?? 0, offline: !!result.offline };
 
     // The sale is saved at this point — a printer problem must never undo or block it.
     let note = "";
@@ -429,7 +463,7 @@ export function PosClient({
     setPrintNote(note);
     setSubmitting(false);
     setPendingAction(null);
-    setLastReceipt({ orderNo: data.orderNo, total: data.total, balance: data.balance ?? 0 });
+    setLastReceipt({ orderNo: data.orderNo, total: data.total, balance: data.balance ?? 0, offline: data.offline });
     setCart([]);
     setIsResumed(false);
     setCheckoutOpen(false);
@@ -485,6 +519,8 @@ export function PosClient({
         </div>
         )}
 
+        <DesktopSyncBar />
+
         {/* last sale banner */}
         {lastReceipt && (
           <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-basil-500/40 bg-basil-500/10 px-4 py-2.5 text-sm text-basil-400">
@@ -492,6 +528,7 @@ export function PosClient({
               <span>
                 Order #{lastReceipt.orderNo} {lastReceipt.balance > 0 ? "saved" : "completed"} — Rs {fmt(lastReceipt.total)}
                 {lastReceipt.balance > 0 && ` (Rs ${fmt(lastReceipt.balance)} still due)`}
+                {lastReceipt.offline && " — saved on this device, uploads when online"}
               </span>
               {printNote && <span className="block mt-0.5 text-turmeric-400">{printNote}</span>}
             </span>
