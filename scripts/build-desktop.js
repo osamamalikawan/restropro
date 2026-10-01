@@ -1,11 +1,12 @@
 // scripts/build-desktop.js
 //
 // Builds a static export of the web app for bundling into the Tauri desktop shell.
-// Only POS needs to work offline, so this temporarily removes everything that can't
-// survive `output: 'export'` (API routes, the signup Server Action, and every
-// (restaurant)/* page that reads the server-side staff-session cookie), swaps in a
-// desktop-only client-component version of the POS page, builds, then restores
-// everything so the web/Vercel build is completely unaffected.
+// Only POS (and the login flow that gets a cashier there) needs to work offline, so this
+// temporarily removes everything that can't survive `output: 'export'` (API routes, the
+// signup Server Action, and every (restaurant)/* page that reads the server-side
+// staff-session cookie), swaps in desktop-only client-component versions of the POS and
+// login pages, builds, then restores everything so the web/Vercel build is completely
+// unaffected.
 
 const fs = require('fs');
 const { execSync } = require('child_process');
@@ -25,12 +26,43 @@ const posPage = 'app/pos/page.tsx';
 const posPageDesktop = 'app/pos/page.desktop.tsx';
 const posPageBackup = '.pos-page-backup.tsx';
 
+const loginPage = 'app/login/page.tsx';
+const loginPageDesktop = 'app/login/page.desktop.tsx';
+const loginPageBackup = '.login-page-backup.tsx';
+
+const staffPage = 'app/login/staff/page.tsx';
+const staffPageDesktop = 'app/login/staff/page.desktop.tsx';
+const staffPageBackup = '.staff-page-backup.tsx';
+
 function moveIfExists(from, to) {
   if (fs.existsSync(from)) {
     fs.renameSync(from, to);
     return true;
   }
   return false;
+}
+
+/** Backs up `realPage`, copies `desktopPage` into its place if one exists. Returns whether
+ *  `realPage` existed (so restoreAll knows whether to put it back). Warns instead of failing
+ *  if the desktop variant is missing, so a build never silently ships with a stale page. */
+function swapInDesktopPage(realPage, desktopPage, backupPage) {
+  let hadRealPage = false;
+  if (fs.existsSync(realPage)) {
+    fs.renameSync(realPage, backupPage);
+    hadRealPage = true;
+  }
+  if (fs.existsSync(desktopPage)) {
+    fs.copyFileSync(desktopPage, realPage);
+  } else if (hadRealPage) {
+    console.warn(`Warning: ${desktopPage} not found — ${realPage} will build with no page.tsx.`);
+  }
+  return hadRealPage;
+}
+
+function restoreSwappedPage(realPage, backupPage, hadRealPage) {
+  if (!hadRealPage) return;
+  if (fs.existsSync(realPage)) fs.unlinkSync(realPage);
+  fs.renameSync(backupPage, realPage);
 }
 
 // --- swap in desktop config -------------------------------------------------
@@ -42,17 +74,10 @@ const hadApi = moveIfExists(apiDir, apiBackup);
 const hadSignup = moveIfExists(signupDir, signupBackup);
 const hadRestaurant = moveIfExists(restaurantDir, restaurantBackup);
 
-// --- swap POS for its desktop-only client-component version ----------------
-let hadPosPage = false;
-if (fs.existsSync(posPage)) {
-  fs.renameSync(posPage, posPageBackup);
-  hadPosPage = true;
-}
-if (fs.existsSync(posPageDesktop)) {
-  fs.copyFileSync(posPageDesktop, posPage);
-} else if (hadPosPage) {
-  console.warn(`Warning: ${posPageDesktop} not found — POS will build with no page.tsx.`);
-}
+// --- swap POS and the login flow for their desktop-only client-component versions ----
+const hadPosPage = swapInDesktopPage(posPage, posPageDesktop, posPageBackup);
+const hadLoginPage = swapInDesktopPage(loginPage, loginPageDesktop, loginPageBackup);
+const hadStaffPage = swapInDesktopPage(staffPage, staffPageDesktop, staffPageBackup);
 
 // --- clear stale cached build/type data -------------------------------------
 // Leftover .next/ from a previous dev or web build still references files we just
@@ -63,10 +88,10 @@ if (fs.existsSync('.next')) {
 }
 
 function restoreAll() {
-  if (hadPosPage) {
-    if (fs.existsSync(posPage)) fs.unlinkSync(posPage);
-    fs.renameSync(posPageBackup, posPage);
-  }
+  restoreSwappedPage(staffPage, staffPageBackup, hadStaffPage);
+  restoreSwappedPage(loginPage, loginPageBackup, hadLoginPage);
+  restoreSwappedPage(posPage, posPageBackup, hadPosPage);
+
   if (hadRestaurant) fs.renameSync(restaurantBackup, restaurantDir);
   if (hadSignup) fs.renameSync(signupBackup, signupDir);
   if (hadApi) fs.renameSync(apiBackup, apiDir);
