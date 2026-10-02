@@ -1,0 +1,107 @@
+diff --git a/app/api/device/sales/route.ts b/app/api/device/sales/route.ts
+--- a/app/api/device/sales/route.ts
++++ b/app/api/device/sales/route.ts
+@@ -113,44 +113,67 @@
+       ? st?.cash_tax_rate != null ? Number(st.cash_tax_rate) : legacy
+       : st?.card_tax_rate != null ? Number(st.card_tax_rate) : legacy;
+ 
+-    const { data, error } = await admin.rpc("create_sale", {
+-      p_restaurant_id: restaurantId,
+-      p_cashier_employee_id: s.cashierEmployeeId,
+-      p_order_type: s.orderType,
+-      p_items: s.items,
+-      p_payments: payments,
+-      p_tax_rate: pct / 100,
+-      p_table_id: s.tableId || null,
+-      p_area_id: s.areaId || null,
+-      p_delivery_charge: s.orderType === "delivery" ? s.deliveryCharge ?? 0 : 0,
+-      p_customer_id: s.customerId || null,
+-      p_customer_name: s.customerName || null,
+-      p_customer_phone: s.customerPhone || null,
+-      p_customer_address: s.customerAddress || null,
+-    });
+-
+-    if (error) {
+-      // Release the claim so the cashier can fix the cause (e.g. stock) and retry the same sale.
+-      await admin.from("device_sale_receipts").delete().eq("restaurant_id", restaurantId).eq("client_sale_id", id);
+-      reject(error.message);
+-      continue;
+-    }
+-
+-    const r = Array.isArray(data) ? data[0] : data;
+-    const result = { orderNo: r.order_no, total: r.total, status: r.status, balance: r.balance ?? 0 };
+-    await admin.from("device_sale_receipts").update({ result }).eq("restaurant_id", restaurantId).eq("client_sale_id", id);
+-
+-    // Keep the real sale time for reports (create_sale stamps "now"). Best effort, clamped.
+-    const soldAt = s.soldAt ? new Date(s.soldAt).getTime() : NaN;
+-    if (Number.isFinite(soldAt) && soldAt <= Date.now() && Date.now() - soldAt <= BACKDATE_LIMIT_MS) {
+-      await admin
+-        .from("sales")
+-        .update({ created_at: new Date(soldAt).toISOString() })
++    let created = false; // true once create_sale() has committed — from then on the sale exists
++    try {
++      const { data, error } = await admin.rpc("create_sale", {
++        p_restaurant_id: restaurantId,
++        p_cashier_employee_id: s.cashierEmployeeId,
++        p_order_type: s.orderType,
++        p_items: s.items,
++        p_payments: payments,
++        p_tax_rate: pct / 100,
++        p_table_id: s.tableId || null,
++        p_area_id: s.areaId || null,
++        p_delivery_charge: s.orderType === "delivery" ? s.deliveryCharge ?? 0 : 0,
++        p_customer_id: s.customerId || null,
++        p_customer_name: s.customerName || null,
++        p_customer_phone: s.customerPhone || null,
++        p_customer_address: s.customerAddress || null,
++      });
++
++      if (error) {
++        // Release the claim so the cashier can fix the cause (e.g. stock) and retry the same sale.
++        await admin.from("device_sale_receipts").delete().eq("restaurant_id", restaurantId).eq("client_sale_id", id);
++        reject(error.message);
++        continue;
++      }
++      created = true;
++
++      const r = ((Array.isArray(data) ? data[0] : data) ?? {}) as { order_no?: number | string; total?: number; status?: string; balance?: number };
++      const result = { orderNo: r.order_no ?? "", total: r.total ?? 0, status: r.status ?? "", balance: r.balance ?? 0 };
++
++      const { error: receiptError } = await admin
++        .from("device_sale_receipts")
++        .update({ result })
+         .eq("restaurant_id", restaurantId)
+-        .eq("order_no", r.order_no);
+-    }
++        .eq("client_sale_id", id);
++      if (receiptError) console.error("device_sale_receipts result not stored", receiptError);
+ 
+-    results.push({ clientSaleId: id, ok: true, ...result });
++      // Keep the real sale time for reports (create_sale stamps "now"). Best effort, clamped, and
++      // limited to rows created in the last few minutes so a reused order_no can never touch an
++      // older sale.
++      const soldAt = s.soldAt ? new Date(s.soldAt).getTime() : NaN;
++      if (r.order_no != null && Number.isFinite(soldAt) && soldAt <= Date.now() && Date.now() - soldAt <= BACKDATE_LIMIT_MS) {
++        await admin
++          .from("sales")
++          .update({ created_at: new Date(soldAt).toISOString() })
++          .eq("restaurant_id", restaurantId)
++          .eq("order_no", r.order_no)
++          .gte("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString());
++      }
++
++      results.push({ clientSaleId: id, ok: true, ...result });
++    } catch (e) {
++      console.error("device sale upload failed", e);
++      if (created) {
++        // The sale is saved; only the bookkeeping after it failed. Tell the device it is done so
++        // it is not retried (a retry would find a claim with no result and be refused).
++        results.push({ clientSaleId: id, ok: true, orderNo: "", total: 0, status: "", balance: 0 });
++      } else {
++        await admin.from("device_sale_receipts").delete().eq("restaurant_id", restaurantId).eq("client_sale_id", id);
++        reject(`Server error while saving this sale — ${e instanceof Error ? e.message : "unknown"}`, true);
++      }
++    }
+   }
+ 
+   return NextResponse.json({ results });
