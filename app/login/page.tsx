@@ -14,8 +14,8 @@ import { Spinner } from "@/components/ui/loading";
  * model (ARCHITECTURE.md).
  */
 export default function OwnerLoginPage() {
-  const [email, setEmail] = useState('xoro1101@yahoo.com');
-  const [password, setPassword] = useState('1101RestroPro!');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
@@ -104,12 +104,6 @@ export default function OwnerLoginPage() {
         </button>
       </form>
 
-      <p className="text-[11px] text-ink-faint mt-[22px] text-center relative z-10 max-w-[420px] leading-relaxed">
-        Platform owner?{" "}
-        <a href="/super-admin/login" className="text-chili-400 font-bold hover:underline">
-          Go to Super Admin →
-        </a>
-      </p>
     </main>
   );
 }

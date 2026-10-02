@@ -2,29 +2,41 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
+import { initials, colorForId } from '@/lib/avatar';
 import { desktopHome } from '@/lib/desktop/context';
+import { PinModal } from './pin-modal';
+import { PageLoader } from '@/components/ui/loading';
 
 type Employee = { id: string; name: string; role: string };
 
+/**
+ * Desktop version of the staff picker: the same screen as the web app (avatar cards, shared PIN
+ * modal and keypad) with the staff list and PIN check coming from this device — the list from the
+ * last sync, the PIN verified locally — so it works with no internet.
+ */
 export default function StaffPickerPage() {
   const router = useRouter();
   const [restaurantName, setRestaurantName] = useState('');
   const [employees, setEmployees] = useState<Employee[] | null>(null);
+  const [loadError, setLoadError] = useState('');
   const [selected, setSelected] = useState<Employee | null>(null);
-  const [pin, setPin] = useState('');
-  const [pinError, setPinError] = useState('');
   const [pinLoading, setPinLoading] = useState(false);
+  const [pinError, setPinError] = useState('');
 
   useEffect(() => {
-    invoke<{ restaurant_name: string } | null>('get_device_info').then((info) => {
-      if (!info) { router.replace('/login'); return; }
-      setRestaurantName(info.restaurant_name);
-      invoke<Employee[]>('get_cached_staff_list').then(setEmployees);
-    });
+    invoke<{ restaurant_name: string } | null>('get_device_info')
+      .then((info) => {
+        if (!info) {
+          router.replace('/login');
+          return;
+        }
+        setRestaurantName(info.restaurant_name);
+        return invoke<Employee[]>('get_cached_staff_list').then(setEmployees);
+      })
+      .catch((e) => setLoadError(typeof e === 'string' ? e : 'Could not load staff'));
   }, [router]);
 
-  async function submitPin(e: React.FormEvent) {
-    e.preventDefault();
+  async function submitPin(pin: string) {
     if (!selected) return;
     setPinLoading(true);
     setPinError('');
@@ -33,53 +45,84 @@ export default function StaffPickerPage() {
       router.push(await desktopHome());
     } catch (err) {
       setPinError(typeof err === 'string' ? err : 'Incorrect PIN — try again');
-      setPin('');
     } finally {
       setPinLoading(false);
     }
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-5 py-10">
-      <h1 className="font-display text-[27px] font-semibold mb-2">{restaurantName || 'Restro Pro'}</h1>
-      <p className="text-sm mb-8">Select your name on staff to clock in</p>
+    <main className="min-h-screen flex flex-col items-center justify-center px-5 py-10 relative overflow-hidden bg-canvas">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-70"
+        style={{
+          background:
+            'radial-gradient(650px 420px at 12% 8%, rgba(217,72,31,0.16), transparent 60%), radial-gradient(520px 400px at 88% 92%, rgba(63,110,82,0.10), transparent 60%)',
+        }}
+      />
 
-      {employees === null && <p>Loading staff…</p>}
+      <div className="text-center mb-9 relative z-10">
+        <div className="w-[58px] h-[58px] mx-auto mb-4 rounded-2xl bg-gradient-to-br from-chili-400 to-chili-600 flex items-center justify-center shadow-[0_14px_34px_-10px_rgba(217,72,31,0.6)]">
+          <span className="font-display italic font-bold text-white text-[23px]">RP</span>
+        </div>
+        <h1 className="font-display text-[27px] font-semibold tracking-tight text-ink-strong">
+          {restaurantName || 'Restro Pro'}
+        </h1>
+        <p className="text-ink-faint text-sm mt-2">Select your name on staff to clock in</p>
+      </div>
 
-      {employees !== null && !selected && (
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-3.5 max-w-[660px]">
-          {employees.map((emp) => (
-            <button key={emp.id} onClick={() => setSelected(emp)}
-              className="bg-surface border border-line rounded-2xl px-3 py-5 text-center">
-              <div className="font-semibold text-[13.5px]">{emp.name}</div>
-              <div className="text-[11px] mt-0.5 uppercase">{emp.role}</div>
+      {loadError && (
+        <div className="relative z-10 text-center">
+          <p className="text-crimson-400 text-sm">{loadError}</p>
+        </div>
+      )}
+
+      {!loadError && employees === null && (
+        <div className="relative z-10">
+          <PageLoader label="Loading staff…" />
+        </div>
+      )}
+
+      {!loadError && employees !== null && employees.length === 0 && (
+        <div className="relative z-10 text-center max-w-[320px]">
+          <p className="text-ink-faint text-sm">
+            No staff on this computer yet. Connect to the internet and open Sync to download your team.
+          </p>
+        </div>
+      )}
+
+      {!loadError && employees !== null && employees.length > 0 && (
+        <div className="relative z-10 grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-3.5 max-w-[660px]">
+          {employees.map((emp, i) => (
+            <button
+              key={emp.id}
+              onClick={() => {
+                setSelected(emp);
+                setPinError('');
+              }}
+              style={{ animationDelay: `${i * 50}ms` }}
+              className="emp-card-in bg-surface border border-line rounded-2xl px-3 py-5 text-center shadow-lg transition-transform hover:-translate-y-1 hover:border-chili-500"
+            >
+              <div
+                className="w-14 h-14 mx-auto mb-3 rounded-full flex items-center justify-center font-display font-bold text-[17px] text-white"
+                style={{ background: colorForId(emp.id) }}
+              >
+                {initials(emp.name)}
+              </div>
+              <div className="font-semibold text-[13.5px] text-ink-strong">{emp.name}</div>
+              <div className="text-ink-faint text-[11px] mt-0.5 uppercase tracking-wide capitalize">{emp.role}</div>
             </button>
           ))}
         </div>
       )}
 
       {selected && (
-        <form onSubmit={submitPin} className="w-full max-w-[280px] space-y-3">
-          <p className="text-center text-sm">Hi {selected.name.split(' ')[0]} — enter PIN</p>
-          <input
-            type="password"
-            inputMode="numeric"
-            maxLength={4}
-            value={pin}
-            onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
-            autoFocus
-            className="w-full text-center text-2xl tracking-[0.5em] rounded-lg bg-raised border border-line py-3"
-          />
-          <p className="text-[11px] text-crimson-400 text-center min-h-[14px]">{pinError}</p>
-          <button type="submit" disabled={pinLoading || pin.length !== 4}
-            className="w-full rounded-lg bg-chili-500 text-white text-[12.5px] font-bold py-2.5">
-            {pinLoading ? 'Checking…' : 'Go'}
-          </button>
-          <button type="button" onClick={() => { setSelected(null); setPin(''); }}
-            className="w-full text-xs underline">
-            Not you?
-          </button>
-        </form>
+        <PinModal
+          employeeName={selected.name}
+          onSubmit={submitPin}
+          onClose={() => setSelected(null)}
+          loading={pinLoading}
+          error={pinError}
+        />
       )}
     </main>
   );
