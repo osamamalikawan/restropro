@@ -1,0 +1,159 @@
+diff --git a/app/(restaurant)/layout.desktop.tsx b/app/(restaurant)/layout.desktop.tsx
+index cdcc59a..84655c3 100644
+--- a/app/(restaurant)/layout.desktop.tsx
++++ b/app/(restaurant)/layout.desktop.tsx
+@@ -1,43 +1,8 @@
+ "use client";
+-import { useEffect, useState } from "react";
+-import { DashboardShell } from "./shell";
+-import { DesktopCtxProvider, loadDesktopContext, type DesktopCtx } from "@/lib/desktop/context";
+-import { DesktopSyncBar } from "@/components/desktop-sync-bar";
++import { DesktopShell } from "@/components/desktop-shell";
+ 
+-/** Desktop version of layout.tsx: same sidebar + top bar (DashboardShell), but the session comes
+- *  from the device (Rust) instead of a server cookie, so it also works offline. */
++/** Desktop version of layout.tsx: same sidebar + top bar as the web app, with the signed-in
++ *  cashier taken from the device instead of a server cookie (see components/desktop-shell.tsx). */
+ export default function DesktopDashboardLayout({ children }: { children: React.ReactNode }) {
+-  const [ctx, setCtx] = useState<DesktopCtx | null>(null);
+-
+-  useEffect(() => {
+-    loadDesktopContext()
+-      .then((c) => {
+-        if (!c) window.location.href = "/login/staff";
+-        else setCtx(c);
+-      })
+-      .catch(() => {
+-        window.location.href = "/login/staff";
+-      });
+-  }, []);
+-
+-  if (!ctx) return null;
+-
+-  return (
+-    <DesktopCtxProvider value={ctx}>
+-      <DashboardShell
+-        role={ctx.role}
+-        restaurantName={ctx.restaurantName}
+-        employeeName={ctx.employeeName}
+-        employeeId={ctx.employeeId}
+-        subStatus={ctx.subStatus}
+-        modulePerms={ctx.modulePerms}
+-        shiftLabel={ctx.shiftLabel}
+-      >
+-        <div className="px-4 pt-3 md:px-6">
+-          <DesktopSyncBar />
+-        </div>
+-        {children}
+-      </DashboardShell>
+-    </DesktopCtxProvider>
+-  );
++  return <DesktopShell>{children}</DesktopShell>;
+ }
+diff --git a/app/pos/page.desktop.tsx b/app/pos/page.desktop.tsx
+index d6bc1a1..9f9d784 100644
+--- a/app/pos/page.desktop.tsx
++++ b/app/pos/page.desktop.tsx
+@@ -1,35 +1,20 @@
+ 'use client';
+-import { useEffect, useState } from 'react';
+-import { invoke } from '@tauri-apps/api/core';
++import { DesktopShell } from '@/components/desktop-shell';
++import { useDesktopCtx } from '@/lib/desktop/context';
+ import { PosClient } from './pos-client';
+ 
+-interface LocalSession {
+-  restaurant_id: string;
+-  restaurant_name: string;
+-  name: string;
++// Same composition as the web page.tsx — sidebar + top bar around the POS (`withShell`) — with the
++// session read from the device instead of a cookie. Replaces page.tsx in the desktop build.
++function DesktopPos() {
++  const ctx = useDesktopCtx();
++  if (!ctx) return null;
++  return <PosClient withShell restaurantId={ctx.restaurantId} restaurantName={ctx.restaurantName} cashierName={ctx.employeeName} />;
+ }
+ 
+ export default function PosPage() {
+-  const [ctx, setCtx] = useState<LocalSession | null>(null);
+-  const [loading, setLoading] = useState(true);
+-
+-  useEffect(() => {
+-    invoke<LocalSession | null>('get_local_session')
+-      .then((session) => {
+-        if (!session) { window.location.href = '/login'; return; }
+-        setCtx(session);
+-      })
+-      .catch(() => { window.location.href = '/login'; })
+-      .finally(() => setLoading(false));
+-  }, []);
+-
+-  if (loading || !ctx) return null;
+-
+   return (
+-    <PosClient
+-      restaurantId={ctx.restaurant_id}
+-      restaurantName={ctx.restaurant_name}
+-      cashierName={ctx.name}
+-    />
++    <DesktopShell syncBar={false}>
++      <DesktopPos />
++    </DesktopShell>
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/components/desktop-shell.tsx b/components/desktop-shell.tsx
+new file mode 100644
+index 0000000..96891c8
+--- /dev/null
++++ b/components/desktop-shell.tsx
+@@ -0,0 +1,48 @@
++"use client";
++import { useEffect, useState } from "react";
++import { DashboardShell } from "@/app/(restaurant)/shell";
++import { DesktopCtxProvider, loadDesktopContext, type DesktopCtx } from "@/lib/desktop/context";
++import { DesktopSyncBar } from "@/components/desktop-sync-bar";
++
++/** The desktop counterpart of the server-side shell setup in each web page.tsx: same sidebar +
++ *  top bar (DashboardShell), but the signed-in cashier, permissions and shift come from the device
++ *  (Rust), not a cookie, so it works offline. Used by every back-office page (via
++ *  app/(restaurant)/layout.desktop.tsx) and by the POS, so all of them look identical to the web
++ *  app. `syncBar={false}` for the POS, which shows its own sync strip inside its menu pane. */
++export function DesktopShell({ children, syncBar = true }: { children: React.ReactNode; syncBar?: boolean }) {
++  const [ctx, setCtx] = useState<DesktopCtx | null>(null);
++
++  useEffect(() => {
++    loadDesktopContext()
++      .then((c) => {
++        if (!c) window.location.href = "/login/staff";
++        else setCtx(c);
++      })
++      .catch(() => {
++        window.location.href = "/login/staff";
++      });
++  }, []);
++
++  if (!ctx) return null;
++
++  return (
++    <DesktopCtxProvider value={ctx}>
++      <DashboardShell
++        role={ctx.role}
++        restaurantName={ctx.restaurantName}
++        employeeName={ctx.employeeName}
++        employeeId={ctx.employeeId}
++        subStatus={ctx.subStatus}
++        modulePerms={ctx.modulePerms}
++        shiftLabel={ctx.shiftLabel}
++      >
++        {syncBar && (
++          <div className="px-4 pt-3 md:px-6">
++            <DesktopSyncBar />
++          </div>
++        )}
++        {children}
++      </DashboardShell>
++    </DesktopCtxProvider>
++  );
++}
