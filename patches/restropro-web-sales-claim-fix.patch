@@ -1,0 +1,18 @@
+diff --git a/app/api/device/sales/route.ts b/app/api/device/sales/route.ts
+--- a/app/api/device/sales/route.ts
++++ b/app/api/device/sales/route.ts
+@@ -82,6 +82,14 @@
+       .from("device_sale_receipts")
+       .insert({ restaurant_id: restaurantId, client_sale_id: id, device_id: deviceId });
+     if (claimError) {
++      if (claimError.code !== "23505") {
++        // Not "already uploaded" — the receipts table itself failed (e.g. migration 0015 not applied
++        // or the schema cache is stale). Say so, and keep the sale queued on the device (retryable)
++        // instead of marking it rejected: nothing is wrong with the sale.
++        console.error("device_sale_receipts claim failed", claimError);
++        reject(`Server could not record this sale yet — ${claimError.message}`, true);
++        continue;
++      }
+       const { data: prior } = await admin
+         .from("device_sale_receipts")
+         .select("result, created_at")
