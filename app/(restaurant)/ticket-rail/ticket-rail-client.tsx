@@ -101,10 +101,16 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
   }
 
   async function load() {
-    const res = await fetch("/api/sales?limit=60");
-    const data = await res.json().catch(() => ({}));
-    const list: Sale[] = res.ok ? (data.sales ?? []).filter((s: Sale) => s.status !== "cancelled") : [];
-    if (res.ok) setSales(list);
+    let list: Sale[] = [];
+    try {
+      const res = await fetch("/api/sales?limit=60");
+      const data = await res.json().catch(() => ({}));
+      list = res.ok ? (data.sales ?? []).filter((s: Sale) => s.status !== "cancelled") : [];
+      if (res.ok) setSales(list);
+    } catch {
+      // No connection and nothing saved yet: keep what is on screen (held tickets still show)
+      // instead of leaving the page stuck on "loading".
+    }
     const h = readHeld();
     setHeld(h);
     noteNew([...list.map((s) => `sale:${s.id}`), ...h.map((t) => `held:${t.id}`)]);

@@ -4,6 +4,7 @@ import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/components/ui/panel";
 import { fmtMoney, todayISO } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
+import { LoadMore, useProgressive } from "@/components/ui/load-more";
 
 type Supplier = { id: string; name: string };
 type PaymentMethod = { id: string; name: string };
@@ -65,6 +66,8 @@ export function SupplierLedgerClient() {
     await load();
   }
 
+  const pg = useProgressive(entries); // first 50 rows now, the rest as you scroll — keeps big tables fast
+
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       {loadError && (
@@ -124,7 +127,7 @@ export function SupplierLedgerClient() {
                 </tr>
               </thead>
               <tbody>
-                {entries.map((l) => (
+                {pg.visible.map((l) => (
                   <tr key={l.id} className="border-b border-line last:border-0">
                     <Td className="text-ink-mid">{l.txn_date}</Td>
                     <Td className="font-medium text-ink-strong">{l.suppliers?.name ?? "—"}</Td>
@@ -139,6 +142,7 @@ export function SupplierLedgerClient() {
               </tbody>
             </table>
           </TableScroll>
+          <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
         </Panel>
       </div>
     </main>

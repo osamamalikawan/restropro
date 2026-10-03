@@ -4,6 +4,7 @@ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, search
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { fetchJson } from "@/lib/fetch-json";
 import { Pencil, UserX } from "lucide-react";
+import { LoadMore, useProgressive } from "@/components/ui/load-more";
 
 type Employee = { id: string; name: string; role: string; status: string; is_user: boolean };
 type RoleOption = { id: string; name: string; is_system: boolean };
@@ -128,6 +129,8 @@ export function UsersClient({ canManage }: { canManage: boolean }) {
     if (res.ok) await load();
   }
 
+  const pg = useProgressive(filtered); // first 50 rows now, the rest as you scroll — keeps big tables fast
+
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <div className="flex items-center gap-3 mb-4 flex-wrap">
@@ -166,7 +169,7 @@ export function UsersClient({ canManage }: { canManage: boolean }) {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((u) => (
+              {pg.visible.map((u) => (
                 <tr key={u.id} className="border-b border-line last:border-0">
                   <Td className="font-medium text-ink-strong">{u.employees?.name ?? "—"}</Td>
                   <Td className="text-ink-mid capitalize">{u.employees?.role ?? "—"}</Td>
@@ -196,6 +199,7 @@ export function UsersClient({ canManage }: { canManage: boolean }) {
             </tbody>
           </table>
         </TableScroll>
+        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
       </Panel>
 
       <Modal

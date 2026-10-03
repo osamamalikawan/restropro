@@ -1,8 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { DashboardShell } from "@/app/(restaurant)/shell";
 import { DesktopCtxProvider, loadDesktopContext, type DesktopCtx } from "@/lib/desktop/context";
 import { DesktopSyncBar } from "@/components/desktop-sync-bar";
+import { DesktopOfflineNotice } from "@/components/desktop-offline-notice";
+import { isOfflineOk, useOnline } from "@/lib/desktop/connectivity";
 
 /** The desktop counterpart of the server-side shell setup in each web page.tsx: same sidebar +
  *  top bar (DashboardShell), but the signed-in cashier, permissions and shift come from the device
@@ -11,6 +14,8 @@ import { DesktopSyncBar } from "@/components/desktop-sync-bar";
  *  app. `syncBar={false}` for the POS, which shows its own sync strip inside its menu pane. */
 export function DesktopShell({ children, syncBar = true }: { children: React.ReactNode; syncBar?: boolean }) {
   const [ctx, setCtx] = useState<DesktopCtx | null>(null);
+  const pathname = usePathname() ?? "";
+  const { online, recheck } = useOnline();
 
   useEffect(() => {
     loadDesktopContext()
@@ -24,6 +29,10 @@ export function DesktopShell({ children, syncBar = true }: { children: React.Rea
   }, []);
 
   if (!ctx) return null;
+
+  // An online-only page with no connection: say so (with a way back to the POS) instead of letting
+  // it load forever. The sidebar and top bar stay, so navigation still works.
+  const showOfflineNotice = !online && !isOfflineOk(pathname);
 
   return (
     <DesktopCtxProvider value={ctx}>
@@ -41,7 +50,7 @@ export function DesktopShell({ children, syncBar = true }: { children: React.Rea
             <DesktopSyncBar />
           </div>
         )}
-        {children}
+        {showOfflineNotice ? <DesktopOfflineNotice onRetry={recheck} /> : children}
       </DashboardShell>
     </DesktopCtxProvider>
   );

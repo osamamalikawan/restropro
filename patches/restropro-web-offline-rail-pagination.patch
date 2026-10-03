@@ -1,0 +1,1200 @@
+diff --git a/app/(restaurant)/accounts/accounts-client.tsx b/app/(restaurant)/accounts/accounts-client.tsx
+index cd2117c..b9536c6 100644
+--- a/app/(restaurant)/accounts/accounts-client.tsx
++++ b/app/(restaurant)/accounts/accounts-client.tsx
+@@ -5,6 +5,7 @@ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/mo
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, KpiCard, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney, todayISO } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
++import { LoadMore, useProgressive } from "@/components/ui/load-more";
+ 
+ type AccountEntry = { id: string; txn_date: string; description: string; category: string; type: "income" | "expense"; amount: number };
+ type Supplier = { id: string };
+@@ -103,6 +104,8 @@ export function AccountsClient() {
+     await load();
+   }
+ 
++  const pg = useProgressive(withBalance); // first 50 rows now, the rest as you scroll — keeps big tables fast
++
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
+@@ -136,7 +139,7 @@ export function AccountsClient() {
+               </tr>
+             </thead>
+             <tbody>
+-              {withBalance.map((e) => (
++              {pg.visible.map((e) => (
+                 <tr key={e.id} className="border-b border-line last:border-0">
+                   <Td className="text-ink-mid">{e.txn_date}</Td>
+                   <Td className="font-medium text-ink-strong">{e.description}</Td>
+@@ -157,6 +160,7 @@ export function AccountsClient() {
+             </tbody>
+           </table>
+         </TableScroll>
++        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+       </Panel>
+ 
+       <Modal
+diff --git a/app/(restaurant)/customers/customers-client.tsx b/app/(restaurant)/customers/customers-client.tsx
+index e46489c..e1610a2 100644
+--- a/app/(restaurant)/customers/customers-client.tsx
++++ b/app/(restaurant)/customers/customers-client.tsx
+@@ -1,24 +1,32 @@
+ "use client";
+-import { useEffect, useMemo, useState } from "react";
++import { useEffect, useRef, useState } from "react";
+ import { IdCard, Pencil, ArrowLeft } from "lucide-react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, searchInputCls, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney, fmtDateTime } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
++import { LoadMore, useDebounced } from "@/components/ui/load-more";
++
++const PAGE = 50; // customers (and order-history rows) per page
+ 
+ type Area = { id: string; name: string };
+ type Customer = { id: string; name: string; phone: string; address: string | null; area_id: string | null; delivery_areas?: { name: string } | null };
+ type SaleItem = { name: string; unit_price: number; quantity: number };
+ type Sale = { id: string; order_no: number; order_type: string; customer_id: string | null; total: number; status: string; created_at: string; sale_items: SaleItem[] };
++type Stat = { orders: number; spend: number; lastOrderAt: string | null };
+ 
+ export function CustomersClient() {
+   const [customers, setCustomers] = useState<Customer[]>([]);
++  const [hasMore, setHasMore] = useState(false);
++  const [loadingMore, setLoadingMore] = useState(false);
++  const [stats, setStats] = useState<Record<string, Stat>>({});
+   const [areas, setAreas] = useState<Area[]>([]);
+-  const [sales, setSales] = useState<Sale[]>([]);
+-  const [q, setQ] = useState("");
++  const [search, setSearch] = useState("");
++  const q = useDebounced(search.trim(), 300);
+   const [loading, setLoading] = useState(true);
+   const [error, setError] = useState("");
+   const [loadError, setLoadError] = useState("");
++  const latest = useRef(0); // ignores a slow answer that a newer search/reload has replaced
+ 
+   // Add/edit modal
+   const [modalOpen, setModalOpen] = useState(false);
+@@ -29,45 +37,78 @@ export function CustomersClient() {
+   const [fAreaId, setFAreaId] = useState("");
+   const [saving, setSaving] = useState(false);
+ 
+-  // Profile drill-down
++  // Profile drill-down: the customer's order history is fetched only when a profile is opened.
+   const [profileId, setProfileId] = useState<string | null>(null);
++  const [orders, setOrders] = useState<Sale[]>([]);
++  const [ordersHasMore, setOrdersHasMore] = useState(false);
++  const [ordersLoading, setOrdersLoading] = useState(false);
+ 
+-  async function load() {
+-    setLoading(true);
+-    setLoadError("");
+-    // Independent per-endpoint fetches — see lib/fetch-json.ts. A failed/empty response from
+-    // one (e.g. sales, used only for the spend/orders columns) can no longer throw and wipe
+-    // out the customers list itself.
+-    const [cRes, aRes, sRes] = await Promise.all([
+-      fetchJson<{ customers: Customer[] }>("/api/customers"),
+-      fetchJson<{ areas: Area[] }>("/api/delivery-areas"),
+-      fetchJson<{ sales: Sale[] }>("/api/sales?limit=1000"),
+-    ]);
+-    if (!cRes.ok) {
+-      setLoadError(cRes.error);
+-      setCustomers([]);
+-    } else {
+-      setCustomers(cRes.data?.customers ?? []);
++  async function loadPage(offset: number) {
++    const id = latest.current;
++    const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset), stats: "1" });
++    if (q) params.set("q", q);
++    // Per-endpoint fetchJson (see lib/fetch-json.ts): a failure here shows an error, never throws.
++    const res = await fetchJson<{ customers: Customer[]; hasMore: boolean; stats?: Record<string, Stat> }>(`/api/customers?${params}`);
++    if (id !== latest.current) return;
++    if (!res.ok) {
++      setLoadError(res.error);
++      if (offset === 0) setCustomers([]);
++      setLoading(false);
++      return;
+     }
+-    setAreas(aRes.ok ? aRes.data?.areas ?? [] : []);
+-    setSales(sRes.ok ? sRes.data?.sales ?? [] : []);
++    setLoadError("");
++    const rows = res.data?.customers ?? [];
++    setHasMore(!!res.data?.hasMore);
++    setCustomers((prev) => (offset === 0 ? rows : [...prev, ...rows]));
++    setStats((prev) => ({ ...(offset === 0 ? {} : prev), ...(res.data?.stats ?? {}) }));
+     setLoading(false);
+   }
++
++  function reload() {
++    latest.current += 1;
++    setLoading(true);
++    return loadPage(0);
++  }
++
+   useEffect(() => {
+-    load();
++    fetchJson<{ areas: Area[] }>("/api/delivery-areas").then((r) => setAreas(r.ok ? r.data?.areas ?? [] : []));
+   }, []);
+ 
++  useEffect(() => {
++    reload();
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [q]);
++
++  async function loadMore() {
++    if (loadingMore || !hasMore) return;
++    setLoadingMore(true);
++    await loadPage(customers.length);
++    setLoadingMore(false);
++  }
++
++  async function loadOrders(customerId: string, offset: number) {
++    setOrdersLoading(true);
++    const res = await fetchJson<{ sales: Sale[]; hasMore: boolean }>(`/api/sales?customerId=${customerId}&limit=${PAGE}&offset=${offset}`);
++    if (res.ok) {
++      const rows = (res.data?.sales ?? []).filter((s) => s.status !== "cancelled");
++      setOrders((prev) => (offset === 0 ? rows : [...prev, ...rows]));
++      setOrdersHasMore(!!res.data?.hasMore);
++    }
++    setOrdersLoading(false);
++  }
++
++  useEffect(() => {
++    setOrders([]);
++    setOrdersHasMore(false);
++    if (profileId) loadOrders(profileId, 0);
++  }, [profileId]);
++
+   const statsFor = (customerId: string) => {
+-    const orders = sales.filter((s) => s.customer_id === customerId && s.status !== "cancelled");
+-    const totalSpend = orders.reduce((sum, o) => sum + Number(o.total), 0);
+-    const lastOrder = orders[0] ?? null; // sales already ordered newest-first by the API
+-    return { totalOrders: orders.length, totalSpend, lastOrder, orders };
++    const st = stats[customerId];
++    return { totalOrders: st?.orders ?? 0, totalSpend: st?.spend ?? 0, lastOrderAt: st?.lastOrderAt ?? null };
+   };
+ 
+-  const filtered = useMemo(() => {
+-    const query = q.toLowerCase();
+-    return customers.filter((c) => c.name.toLowerCase().includes(query) || c.phone.includes(query));
+-  }, [customers, q]);
++  const filtered = customers; // searching is done on the server, a page at a time
+ 
+   function openAdd() {
+     setEditingId(null);
+@@ -109,7 +150,7 @@ export function CustomersClient() {
+       return;
+     }
+     setModalOpen(false);
+-    await load();
++    await reload();
+   }
+ 
+   const profileCustomer = profileId ? customers.find((c) => c.id === profileId) : null;
+@@ -140,10 +181,10 @@ export function CustomersClient() {
+         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+           <KpiCard label="Total orders" value={stats.totalOrders} />
+           <KpiCard label="Total spend" value={fmtMoney(stats.totalSpend)} />
+-          <KpiCard label="Last order" value={stats.lastOrder ? `#${stats.lastOrder.order_no}` : "—"} />
++          <KpiCard label="Last order" value={orders[0] ? `#${orders[0].order_no}` : stats.lastOrderAt ? fmtDateTime(stats.lastOrderAt) : "—"} />
+         </div>
+ 
+-        <Panel loading={loading}>
++        <Panel loading={ordersLoading && orders.length === 0}>
+           <PanelHead title="Order history" />
+           <TableScroll>
+             <table className="w-full">
+@@ -157,7 +198,7 @@ export function CustomersClient() {
+                 </tr>
+               </thead>
+               <tbody>
+-                {stats.orders.map((o) => (
++                {orders.map((o) => (
+                   <tr key={o.id} className="border-b border-line last:border-0">
+                     <Td className="font-mono font-medium">#{o.order_no}</Td>
+                     <Td className="text-ink-mid">{fmtDateTime(o.created_at)}</Td>
+@@ -168,10 +209,11 @@ export function CustomersClient() {
+                     <Td className="font-mono font-medium">{fmtMoney(o.total)}</Td>
+                   </tr>
+                 ))}
+-                {stats.orders.length === 0 && <EmptyRow colSpan={5} label="No orders yet." />}
++                {!ordersLoading && orders.length === 0 && <EmptyRow colSpan={5} label="No orders yet." />}
+               </tbody>
+             </table>
+           </TableScroll>
++          <LoadMore hasMore={ordersHasMore} loading={ordersLoading} onMore={() => profileId && loadOrders(profileId, orders.length)} />
+         </Panel>
+ 
+         {renderModal()}
+@@ -225,7 +267,7 @@ export function CustomersClient() {
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       <Panel loading={loading}>
+         <PanelHead title="Customers" subtitle="Everyone who has ordered with you">
+-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or phone…" className={searchInputCls} />
++          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or phone…" className={searchInputCls} />
+           <button onClick={openAdd} className={addBtnCls}>
+             + Add customer
+           </button>
+@@ -266,7 +308,7 @@ export function CustomersClient() {
+                     <Td className="text-ink-mid">{c.delivery_areas?.name ?? "—"}</Td>
+                     <Td>{stats.totalOrders}</Td>
+                     <Td className="font-mono font-medium">{fmtMoney(stats.totalSpend)}</Td>
+-                    <Td className="text-ink-mid">{stats.lastOrder ? fmtDateTime(stats.lastOrder.created_at) : "—"}</Td>
++                    <Td className="text-ink-mid">{stats.lastOrderAt ? fmtDateTime(stats.lastOrderAt) : "—"}</Td>
+                     <Td>
+                       <div className="flex items-center gap-1.5">
+                         <IconBtn title="View" onClick={() => setProfileId(c.id)}>
+@@ -280,10 +322,11 @@ export function CustomersClient() {
+                   </tr>
+                 );
+               })}
+-              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={7} label="No customers yet." />}
++              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={7} label={q ? "No customers match your search." : "No customers yet."} />}
+             </tbody>
+           </table>
+         </TableScroll>
++        <LoadMore hasMore={hasMore} loading={loadingMore} onMore={loadMore} />
+       </Panel>
+ 
+       {renderModal()}
+diff --git a/app/(restaurant)/employee-ledger/employee-ledger-client.tsx b/app/(restaurant)/employee-ledger/employee-ledger-client.tsx
+index b06ae63..fbe5cdd 100644
+--- a/app/(restaurant)/employee-ledger/employee-ledger-client.tsx
++++ b/app/(restaurant)/employee-ledger/employee-ledger-client.tsx
+@@ -4,6 +4,7 @@ import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/components/ui/panel";
+ import { fmtMoney, todayISO } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
++import { LoadMore, useProgressive } from "@/components/ui/load-more";
+ 
+ type Employee = { id: string; name: string };
+ type LedgerEntry = { id: string; type: string; amount: number; note: string | null; txn_date: string; employees?: { name: string } | null };
+@@ -63,6 +64,8 @@ export function EmployeeLedgerClient() {
+     await load();
+   }
+ 
++  const pg = useProgressive(entries); // first 50 rows now, the rest as you scroll — keeps big tables fast
++
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       {loadError && (
+@@ -122,7 +125,7 @@ export function EmployeeLedgerClient() {
+                 </tr>
+               </thead>
+               <tbody>
+-                {entries.map((l) => (
++                {pg.visible.map((l) => (
+                   <tr key={l.id} className="border-b border-line last:border-0">
+                     <Td className="text-ink-mid">{l.txn_date}</Td>
+                     <Td className="font-medium text-ink-strong">{l.employees?.name ?? "—"}</Td>
+@@ -137,6 +140,7 @@ export function EmployeeLedgerClient() {
+               </tbody>
+             </table>
+           </TableScroll>
++          <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+         </Panel>
+       </div>
+     </main>
+diff --git a/app/(restaurant)/expenses/expenses-client.tsx b/app/(restaurant)/expenses/expenses-client.tsx
+index 64063cd..5da1ba8 100644
+--- a/app/(restaurant)/expenses/expenses-client.tsx
++++ b/app/(restaurant)/expenses/expenses-client.tsx
+@@ -4,6 +4,7 @@ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/mo
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney, todayISO } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
++import { LoadMore, useProgressive } from "@/components/ui/load-more";
+ 
+ type ExpenseCategory = { id: string; name: string };
+ type PaymentMethod = { id: string; name: string };
+@@ -98,6 +99,8 @@ export function ExpensesClient() {
+     await load();
+   }
+ 
++  const pg = useProgressive(expenses); // first 50 rows now, the rest as you scroll — keeps big tables fast
++
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       <Panel loading={loading}>
+@@ -125,7 +128,7 @@ export function ExpensesClient() {
+               </tr>
+             </thead>
+             <tbody>
+-              {expenses.map((e) => (
++              {pg.visible.map((e) => (
+                 <tr key={e.id} className="border-b border-line last:border-0">
+                   <Td className="text-ink-mid">{e.txn_date}</Td>
+                   <Td>
+@@ -142,6 +145,7 @@ export function ExpensesClient() {
+             </tbody>
+           </table>
+         </TableScroll>
++        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+       </Panel>
+ 
+       <Modal
+diff --git a/app/(restaurant)/inventory/inventory-client.tsx b/app/(restaurant)/inventory/inventory-client.tsx
+index ec1d5bc..28c24a0 100644
+--- a/app/(restaurant)/inventory/inventory-client.tsx
++++ b/app/(restaurant)/inventory/inventory-client.tsx
+@@ -6,6 +6,7 @@ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/mo
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
++import { LoadMore, useProgressive } from "@/components/ui/load-more";
+ 
+ type Item = {
+   id: string;
+@@ -133,6 +134,8 @@ export function InventoryClient() {
+     await load();
+   }
+ 
++  const pg = useProgressive(filtered); // first 50 rows now, the rest as you scroll — keeps big tables fast
++
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       <Panel loading={loading}>
+@@ -161,7 +164,7 @@ export function InventoryClient() {
+               </tr>
+             </thead>
+             <tbody>
+-              {filtered.map((i) => {
++              {pg.visible.map((i) => {
+                 const st = stockStatus(i);
+                 const pct = Math.min(100, Math.round((i.current_stock / (i.min_stock * 2 || 1)) * 100));
+                 return (
+@@ -211,6 +214,7 @@ export function InventoryClient() {
+             </tbody>
+           </table>
+         </TableScroll>
++        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+       </Panel>
+ 
+       <Modal
+diff --git a/app/(restaurant)/products/products-client.tsx b/app/(restaurant)/products/products-client.tsx
+index c0cf5b7..0b9fb5d 100644
+--- a/app/(restaurant)/products/products-client.tsx
++++ b/app/(restaurant)/products/products-client.tsx
+@@ -9,6 +9,7 @@ import { GalleryPickerModal } from "@/components/gallery-picker-modal";
+ import { fmtMoney } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
+ import { RecipeModal } from "../menu/recipe-modal";
++import { LoadMore, useProgressive } from "@/components/ui/load-more";
+ 
+ type Category = { id: string; name: string };
+ type Product = {
+@@ -237,6 +238,8 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+     await load();
+   }
+ 
++  const pg = useProgressive(filtered); // first 50 rows now, the rest as you scroll — keeps big tables fast
++
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       <Panel loading={loading}>
+@@ -268,7 +271,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+               </tr>
+             </thead>
+             <tbody>
+-              {filtered.map((p) => {
++              {pg.visible.map((p) => {
+                 const cost = costFor(p.id);
+                 const margin = cost != null ? Number(p.price) - cost : null;
+                 const marginPct = cost != null && p.price > 0 ? Math.round((margin! / p.price) * 100) : null;
+@@ -311,6 +314,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+             </tbody>
+           </table>
+         </TableScroll>
++        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+       </Panel>
+ 
+       <Panel loading={loading} loadingLabel="">
+diff --git a/app/(restaurant)/restock/restock-client.tsx b/app/(restaurant)/restock/restock-client.tsx
+index 42228c8..8ee7d6a 100644
+--- a/app/(restaurant)/restock/restock-client.tsx
++++ b/app/(restaurant)/restock/restock-client.tsx
+@@ -5,6 +5,7 @@ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow } from "@/components/ui
+ import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
+ import { fmtMoney, todayISO } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
++import { LoadMore, useProgressive } from "@/components/ui/load-more";
+ 
+ type InventoryItem = { id: string; name: string; unit: string; item_type: "ready_made" | "self_made"; cost: number };
+ type Supplier = { id: string; name: string };
+@@ -133,6 +134,8 @@ export function RestockClient() {
+ 
+   const total = (Number(quantity) || 0) * (Number(unitCost) || 0);
+ 
++  const pg = useProgressive(history); // first 50 rows now, the rest as you scroll — keeps big tables fast
++
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       {loadError && (
+@@ -209,7 +212,7 @@ export function RestockClient() {
+                 </tr>
+               </thead>
+               <tbody>
+-                {history.map((h) => (
++                {pg.visible.map((h) => (
+                   <tr key={h.id} className="border-b border-line last:border-0">
+                     <Td className="text-ink-mid">{h.date}</Td>
+                     <Td className="font-medium text-ink-strong">{h.item}</Td>
+@@ -226,6 +229,7 @@ export function RestockClient() {
+               </tbody>
+             </table>
+           </TableScroll>
++          <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+         </Panel>
+       </div>
+     </main>
+diff --git a/app/(restaurant)/sales/sales-client.tsx b/app/(restaurant)/sales/sales-client.tsx
+index bfc2b70..b5ebafb 100644
+--- a/app/(restaurant)/sales/sales-client.tsx
++++ b/app/(restaurant)/sales/sales-client.tsx
+@@ -1,6 +1,9 @@
+ "use client";
+-import { Fragment, useEffect, useState } from "react";
++import { Fragment, useEffect, useRef, useState } from "react";
+ import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
++import { LoadMore, useDebounced } from "@/components/ui/load-more";
++
++const PAGE = 50; // orders per page: 50 load instantly, the rest on scroll / "Load more"
+ 
+ type Sale = {
+   id: string;
+@@ -31,19 +34,52 @@ const STATUS_STYLE: Record<Sale["status"], string> = {
+  *  canCancel, ported from the prototype's MANAGER_PERMS.sales.cancel). */
+ export function SalesClient({ canCancel }: { canCancel: boolean }) {
+   const [sales, setSales] = useState<Sale[] | null>(null);
++  const [hasMore, setHasMore] = useState(false);
++  const [loadingMore, setLoadingMore] = useState(false);
+   const [search, setSearch] = useState("");
++  const q = useDebounced(search.trim(), 300);
+   const [expanded, setExpanded] = useState<string | null>(null);
+   const [error, setError] = useState("");
+   const [cancellingId, setCancellingId] = useState<string | null>(null);
++  const latest = useRef(0); // ignores a slow answer that a newer search has already replaced
+ 
+-  async function load() {
+-    const res = await fetch("/api/sales?limit=100");
+-    const data = await res.json();
+-    if (res.ok) setSales(data.sales ?? []);
++  async function loadPage(offset: number) {
++    const id = latest.current;
++    const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
++    if (q) params.set("q", q);
++    try {
++      const res = await fetch(`/api/sales?${params}`);
++      const data = await res.json().catch(() => ({}));
++      if (id !== latest.current) return;
++      if (!res.ok) {
++        setError(data.error ?? "Could not load orders");
++        setSales((prev) => prev ?? []);
++        return;
++      }
++      setError("");
++      setHasMore(!!data.hasMore);
++      setSales((prev) => (offset === 0 ? data.sales ?? [] : [...(prev ?? []), ...(data.sales ?? [])]));
++    } catch {
++      if (id !== latest.current) return;
++      setError("Could not reach the server.");
++      setSales((prev) => prev ?? []);
++    }
+   }
++
+   useEffect(() => {
+-    load();
+-  }, []);
++    latest.current += 1;
++    setSales(null);
++    setHasMore(false);
++    loadPage(0);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [q]);
++
++  async function loadMore() {
++    if (loadingMore || !hasMore || !sales) return;
++    setLoadingMore(true);
++    await loadPage(sales.length);
++    setLoadingMore(false);
++  }
+ 
+   async function cancelSale(sale: Sale) {
+     if (!confirm(`Cancel order #${sale.order_no}? This restores its inventory and removes it from today's income.`)) return;
+@@ -59,19 +95,11 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
+       setCancellingId(null);
+       return;
+     }
+-    await load();
++    setSales((prev) => (prev ?? []).map((x) => (x.id === sale.id ? { ...x, status: "cancelled" } : x)));
+     setCancellingId(null);
+   }
+ 
+-  const filtered = (sales ?? []).filter((s) => {
+-    if (!search.trim()) return true;
+-    const q = search.trim().toLowerCase();
+-    return (
+-      String(s.order_no).includes(q) ||
+-      s.customers?.name?.toLowerCase().includes(q) ||
+-      s.customers?.phone?.includes(q)
+-    );
+-  });
++  const filtered = sales ?? [];
+ 
+   return (
+     <main className="p-6 md:p-8">
+@@ -82,7 +110,10 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
+           placeholder="Search order #, customer name or phone…"
+           className="flex-1 max-w-sm rounded-lg bg-raised border border-line px-3 py-2 text-sm"
+         />
+-        <span className="text-xs text-ink-faint shrink-0">{filtered.length} orders</span>
++        <span className="text-xs text-ink-faint shrink-0">
++          {filtered.length}
++          {hasMore ? "+" : ""} orders
++        </span>
+       </div>
+       {error && <p className="text-crimson-400 text-sm mb-3">{error}</p>}
+ 
+@@ -159,12 +190,13 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
+               {filtered.length === 0 && (
+                 <tr>
+                   <td colSpan={8} className="p-6 text-center text-ink-faint">
+-                    No orders yet.
++                    {q ? "No orders match your search." : "No orders yet."}
+                   </td>
+                 </tr>
+               )}
+             </tbody>
+           </table>
++          <LoadMore hasMore={hasMore} loading={loadingMore} onMore={loadMore} />
+           <LoadingOverlay show={cancellingId !== null} />
+         </div>
+       )}
+diff --git a/app/(restaurant)/supplier-ledger/supplier-ledger-client.tsx b/app/(restaurant)/supplier-ledger/supplier-ledger-client.tsx
+index 56fc490..f82126e 100644
+--- a/app/(restaurant)/supplier-ledger/supplier-ledger-client.tsx
++++ b/app/(restaurant)/supplier-ledger/supplier-ledger-client.tsx
+@@ -4,6 +4,7 @@ import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/components/ui/panel";
+ import { fmtMoney, todayISO } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
++import { LoadMore, useProgressive } from "@/components/ui/load-more";
+ 
+ type Supplier = { id: string; name: string };
+ type PaymentMethod = { id: string; name: string };
+@@ -65,6 +66,8 @@ export function SupplierLedgerClient() {
+     await load();
+   }
+ 
++  const pg = useProgressive(entries); // first 50 rows now, the rest as you scroll — keeps big tables fast
++
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       {loadError && (
+@@ -124,7 +127,7 @@ export function SupplierLedgerClient() {
+                 </tr>
+               </thead>
+               <tbody>
+-                {entries.map((l) => (
++                {pg.visible.map((l) => (
+                   <tr key={l.id} className="border-b border-line last:border-0">
+                     <Td className="text-ink-mid">{l.txn_date}</Td>
+                     <Td className="font-medium text-ink-strong">{l.suppliers?.name ?? "—"}</Td>
+@@ -139,6 +142,7 @@ export function SupplierLedgerClient() {
+               </tbody>
+             </table>
+           </TableScroll>
++          <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+         </Panel>
+       </div>
+     </main>
+diff --git a/app/(restaurant)/ticket-rail/ticket-rail-client.tsx b/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
+index 54f067e..faee038 100644
+--- a/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
++++ b/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
+@@ -101,10 +101,16 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
+   }
+ 
+   async function load() {
+-    const res = await fetch("/api/sales?limit=60");
+-    const data = await res.json().catch(() => ({}));
+-    const list: Sale[] = res.ok ? (data.sales ?? []).filter((s: Sale) => s.status !== "cancelled") : [];
+-    if (res.ok) setSales(list);
++    let list: Sale[] = [];
++    try {
++      const res = await fetch("/api/sales?limit=60");
++      const data = await res.json().catch(() => ({}));
++      list = res.ok ? (data.sales ?? []).filter((s: Sale) => s.status !== "cancelled") : [];
++      if (res.ok) setSales(list);
++    } catch {
++      // No connection and nothing saved yet: keep what is on screen (held tickets still show)
++      // instead of leaving the page stuck on "loading".
++    }
+     const h = readHeld();
+     setHeld(h);
+     noteNew([...list.map((s) => `sale:${s.id}`), ...h.map((t) => `held:${t.id}`)]);
+diff --git a/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx b/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx
+index 84afb6f..4cf41f5 100644
+--- a/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx
++++ b/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx
+@@ -25,7 +25,7 @@ export function UnpaidOrdersClient() {
+   const [saving, setSaving] = useState(false);
+ 
+   async function load() {
+-    const res = await fetch("/api/sales?limit=200");
++    const res = await fetch("/api/sales?status=unpaid&limit=200");
+     const data = await res.json();
+     if (res.ok) setSales((data.sales ?? []).filter((s: { status: string }) => s.status === "unpaid"));
+   }
+diff --git a/app/(restaurant)/users/users-client.tsx b/app/(restaurant)/users/users-client.tsx
+index 5e52f5a..b7f1402 100644
+--- a/app/(restaurant)/users/users-client.tsx
++++ b/app/(restaurant)/users/users-client.tsx
+@@ -4,6 +4,7 @@ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, search
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { fetchJson } from "@/lib/fetch-json";
+ import { Pencil, UserX } from "lucide-react";
++import { LoadMore, useProgressive } from "@/components/ui/load-more";
+ 
+ type Employee = { id: string; name: string; role: string; status: string; is_user: boolean };
+ type RoleOption = { id: string; name: string; is_system: boolean };
+@@ -128,6 +129,8 @@ export function UsersClient({ canManage }: { canManage: boolean }) {
+     if (res.ok) await load();
+   }
+ 
++  const pg = useProgressive(filtered); // first 50 rows now, the rest as you scroll — keeps big tables fast
++
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       <div className="flex items-center gap-3 mb-4 flex-wrap">
+@@ -166,7 +169,7 @@ export function UsersClient({ canManage }: { canManage: boolean }) {
+               </tr>
+             </thead>
+             <tbody>
+-              {filtered.map((u) => (
++              {pg.visible.map((u) => (
+                 <tr key={u.id} className="border-b border-line last:border-0">
+                   <Td className="font-medium text-ink-strong">{u.employees?.name ?? "—"}</Td>
+                   <Td className="text-ink-mid capitalize">{u.employees?.role ?? "—"}</Td>
+@@ -196,6 +199,7 @@ export function UsersClient({ canManage }: { canManage: boolean }) {
+             </tbody>
+           </table>
+         </TableScroll>
++        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+       </Panel>
+ 
+       <Modal
+diff --git a/app/api/customers/route.ts b/app/api/customers/route.ts
+index f8cfa99..107e28a 100644
+--- a/app/api/customers/route.ts
++++ b/app/api/customers/route.ts
+@@ -2,25 +2,57 @@ import { NextResponse } from "next/server";
+ import { requireStaffSession } from "@/lib/auth/require-staff";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ 
+-/** GET ?q=... searches by name or phone (used by both the Customers page and the POS
+- *  checkout customer picker). No query param = full list. */
++/** GET ?q=... searches by name or phone (used by both the Customers page and the POS checkout
++ *  customer picker). Paged: ?limit (default 50, max 200) & ?offset; returns { customers, hasMore }.
++ *  ?stats=1 adds { stats: { [customerId]: { orders, spend, lastOrderAt } } } for just this page of
++ *  customers, computed in one light query — so the Customers page no longer downloads the
++ *  last 1000 full sales (with items) only to add up a few numbers. */
+ export async function GET(req: Request) {
+   const session = await requireStaffSession();
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+ 
+-  const q = new URL(req.url).searchParams.get("q")?.trim();
++  const sp = new URL(req.url).searchParams;
++  const q = (sp.get("q") ?? "").replace(/[,()%*\\]/g, " ").trim();
++  const limit = Math.min(Math.max(Number(sp.get("limit") ?? 50) || 50, 1), 200);
++  const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
++  const wantStats = sp.get("stats") === "1";
++
+   const admin = createAdminClient();
+   let query = admin
+     .from("customers")
+     .select("id, name, phone, address, area_id, delivery_areas(name)")
+     .eq("restaurant_id", session.restaurantId)
+     .order("name")
+-    .limit(50);
++    .order("id");
+   if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
+ 
+-  const { data, error } = await query;
++  const { data, error } = await query.range(offset, offset + limit); // limit + 1 rows
+   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+-  return NextResponse.json({ customers: data });
++  const rows = data ?? [];
++  const customers = rows.slice(0, limit);
++  const hasMore = rows.length > limit;
++
++  if (!wantStats || customers.length === 0) return NextResponse.json({ customers, hasMore });
++
++  const { data: sales, error: salesError } = await admin
++    .from("sales")
++    .select("customer_id, total, created_at")
++    .eq("restaurant_id", session.restaurantId)
++    .neq("status", "cancelled")
++    .in("customer_id", customers.map((c) => c.id))
++    .order("created_at", { ascending: false });
++  if (salesError) return NextResponse.json({ error: salesError.message }, { status: 500 });
++
++  const stats: Record<string, { orders: number; spend: number; lastOrderAt: string | null }> = {};
++  for (const c of customers) stats[c.id] = { orders: 0, spend: 0, lastOrderAt: null };
++  for (const s of sales ?? []) {
++    const st = stats[s.customer_id as string];
++    if (!st) continue;
++    st.orders += 1;
++    st.spend += Number(s.total);
++    if (!st.lastOrderAt) st.lastOrderAt = s.created_at; // rows are newest-first
++  }
++  return NextResponse.json({ customers, hasMore, stats });
+ }
+ 
+ export async function POST(req: Request) {
+diff --git a/app/api/device/kitchen-status/route.ts b/app/api/device/kitchen-status/route.ts
+new file mode 100644
+index 0000000..4e40bc8
+--- /dev/null
++++ b/app/api/device/kitchen-status/route.ts
+@@ -0,0 +1,36 @@
++import { NextResponse } from "next/server";
++import { requireDevice } from "@/lib/auth/require-device";
++import { createAdminClient } from "@/lib/supabase/admin";
++
++const STATUSES = ["New", "Preparing", "Completed"];
++
++/** Ticket Rail moves made on the desktop while it was offline, uploaded by the sync (device token
++ *  only — there is no cashier session during a background sync). Same effect as POST
++ *  /api/sales/kitchen-status: it only touches sales.kitchen_status of this restaurant's sales.
++ *  Ops are applied in the order sent, so the last move of a ticket wins. */
++export async function POST(req: Request) {
++  const auth = await requireDevice(req);
++  if (!auth.ok) return NextResponse.json({ error: auth.error, code: auth.code }, { status: auth.status });
++
++  const body = (await req.json().catch(() => ({}))) as { ops?: { opId?: string | number; saleId?: string; kitchenStatus?: string }[] };
++  const ops = body.ops;
++  if (!Array.isArray(ops) || ops.length === 0 || ops.length > 200) {
++    return NextResponse.json({ error: "Send between 1 and 200 ops" }, { status: 400 });
++  }
++
++  const admin = createAdminClient();
++  const results: { opId: string | number | undefined; ok: boolean; error?: string }[] = [];
++  for (const op of ops) {
++    if (!op.saleId || !op.kitchenStatus || !STATUSES.includes(op.kitchenStatus)) {
++      results.push({ opId: op.opId, ok: false, error: "saleId and a valid kitchenStatus are required" });
++      continue;
++    }
++    const { error } = await admin
++      .from("sales")
++      .update({ kitchen_status: op.kitchenStatus })
++      .eq("id", op.saleId)
++      .eq("restaurant_id", auth.device.restaurantId);
++    results.push(error ? { opId: op.opId, ok: false, error: error.message } : { opId: op.opId, ok: true });
++  }
++  return NextResponse.json({ results });
++}
+diff --git a/app/api/device/sales/route.ts b/app/api/device/sales/route.ts
+index 718c4e8..58d8436 100644
+--- a/app/api/device/sales/route.ts
++++ b/app/api/device/sales/route.ts
+@@ -21,7 +21,7 @@ type OfflineSale = {
+ };
+ 
+ type SaleResult =
+-  | { clientSaleId: string; ok: true; orderNo: number | string; total: number; status: string; balance: number; duplicate?: boolean }
++  | { clientSaleId: string; ok: true; orderNo: number | string; total: number; status: string; balance: number; saleId?: string | null; duplicate?: boolean }
+   | { clientSaleId: string; ok: false; error: string; retryable: boolean };
+ 
+ const MAX_BATCH = 50;
+@@ -97,7 +97,7 @@ export async function POST(req: Request) {
+         .eq("client_sale_id", id)
+         .maybeSingle();
+       if (prior?.result) {
+-        results.push({ clientSaleId: id, ok: true, duplicate: true, ...(prior.result as { orderNo: number | string; total: number; status: string; balance: number }) });
++        results.push({ clientSaleId: id, ok: true, duplicate: true, ...(prior.result as { orderNo: number | string; total: number; status: string; balance: number; saleId?: string | null }) });
+       } else if (prior && Date.now() - new Date(prior.created_at).getTime() < STALE_CLAIM_MS) {
+         reject("This sale is still being processed — retrying shortly", true);
+       } else {
+@@ -140,7 +140,21 @@ export async function POST(req: Request) {
+       created = true;
+ 
+       const r = ((Array.isArray(data) ? data[0] : data) ?? {}) as { order_no?: number | string; total?: number; status?: string; balance?: number };
+-      const result = { orderNo: r.order_no ?? "", total: r.total ?? 0, status: r.status ?? "", balance: r.balance ?? 0 };
++      // The new sale's id lets the device map Ticket Rail moves made while the sale was still
++      // only on the device. Looked up by order number among this restaurant's newest rows.
++      let saleId: string | null = null;
++      if (r.order_no != null) {
++        const { data: row } = await admin
++          .from("sales")
++          .select("id")
++          .eq("restaurant_id", restaurantId)
++          .eq("order_no", r.order_no)
++          .order("created_at", { ascending: false })
++          .limit(1)
++          .maybeSingle();
++        saleId = row?.id ?? null;
++      }
++      const result = { orderNo: r.order_no ?? "", total: r.total ?? 0, status: r.status ?? "", balance: r.balance ?? 0, saleId };
+ 
+       const { error: receiptError } = await admin
+         .from("device_sale_receipts")
+diff --git a/app/api/device/sync/route.ts b/app/api/device/sync/route.ts
+index f11561d..caccd5b 100644
+--- a/app/api/device/sync/route.ts
++++ b/app/api/device/sync/route.ts
+@@ -37,7 +37,7 @@ export async function GET(req: Request) {
+   const failed = [restaurant, products, tables, areas, methods, staff, customers, settingsRes].find((r) => r.error);
+   if (failed?.error) return NextResponse.json({ error: failed.error.message }, { status: 500 });
+ 
+-  const [permissionMatrix, subRes] = await Promise.all([
++  const [permissionMatrix, subRes, recentSales] = await Promise.all([
+     getPermissionMatrix(rid),
+     admin
+       .from("subscriptions")
+@@ -46,6 +46,15 @@ export async function GET(req: Request) {
+       .order("created_at", { ascending: false })
+       .limit(1)
+       .maybeSingle(),
++    // Newest orders (same shape as GET /api/sales) so Ticket Rail, Sales and Unpaid Orders have
++    // something to show with no internet. Unpaid orders are always included, however old.
++    admin
++      .from("sales")
++      .select("*, customers(name, phone), tables(number), sale_items(*), sale_payments(*)")
++      .eq("restaurant_id", rid)
++      .order("created_at", { ascending: false })
++      .order("id", { ascending: false })
++      .limit(200),
+   ]);
+ 
+   let settings = settingsRes.data;
+@@ -66,6 +75,7 @@ export async function GET(req: Request) {
+     staffRoster: staff.data ?? [],
+     /** role -> module -> can_view, so the desktop sidebar and page guards work offline */
+     permissionMatrix,
++    recentSales: recentSales.data ?? [],
+     subStatus: subRes.data ? computeStatus(subRes.data) : "expired",
+   });
+ }
+diff --git a/app/api/sales/route.ts b/app/api/sales/route.ts
+index e49a706..3cfdaa1 100644
+--- a/app/api/sales/route.ts
++++ b/app/api/sales/route.ts
+@@ -6,21 +6,53 @@ import { hasModuleAccess } from "@/lib/permissions";
+ // NOTE: the order-edit handler that used to live in this file is in app/api/sales/edit/route.ts
+ // (that's where components/edit-order-modal.tsx posts to).
+ 
+-/** Sales list — used by Sales, Unpaid Orders, Ticket Rail, Customers, Employees and Dashboard. */
++/** Sales list — used by Sales, Unpaid Orders, Ticket Rail, Customers and Dashboard.
++ *  Paged so big histories load fast: ?limit (default 100, max 1000) &offset, plus optional
++ *  filters ?status=unpaid|completed|cancelled, ?customerId=, ?q= (order # / customer name / phone).
++ *  Returns { sales, hasMore } — one extra row is fetched to know whether another page exists,
++ *  which avoids a slow exact COUNT on every request. */
+ export async function GET(req: Request) {
+   const session = await requireStaffSession();
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+ 
+-  const limit = Math.min(Number(new URL(req.url).searchParams.get("limit") ?? 100) || 100, 1000);
++  const sp = new URL(req.url).searchParams;
++  const limit = Math.min(Math.max(Number(sp.get("limit") ?? 100) || 100, 1), 1000);
++  const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
++  const status = sp.get("status");
++  const customerId = sp.get("customerId");
++  const q = (sp.get("q") ?? "").replace(/[,()%*\\]/g, " ").trim();
++
+   const admin = createAdminClient();
+-  const { data, error } = await admin
++  let query = admin
+     .from("sales")
+     .select("*, customers(name, phone), tables(number), sale_items(*), sale_payments(*)")
+     .eq("restaurant_id", session.restaurantId)
+     .order("created_at", { ascending: false })
+-    .limit(limit);
++    .order("id", { ascending: false });
++
++  if (status && ["completed", "unpaid", "cancelled"].includes(status)) query = query.eq("status", status);
++  if (customerId) query = query.eq("customer_id", customerId);
++
++  if (q) {
++    const { data: cust } = await admin
++      .from("customers")
++      .select("id")
++      .eq("restaurant_id", session.restaurantId)
++      .or(`name.ilike.%${q}%,phone.ilike.%${q}%`)
++      .limit(200);
++    const ids = (cust ?? []).map((c) => c.id);
++    const asNumber = /^\d+$/.test(q) ? Number(q) : null;
++    const parts: string[] = [];
++    if (asNumber !== null) parts.push(`order_no.eq.${asNumber}`);
++    if (ids.length) parts.push(`customer_id.in.(${ids.join(",")})`);
++    if (parts.length === 0) return NextResponse.json({ sales: [], hasMore: false });
++    query = query.or(parts.join(","));
++  }
++
++  const { data, error } = await query.range(offset, offset + limit); // limit + 1 rows
+   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+-  return NextResponse.json({ sales: data });
++  const rows = data ?? [];
++  return NextResponse.json({ sales: rows.slice(0, limit), hasMore: rows.length > limit });
+ }
+ 
+ /** POS checkout — the atomic create_sale() Postgres function (stock, payments, customer
+diff --git a/components/desktop-offline-notice.tsx b/components/desktop-offline-notice.tsx
+new file mode 100644
+index 0000000..ef78168
+--- /dev/null
++++ b/components/desktop-offline-notice.tsx
+@@ -0,0 +1,36 @@
++"use client";
++import Link from "next/link";
++import { WifiOff } from "lucide-react";
++
++/** Shown in place of a page that needs the internet while the computer is offline, so the page
++ *  doesn't spin forever. The way out is always the POS, which works without a connection. */
++export function DesktopOfflineNotice({ onRetry }: { onRetry: () => void }) {
++  return (
++    <main className="flex min-h-[70vh] items-center justify-center p-6">
++      <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-8 text-center shadow-lg">
++        <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-turmeric-500/15 text-turmeric-400">
++          <WifiOff size={26} />
++        </div>
++        <h1 className="font-display text-xl font-semibold text-ink-strong">You&apos;re offline</h1>
++        <p className="mt-2 text-sm text-ink-mid">
++          This page needs an internet connection. The POS, Ticket Rail, Sales and Unpaid Orders keep working, and
++          everything you ring up is saved on this computer and uploaded automatically when you&apos;re back online.
++        </p>
++        <div className="mt-6 flex items-center justify-center gap-3">
++          <Link
++            href="/pos"
++            className="rounded-lg bg-chili-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-chili-600 transition-colors"
++          >
++            Go to POS
++          </Link>
++          <button
++            onClick={onRetry}
++            className="rounded-lg border border-line bg-raised px-4 py-2.5 text-sm font-medium text-ink-mid hover:text-ink-strong"
++          >
++            Try again
++          </button>
++        </div>
++      </div>
++    </main>
++  );
++}
+diff --git a/components/desktop-shell.tsx b/components/desktop-shell.tsx
+index 96891c8..cef1133 100644
+--- a/components/desktop-shell.tsx
++++ b/components/desktop-shell.tsx
+@@ -1,8 +1,11 @@
+ "use client";
+ import { useEffect, useState } from "react";
++import { usePathname } from "next/navigation";
+ import { DashboardShell } from "@/app/(restaurant)/shell";
+ import { DesktopCtxProvider, loadDesktopContext, type DesktopCtx } from "@/lib/desktop/context";
+ import { DesktopSyncBar } from "@/components/desktop-sync-bar";
++import { DesktopOfflineNotice } from "@/components/desktop-offline-notice";
++import { isOfflineOk, useOnline } from "@/lib/desktop/connectivity";
+ 
+ /** The desktop counterpart of the server-side shell setup in each web page.tsx: same sidebar +
+  *  top bar (DashboardShell), but the signed-in cashier, permissions and shift come from the device
+@@ -11,6 +14,8 @@ import { DesktopSyncBar } from "@/components/desktop-sync-bar";
+  *  app. `syncBar={false}` for the POS, which shows its own sync strip inside its menu pane. */
+ export function DesktopShell({ children, syncBar = true }: { children: React.ReactNode; syncBar?: boolean }) {
+   const [ctx, setCtx] = useState<DesktopCtx | null>(null);
++  const pathname = usePathname() ?? "";
++  const { online, recheck } = useOnline();
+ 
+   useEffect(() => {
+     loadDesktopContext()
+@@ -25,6 +30,10 @@ export function DesktopShell({ children, syncBar = true }: { children: React.Rea
+ 
+   if (!ctx) return null;
+ 
++  // An online-only page with no connection: say so (with a way back to the POS) instead of letting
++  // it load forever. The sidebar and top bar stay, so navigation still works.
++  const showOfflineNotice = !online && !isOfflineOk(pathname);
++
+   return (
+     <DesktopCtxProvider value={ctx}>
+       <DashboardShell
+@@ -41,7 +50,7 @@ export function DesktopShell({ children, syncBar = true }: { children: React.Rea
+             <DesktopSyncBar />
+           </div>
+         )}
+-        {children}
++        {showOfflineNotice ? <DesktopOfflineNotice onRetry={recheck} /> : children}
+       </DashboardShell>
+     </DesktopCtxProvider>
+   );
+diff --git a/components/desktop-sync-bar.tsx b/components/desktop-sync-bar.tsx
+index a16c112..2d2cef7 100644
+--- a/components/desktop-sync-bar.tsx
++++ b/components/desktop-sync-bar.tsx
+@@ -2,6 +2,7 @@
+ import { useCallback, useEffect, useState } from "react";
+ import { invoke } from "@tauri-apps/api/core";
+ import { isTauri } from "@/lib/posData";
++import { useOnline } from "@/lib/desktop/connectivity";
+ 
+ type SyncStatus = {
+   last_sync_at: string | null;
+@@ -21,6 +22,7 @@ export function DesktopSyncBar() {
+   const [st, setSt] = useState<SyncStatus | null>(null);
+   const [busy, setBusy] = useState(false);
+   const [msg, setMsg] = useState("");
++  const { online } = useOnline();
+ 
+   const refresh = useCallback(() => {
+     invoke<SyncStatus>("get_sync_status").then(setSt).catch(() => {});
+@@ -79,6 +81,9 @@ export function DesktopSyncBar() {
+           warn ? "border-turmeric-400/50 text-turmeric-400" : "border-line text-ink-faint"
+         }`}
+       >
++        {!online && (
++          <span className="rounded-full bg-turmeric-500/20 px-2 py-0.5 font-semibold text-turmeric-400">Offline</span>
++        )}
+         <span>{label}</span>
+         {st.hours_left != null && st.hours_left <= 24 && <span>· {st.hours_left}h left before sync is required</span>}
+         {st.pending_sales > 0 && <span>· {st.pending_sales} sale(s) waiting to upload</span>}
+diff --git a/components/ui/load-more.tsx b/components/ui/load-more.tsx
+new file mode 100644
+index 0000000..2826280
+--- /dev/null
++++ b/components/ui/load-more.tsx
+@@ -0,0 +1,74 @@
++"use client";
++import { useEffect, useRef, useState } from "react";
++import { Spinner } from "@/components/ui/loading";
++
++/** Value that follows `value` after it has stopped changing for `ms` (search boxes: one request
++ *  when the cashier pauses typing, not one per keystroke). */
++export function useDebounced<T>(value: T, ms = 300): T {
++  const [v, setV] = useState(value);
++  useEffect(() => {
++    const t = setTimeout(() => setV(value), ms);
++    return () => clearTimeout(t);
++  }, [value, ms]);
++  return v;
++}
++
++/** The bottom of a paged list: loads the next page automatically when it scrolls into view, and
++ *  also shows a "Load more" button (for keyboards, and as a fallback). Render it right after the
++ *  rows; it renders nothing when there is no further page. */
++export function LoadMore({
++  hasMore,
++  loading,
++  onMore,
++  label = "Load more",
++}: {
++  hasMore: boolean;
++  loading: boolean;
++  onMore: () => void;
++  label?: string;
++}) {
++  const ref = useRef<HTMLDivElement>(null);
++  const onMoreRef = useRef(onMore);
++  onMoreRef.current = onMore;
++
++  useEffect(() => {
++    const el = ref.current;
++    if (!el || !hasMore || loading || typeof IntersectionObserver === "undefined") return;
++    const io = new IntersectionObserver(
++      (entries) => {
++        if (entries.some((e) => e.isIntersecting)) onMoreRef.current();
++      },
++      { rootMargin: "300px" }
++    );
++    io.observe(el);
++    return () => io.disconnect();
++  }, [hasMore, loading]);
++
++  if (!hasMore) return null;
++  return (
++    <div ref={ref} className="flex justify-center py-4">
++      <button
++        onClick={onMore}
++        disabled={loading}
++        className="inline-flex items-center gap-2 rounded-lg border border-line bg-raised px-4 py-2 text-sm font-medium text-ink-mid hover:text-ink-strong disabled:opacity-60"
++      >
++        {loading && <Spinner size={13} />}
++        {loading ? "Loading…" : label}
++      </button>
++    </div>
++  );
++}
++
++/** For lists that are already fully in memory (small tables): render the first `step` rows and
++ *  reveal more as the bottom is reached, so a page with hundreds of rows paints immediately. */
++export function useProgressive<T>(rows: T[], step = 50) {
++  const [count, setCount] = useState(step);
++  // Start over when the list itself changes (new search, filter, reload).
++  const first = rows[0];
++  useEffect(() => setCount(step), [rows.length, first, step]);
++  return {
++    visible: rows.slice(0, count),
++    hasMore: rows.length > count,
++    showMore: () => setCount((c) => c + step),
++  };
++}
+diff --git a/lib/desktop/connectivity.ts b/lib/desktop/connectivity.ts
+new file mode 100644
+index 0000000..9bab2bc
+--- /dev/null
++++ b/lib/desktop/connectivity.ts
+@@ -0,0 +1,42 @@
++"use client";
++import { useCallback, useEffect, useState } from "react";
++import { invoke } from "@tauri-apps/api/core";
++
++/** Is the cloud reachable? Asks the desktop app (a quick connection test, not the browser's
++ *  unreliable `navigator.onLine`, which stays "true" on a LAN with no internet). Starts as
++ *  "online" so a screen never flashes an offline message while the first check runs. */
++export function useOnline(pollMs = 8000) {
++  const [online, setOnline] = useState(true);
++
++  const recheck = useCallback(async () => {
++    try {
++      setOnline(await invoke<boolean>("check_online"));
++    } catch {
++      /* keep the last known state */
++    }
++  }, []);
++
++  useEffect(() => {
++    recheck();
++    const timer = setInterval(recheck, pollMs);
++    const goOffline = () => setOnline(false); // the OS says the network is down — believe it at once
++    window.addEventListener("online", recheck);
++    window.addEventListener("offline", goOffline);
++    return () => {
++      clearInterval(timer);
++      window.removeEventListener("online", recheck);
++      window.removeEventListener("offline", goOffline);
++    };
++  }, [recheck, pollMs]);
++
++  return { online, recheck };
++}
++
++/** Screens that keep working with no internet (they read this computer's saved data). Every
++ *  other page shows the "You're offline" notice instead of loading forever. */
++export const OFFLINE_OK_PATHS = ["/pos", "/ticket-rail", "/sales", "/unpaid-orders", "/printer-settings"];
++
++export function isOfflineOk(pathname: string): boolean {
++  const p = pathname.replace(/\/+$/, "") || "/";
++  return OFFLINE_OK_PATHS.some((ok) => p === ok || p.startsWith(ok + "/"));
++}
+diff --git a/lib/posData.ts b/lib/posData.ts
+index 7578c14..f6449e4 100644
+--- a/lib/posData.ts
++++ b/lib/posData.ts
+@@ -64,7 +64,7 @@ export type SaleResult = {
+ export async function submitSale(payload: Record<string, unknown>, localTotal: number, paid: number): Promise<SaleResult> {
+   if (isTauri()) {
+     try {
+-      const r = await invoke<{ orderNo: string; offline: boolean }>("create_local_sale", { payload });
++      const r = await invoke<{ orderNo: string; offline: boolean }>("create_local_sale", { payload: { ...payload, total: localTotal } });
+       return { ok: true, orderNo: r.orderNo, offline: r.offline, total: localTotal, balance: Math.max(0, localTotal - paid) };
+     } catch (e) {
+       return { ok: false, error: typeof e === "string" ? e : e instanceof Error ? e.message : "Could not save the sale" };

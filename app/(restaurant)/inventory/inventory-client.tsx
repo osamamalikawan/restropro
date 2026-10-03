@@ -6,6 +6,7 @@ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/mo
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
+import { LoadMore, useProgressive } from "@/components/ui/load-more";
 
 type Item = {
   id: string;
@@ -133,6 +134,8 @@ export function InventoryClient() {
     await load();
   }
 
+  const pg = useProgressive(filtered); // first 50 rows now, the rest as you scroll — keeps big tables fast
+
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <Panel loading={loading}>
@@ -161,7 +164,7 @@ export function InventoryClient() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((i) => {
+              {pg.visible.map((i) => {
                 const st = stockStatus(i);
                 const pct = Math.min(100, Math.round((i.current_stock / (i.min_stock * 2 || 1)) * 100));
                 return (
@@ -211,6 +214,7 @@ export function InventoryClient() {
             </tbody>
           </table>
         </TableScroll>
+        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
       </Panel>
 
       <Modal

@@ -37,7 +37,7 @@ export async function GET(req: Request) {
   const failed = [restaurant, products, tables, areas, methods, staff, customers, settingsRes].find((r) => r.error);
   if (failed?.error) return NextResponse.json({ error: failed.error.message }, { status: 500 });
 
-  const [permissionMatrix, subRes] = await Promise.all([
+  const [permissionMatrix, subRes, recentSales] = await Promise.all([
     getPermissionMatrix(rid),
     admin
       .from("subscriptions")
@@ -46,6 +46,15 @@ export async function GET(req: Request) {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // Newest orders (same shape as GET /api/sales) so Ticket Rail, Sales and Unpaid Orders have
+    // something to show with no internet. Unpaid orders are always included, however old.
+    admin
+      .from("sales")
+      .select("*, customers(name, phone), tables(number), sale_items(*), sale_payments(*)")
+      .eq("restaurant_id", rid)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(200),
   ]);
 
   let settings = settingsRes.data;
@@ -66,6 +75,7 @@ export async function GET(req: Request) {
     staffRoster: staff.data ?? [],
     /** role -> module -> can_view, so the desktop sidebar and page guards work offline */
     permissionMatrix,
+    recentSales: recentSales.data ?? [],
     subStatus: subRes.data ? computeStatus(subRes.data) : "expired",
   });
 }

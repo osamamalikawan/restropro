@@ -21,7 +21,7 @@ type OfflineSale = {
 };
 
 type SaleResult =
-  | { clientSaleId: string; ok: true; orderNo: number | string; total: number; status: string; balance: number; duplicate?: boolean }
+  | { clientSaleId: string; ok: true; orderNo: number | string; total: number; status: string; balance: number; saleId?: string | null; duplicate?: boolean }
   | { clientSaleId: string; ok: false; error: string; retryable: boolean };
 
 const MAX_BATCH = 50;
@@ -97,7 +97,7 @@ export async function POST(req: Request) {
         .eq("client_sale_id", id)
         .maybeSingle();
       if (prior?.result) {
-        results.push({ clientSaleId: id, ok: true, duplicate: true, ...(prior.result as { orderNo: number | string; total: number; status: string; balance: number }) });
+        results.push({ clientSaleId: id, ok: true, duplicate: true, ...(prior.result as { orderNo: number | string; total: number; status: string; balance: number; saleId?: string | null }) });
       } else if (prior && Date.now() - new Date(prior.created_at).getTime() < STALE_CLAIM_MS) {
         reject("This sale is still being processed — retrying shortly", true);
       } else {
@@ -140,7 +140,21 @@ export async function POST(req: Request) {
       created = true;
 
       const r = ((Array.isArray(data) ? data[0] : data) ?? {}) as { order_no?: number | string; total?: number; status?: string; balance?: number };
-      const result = { orderNo: r.order_no ?? "", total: r.total ?? 0, status: r.status ?? "", balance: r.balance ?? 0 };
+      // The new sale's id lets the device map Ticket Rail moves made while the sale was still
+      // only on the device. Looked up by order number among this restaurant's newest rows.
+      let saleId: string | null = null;
+      if (r.order_no != null) {
+        const { data: row } = await admin
+          .from("sales")
+          .select("id")
+          .eq("restaurant_id", restaurantId)
+          .eq("order_no", r.order_no)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        saleId = row?.id ?? null;
+      }
+      const result = { orderNo: r.order_no ?? "", total: r.total ?? 0, status: r.status ?? "", balance: r.balance ?? 0, saleId };
 
       const { error: receiptError } = await admin
         .from("device_sale_receipts")

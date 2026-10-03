@@ -6,21 +6,53 @@ import { hasModuleAccess } from "@/lib/permissions";
 // NOTE: the order-edit handler that used to live in this file is in app/api/sales/edit/route.ts
 // (that's where components/edit-order-modal.tsx posts to).
 
-/** Sales list — used by Sales, Unpaid Orders, Ticket Rail, Customers, Employees and Dashboard. */
+/** Sales list — used by Sales, Unpaid Orders, Ticket Rail, Customers and Dashboard.
+ *  Paged so big histories load fast: ?limit (default 100, max 1000) &offset, plus optional
+ *  filters ?status=unpaid|completed|cancelled, ?customerId=, ?q= (order # / customer name / phone).
+ *  Returns { sales, hasMore } — one extra row is fetched to know whether another page exists,
+ *  which avoids a slow exact COUNT on every request. */
 export async function GET(req: Request) {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const limit = Math.min(Number(new URL(req.url).searchParams.get("limit") ?? 100) || 100, 1000);
+  const sp = new URL(req.url).searchParams;
+  const limit = Math.min(Math.max(Number(sp.get("limit") ?? 100) || 100, 1), 1000);
+  const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
+  const status = sp.get("status");
+  const customerId = sp.get("customerId");
+  const q = (sp.get("q") ?? "").replace(/[,()%*\\]/g, " ").trim();
+
   const admin = createAdminClient();
-  const { data, error } = await admin
+  let query = admin
     .from("sales")
     .select("*, customers(name, phone), tables(number), sale_items(*), sale_payments(*)")
     .eq("restaurant_id", session.restaurantId)
     .order("created_at", { ascending: false })
-    .limit(limit);
+    .order("id", { ascending: false });
+
+  if (status && ["completed", "unpaid", "cancelled"].includes(status)) query = query.eq("status", status);
+  if (customerId) query = query.eq("customer_id", customerId);
+
+  if (q) {
+    const { data: cust } = await admin
+      .from("customers")
+      .select("id")
+      .eq("restaurant_id", session.restaurantId)
+      .or(`name.ilike.%${q}%,phone.ilike.%${q}%`)
+      .limit(200);
+    const ids = (cust ?? []).map((c) => c.id);
+    const asNumber = /^\d+$/.test(q) ? Number(q) : null;
+    const parts: string[] = [];
+    if (asNumber !== null) parts.push(`order_no.eq.${asNumber}`);
+    if (ids.length) parts.push(`customer_id.in.(${ids.join(",")})`);
+    if (parts.length === 0) return NextResponse.json({ sales: [], hasMore: false });
+    query = query.or(parts.join(","));
+  }
+
+  const { data, error } = await query.range(offset, offset + limit); // limit + 1 rows
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ sales: data });
+  const rows = data ?? [];
+  return NextResponse.json({ sales: rows.slice(0, limit), hasMore: rows.length > limit });
 }
 
 /** POS checkout — the atomic create_sale() Postgres function (stock, payments, customer

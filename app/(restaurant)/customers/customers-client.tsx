@@ -1,24 +1,32 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IdCard, Pencil, ArrowLeft } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, searchInputCls, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney, fmtDateTime } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
+import { LoadMore, useDebounced } from "@/components/ui/load-more";
+
+const PAGE = 50; // customers (and order-history rows) per page
 
 type Area = { id: string; name: string };
 type Customer = { id: string; name: string; phone: string; address: string | null; area_id: string | null; delivery_areas?: { name: string } | null };
 type SaleItem = { name: string; unit_price: number; quantity: number };
 type Sale = { id: string; order_no: number; order_type: string; customer_id: string | null; total: number; status: string; created_at: string; sale_items: SaleItem[] };
+type Stat = { orders: number; spend: number; lastOrderAt: string | null };
 
 export function CustomersClient() {
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [stats, setStats] = useState<Record<string, Stat>>({});
   const [areas, setAreas] = useState<Area[]>([]);
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [q, setQ] = useState("");
+  const [search, setSearch] = useState("");
+  const q = useDebounced(search.trim(), 300);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
+  const latest = useRef(0); // ignores a slow answer that a newer search/reload has replaced
 
   // Add/edit modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -29,45 +37,78 @@ export function CustomersClient() {
   const [fAreaId, setFAreaId] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Profile drill-down
+  // Profile drill-down: the customer's order history is fetched only when a profile is opened.
   const [profileId, setProfileId] = useState<string | null>(null);
+  const [orders, setOrders] = useState<Sale[]>([]);
+  const [ordersHasMore, setOrdersHasMore] = useState(false);
+  const [ordersLoading, setOrdersLoading] = useState(false);
 
-  async function load() {
-    setLoading(true);
-    setLoadError("");
-    // Independent per-endpoint fetches — see lib/fetch-json.ts. A failed/empty response from
-    // one (e.g. sales, used only for the spend/orders columns) can no longer throw and wipe
-    // out the customers list itself.
-    const [cRes, aRes, sRes] = await Promise.all([
-      fetchJson<{ customers: Customer[] }>("/api/customers"),
-      fetchJson<{ areas: Area[] }>("/api/delivery-areas"),
-      fetchJson<{ sales: Sale[] }>("/api/sales?limit=1000"),
-    ]);
-    if (!cRes.ok) {
-      setLoadError(cRes.error);
-      setCustomers([]);
-    } else {
-      setCustomers(cRes.data?.customers ?? []);
+  async function loadPage(offset: number) {
+    const id = latest.current;
+    const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset), stats: "1" });
+    if (q) params.set("q", q);
+    // Per-endpoint fetchJson (see lib/fetch-json.ts): a failure here shows an error, never throws.
+    const res = await fetchJson<{ customers: Customer[]; hasMore: boolean; stats?: Record<string, Stat> }>(`/api/customers?${params}`);
+    if (id !== latest.current) return;
+    if (!res.ok) {
+      setLoadError(res.error);
+      if (offset === 0) setCustomers([]);
+      setLoading(false);
+      return;
     }
-    setAreas(aRes.ok ? aRes.data?.areas ?? [] : []);
-    setSales(sRes.ok ? sRes.data?.sales ?? [] : []);
+    setLoadError("");
+    const rows = res.data?.customers ?? [];
+    setHasMore(!!res.data?.hasMore);
+    setCustomers((prev) => (offset === 0 ? rows : [...prev, ...rows]));
+    setStats((prev) => ({ ...(offset === 0 ? {} : prev), ...(res.data?.stats ?? {}) }));
     setLoading(false);
   }
+
+  function reload() {
+    latest.current += 1;
+    setLoading(true);
+    return loadPage(0);
+  }
+
   useEffect(() => {
-    load();
+    fetchJson<{ areas: Area[] }>("/api/delivery-areas").then((r) => setAreas(r.ok ? r.data?.areas ?? [] : []));
   }, []);
 
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    await loadPage(customers.length);
+    setLoadingMore(false);
+  }
+
+  async function loadOrders(customerId: string, offset: number) {
+    setOrdersLoading(true);
+    const res = await fetchJson<{ sales: Sale[]; hasMore: boolean }>(`/api/sales?customerId=${customerId}&limit=${PAGE}&offset=${offset}`);
+    if (res.ok) {
+      const rows = (res.data?.sales ?? []).filter((s) => s.status !== "cancelled");
+      setOrders((prev) => (offset === 0 ? rows : [...prev, ...rows]));
+      setOrdersHasMore(!!res.data?.hasMore);
+    }
+    setOrdersLoading(false);
+  }
+
+  useEffect(() => {
+    setOrders([]);
+    setOrdersHasMore(false);
+    if (profileId) loadOrders(profileId, 0);
+  }, [profileId]);
+
   const statsFor = (customerId: string) => {
-    const orders = sales.filter((s) => s.customer_id === customerId && s.status !== "cancelled");
-    const totalSpend = orders.reduce((sum, o) => sum + Number(o.total), 0);
-    const lastOrder = orders[0] ?? null; // sales already ordered newest-first by the API
-    return { totalOrders: orders.length, totalSpend, lastOrder, orders };
+    const st = stats[customerId];
+    return { totalOrders: st?.orders ?? 0, totalSpend: st?.spend ?? 0, lastOrderAt: st?.lastOrderAt ?? null };
   };
 
-  const filtered = useMemo(() => {
-    const query = q.toLowerCase();
-    return customers.filter((c) => c.name.toLowerCase().includes(query) || c.phone.includes(query));
-  }, [customers, q]);
+  const filtered = customers; // searching is done on the server, a page at a time
 
   function openAdd() {
     setEditingId(null);
@@ -109,7 +150,7 @@ export function CustomersClient() {
       return;
     }
     setModalOpen(false);
-    await load();
+    await reload();
   }
 
   const profileCustomer = profileId ? customers.find((c) => c.id === profileId) : null;
@@ -140,10 +181,10 @@ export function CustomersClient() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <KpiCard label="Total orders" value={stats.totalOrders} />
           <KpiCard label="Total spend" value={fmtMoney(stats.totalSpend)} />
-          <KpiCard label="Last order" value={stats.lastOrder ? `#${stats.lastOrder.order_no}` : "—"} />
+          <KpiCard label="Last order" value={orders[0] ? `#${orders[0].order_no}` : stats.lastOrderAt ? fmtDateTime(stats.lastOrderAt) : "—"} />
         </div>
 
-        <Panel loading={loading}>
+        <Panel loading={ordersLoading && orders.length === 0}>
           <PanelHead title="Order history" />
           <TableScroll>
             <table className="w-full">
@@ -157,7 +198,7 @@ export function CustomersClient() {
                 </tr>
               </thead>
               <tbody>
-                {stats.orders.map((o) => (
+                {orders.map((o) => (
                   <tr key={o.id} className="border-b border-line last:border-0">
                     <Td className="font-mono font-medium">#{o.order_no}</Td>
                     <Td className="text-ink-mid">{fmtDateTime(o.created_at)}</Td>
@@ -168,10 +209,11 @@ export function CustomersClient() {
                     <Td className="font-mono font-medium">{fmtMoney(o.total)}</Td>
                   </tr>
                 ))}
-                {stats.orders.length === 0 && <EmptyRow colSpan={5} label="No orders yet." />}
+                {!ordersLoading && orders.length === 0 && <EmptyRow colSpan={5} label="No orders yet." />}
               </tbody>
             </table>
           </TableScroll>
+          <LoadMore hasMore={ordersHasMore} loading={ordersLoading} onMore={() => profileId && loadOrders(profileId, orders.length)} />
         </Panel>
 
         {renderModal()}
@@ -225,7 +267,7 @@ export function CustomersClient() {
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <Panel loading={loading}>
         <PanelHead title="Customers" subtitle="Everyone who has ordered with you">
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or phone…" className={searchInputCls} />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or phone…" className={searchInputCls} />
           <button onClick={openAdd} className={addBtnCls}>
             + Add customer
           </button>
@@ -266,7 +308,7 @@ export function CustomersClient() {
                     <Td className="text-ink-mid">{c.delivery_areas?.name ?? "—"}</Td>
                     <Td>{stats.totalOrders}</Td>
                     <Td className="font-mono font-medium">{fmtMoney(stats.totalSpend)}</Td>
-                    <Td className="text-ink-mid">{stats.lastOrder ? fmtDateTime(stats.lastOrder.created_at) : "—"}</Td>
+                    <Td className="text-ink-mid">{stats.lastOrderAt ? fmtDateTime(stats.lastOrderAt) : "—"}</Td>
                     <Td>
                       <div className="flex items-center gap-1.5">
                         <IconBtn title="View" onClick={() => setProfileId(c.id)}>
@@ -280,10 +322,11 @@ export function CustomersClient() {
                   </tr>
                 );
               })}
-              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={7} label="No customers yet." />}
+              {!loading && !loadError && filtered.length === 0 && <EmptyRow colSpan={7} label={q ? "No customers match your search." : "No customers yet."} />}
             </tbody>
           </table>
         </TableScroll>
+        <LoadMore hasMore={hasMore} loading={loadingMore} onMore={loadMore} />
       </Panel>
 
       {renderModal()}

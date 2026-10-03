@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "@/lib/posData";
+import { useOnline } from "@/lib/desktop/connectivity";
 
 type SyncStatus = {
   last_sync_at: string | null;
@@ -21,6 +22,7 @@ export function DesktopSyncBar() {
   const [st, setSt] = useState<SyncStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const { online } = useOnline();
 
   const refresh = useCallback(() => {
     invoke<SyncStatus>("get_sync_status").then(setSt).catch(() => {});
@@ -79,6 +81,9 @@ export function DesktopSyncBar() {
           warn ? "border-turmeric-400/50 text-turmeric-400" : "border-line text-ink-faint"
         }`}
       >
+        {!online && (
+          <span className="rounded-full bg-turmeric-500/20 px-2 py-0.5 font-semibold text-turmeric-400">Offline</span>
+        )}
         <span>{label}</span>
         {st.hours_left != null && st.hours_left <= 24 && <span>· {st.hours_left}h left before sync is required</span>}
         {st.pending_sales > 0 && <span>· {st.pending_sales} sale(s) waiting to upload</span>}

@@ -1,6 +1,9 @@
 "use client";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
+import { LoadMore, useDebounced } from "@/components/ui/load-more";
+
+const PAGE = 50; // orders per page: 50 load instantly, the rest on scroll / "Load more"
 
 type Sale = {
   id: string;
@@ -31,19 +34,52 @@ const STATUS_STYLE: Record<Sale["status"], string> = {
  *  canCancel, ported from the prototype's MANAGER_PERMS.sales.cancel). */
 export function SalesClient({ canCancel }: { canCancel: boolean }) {
   const [sales, setSales] = useState<Sale[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState("");
+  const q = useDebounced(search.trim(), 300);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const latest = useRef(0); // ignores a slow answer that a newer search has already replaced
 
-  async function load() {
-    const res = await fetch("/api/sales?limit=100");
-    const data = await res.json();
-    if (res.ok) setSales(data.sales ?? []);
+  async function loadPage(offset: number) {
+    const id = latest.current;
+    const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
+    if (q) params.set("q", q);
+    try {
+      const res = await fetch(`/api/sales?${params}`);
+      const data = await res.json().catch(() => ({}));
+      if (id !== latest.current) return;
+      if (!res.ok) {
+        setError(data.error ?? "Could not load orders");
+        setSales((prev) => prev ?? []);
+        return;
+      }
+      setError("");
+      setHasMore(!!data.hasMore);
+      setSales((prev) => (offset === 0 ? data.sales ?? [] : [...(prev ?? []), ...(data.sales ?? [])]));
+    } catch {
+      if (id !== latest.current) return;
+      setError("Could not reach the server.");
+      setSales((prev) => prev ?? []);
+    }
   }
+
   useEffect(() => {
-    load();
-  }, []);
+    latest.current += 1;
+    setSales(null);
+    setHasMore(false);
+    loadPage(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
+  async function loadMore() {
+    if (loadingMore || !hasMore || !sales) return;
+    setLoadingMore(true);
+    await loadPage(sales.length);
+    setLoadingMore(false);
+  }
 
   async function cancelSale(sale: Sale) {
     if (!confirm(`Cancel order #${sale.order_no}? This restores its inventory and removes it from today's income.`)) return;
@@ -59,19 +95,11 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
       setCancellingId(null);
       return;
     }
-    await load();
+    setSales((prev) => (prev ?? []).map((x) => (x.id === sale.id ? { ...x, status: "cancelled" } : x)));
     setCancellingId(null);
   }
 
-  const filtered = (sales ?? []).filter((s) => {
-    if (!search.trim()) return true;
-    const q = search.trim().toLowerCase();
-    return (
-      String(s.order_no).includes(q) ||
-      s.customers?.name?.toLowerCase().includes(q) ||
-      s.customers?.phone?.includes(q)
-    );
-  });
+  const filtered = sales ?? [];
 
   return (
     <main className="p-6 md:p-8">
@@ -82,7 +110,10 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
           placeholder="Search order #, customer name or phone…"
           className="flex-1 max-w-sm rounded-lg bg-raised border border-line px-3 py-2 text-sm"
         />
-        <span className="text-xs text-ink-faint shrink-0">{filtered.length} orders</span>
+        <span className="text-xs text-ink-faint shrink-0">
+          {filtered.length}
+          {hasMore ? "+" : ""} orders
+        </span>
       </div>
       {error && <p className="text-crimson-400 text-sm mb-3">{error}</p>}
 
@@ -159,12 +190,13 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
               {filtered.length === 0 && (
                 <tr>
                   <td colSpan={8} className="p-6 text-center text-ink-faint">
-                    No orders yet.
+                    {q ? "No orders match your search." : "No orders yet."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+          <LoadMore hasMore={hasMore} loading={loadingMore} onMore={loadMore} />
           <LoadingOverlay show={cancellingId !== null} />
         </div>
       )}

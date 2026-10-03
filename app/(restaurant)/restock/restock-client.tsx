@@ -5,6 +5,7 @@ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow } from "@/components/ui
 import { Field, inputCls, btnPrimary } from "@/components/ui/modal";
 import { fmtMoney, todayISO } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
+import { LoadMore, useProgressive } from "@/components/ui/load-more";
 
 type InventoryItem = { id: string; name: string; unit: string; item_type: "ready_made" | "self_made"; cost: number };
 type Supplier = { id: string; name: string };
@@ -133,6 +134,8 @@ export function RestockClient() {
 
   const total = (Number(quantity) || 0) * (Number(unitCost) || 0);
 
+  const pg = useProgressive(history); // first 50 rows now, the rest as you scroll — keeps big tables fast
+
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       {loadError && (
@@ -209,7 +212,7 @@ export function RestockClient() {
                 </tr>
               </thead>
               <tbody>
-                {history.map((h) => (
+                {pg.visible.map((h) => (
                   <tr key={h.id} className="border-b border-line last:border-0">
                     <Td className="text-ink-mid">{h.date}</Td>
                     <Td className="font-medium text-ink-strong">{h.item}</Td>
@@ -226,6 +229,7 @@ export function RestockClient() {
               </tbody>
             </table>
           </TableScroll>
+          <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
         </Panel>
       </div>
     </main>

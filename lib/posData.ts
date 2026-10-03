@@ -64,7 +64,7 @@ export type SaleResult = {
 export async function submitSale(payload: Record<string, unknown>, localTotal: number, paid: number): Promise<SaleResult> {
   if (isTauri()) {
     try {
-      const r = await invoke<{ orderNo: string; offline: boolean }>("create_local_sale", { payload });
+      const r = await invoke<{ orderNo: string; offline: boolean }>("create_local_sale", { payload: { ...payload, total: localTotal } });
       return { ok: true, orderNo: r.orderNo, offline: r.offline, total: localTotal, balance: Math.max(0, localTotal - paid) };
     } catch (e) {
       return { ok: false, error: typeof e === "string" ? e : e instanceof Error ? e.message : "Could not save the sale" };

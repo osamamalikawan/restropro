@@ -25,7 +25,7 @@ export function UnpaidOrdersClient() {
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    const res = await fetch("/api/sales?limit=200");
+    const res = await fetch("/api/sales?status=unpaid&limit=200");
     const data = await res.json();
     if (res.ok) setSales((data.sales ?? []).filter((s: { status: string }) => s.status === "unpaid"));
   }

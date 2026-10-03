@@ -9,6 +9,7 @@ import { GalleryPickerModal } from "@/components/gallery-picker-modal";
 import { fmtMoney } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
 import { RecipeModal } from "../menu/recipe-modal";
+import { LoadMore, useProgressive } from "@/components/ui/load-more";
 
 type Category = { id: string; name: string };
 type Product = {
@@ -237,6 +238,8 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
     await load();
   }
 
+  const pg = useProgressive(filtered); // first 50 rows now, the rest as you scroll — keeps big tables fast
+
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <Panel loading={loading}>
@@ -268,7 +271,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((p) => {
+              {pg.visible.map((p) => {
                 const cost = costFor(p.id);
                 const margin = cost != null ? Number(p.price) - cost : null;
                 const marginPct = cost != null && p.price > 0 ? Math.round((margin! / p.price) * 100) : null;
@@ -311,6 +314,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
             </tbody>
           </table>
         </TableScroll>
+        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
       </Panel>
 
       <Panel loading={loading} loadingLabel="">
