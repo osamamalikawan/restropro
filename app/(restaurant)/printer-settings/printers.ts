@@ -9,7 +9,9 @@ export type PrinterRole = "receipt" | "kitchen";
 export type PrinterConfig =
   | { mode: "none" }
   | { mode: "usb"; printerName: string }
-  | { mode: "lan"; ip: string; port: number };
+  | { mode: "lan"; ip: string; port: number }
+  // Bluetooth mini printers (paired in Windows) and USB-serial printers show up as a COM port.
+  | { mode: "serial"; port: string; baud: number };
 
 export type PrinterStatus = {
   state: "unconfigured" | "checking" | "connected" | "disconnected";
@@ -36,6 +38,9 @@ export function loadPrinterConfig(role: PrinterRole): PrinterConfig {
     if (parsed?.mode === "usb" && typeof parsed.printerName === "string") return parsed;
     if (parsed?.mode === "lan" && typeof parsed.ip === "string") {
       return { mode: "lan", ip: parsed.ip, port: Number(parsed.port) || 9100 };
+    }
+    if (parsed?.mode === "serial" && typeof parsed.port === "string" && parsed.port) {
+      return { mode: "serial", port: parsed.port, baud: Number(parsed.baud) || 9600 };
     }
   } catch {
     /* fall through */
@@ -64,6 +69,10 @@ export async function checkPrinterStatus(config: PrinterConfig): Promise<Printer
       await invokeTauri("test_printer_connection", { ip: config.ip, port: config.port });
       return { state: "connected", detail: `Reachable at ${config.ip}:${config.port}` };
     }
+    if (config.mode === "serial") {
+      const r = await invokeTauri<{ present: boolean; detail: string }>("check_serial_port", { port: config.port });
+      return { state: r.present ? "connected" : "disconnected", detail: r.detail };
+    }
     const s = await invokeTauri<{ installed: boolean; online: boolean; detail: string }>(
       "check_windows_printer",
       { printerName: config.printerName },
@@ -82,6 +91,8 @@ export async function printBytes(config: PrinterConfig, data: number[]): Promise
     await invokeTauri("print_raw_windows", { printerName: config.printerName, data });
   } else if (config.mode === "lan") {
     await invokeTauri("print_raw", { ip: config.ip, port: config.port, data });
+  } else if (config.mode === "serial") {
+    await invokeTauri("print_raw_serial", { port: config.port, baud: config.baud, data });
   } else {
     throw new Error("No printer is set up for this role yet.");
   }

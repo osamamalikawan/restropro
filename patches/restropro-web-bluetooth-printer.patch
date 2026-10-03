@@ -1,0 +1,192 @@
+diff --git a/app/(restaurant)/printer-settings/printer-settings-client.tsx b/app/(restaurant)/printer-settings/printer-settings-client.tsx
+index c775ed1..ae69114 100644
+--- a/app/(restaurant)/printer-settings/printer-settings-client.tsx
++++ b/app/(restaurant)/printer-settings/printer-settings-client.tsx
+@@ -34,6 +34,7 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
+   const [draft, setDraft] = useState<PrinterConfig>({ mode: "none" });
+   const [status, setStatus] = useState<PrinterStatus>({ state: "checking", detail: "Checking…" });
+   const [installed, setInstalled] = useState<string[]>([]);
++  const [comPorts, setComPorts] = useState<{ name: string; description: string; bluetooth: boolean }[]>([]);
+   const [busy, setBusy] = useState(false);
+   const [msg, setMsg] = useState<{ ok: boolean; message: string } | null>(null);
+ 
+@@ -76,11 +77,25 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
+     if (draft.mode === "usb" && installed.length === 0) loadInstalled();
+   }, [draft.mode, installed.length, loadInstalled]);
+ 
++  const loadComPorts = useCallback(async () => {
++    if (!hasTauri()) return;
++    try {
++      setComPorts(await invokeTauri("list_serial_ports"));
++    } catch (e) {
++      setMsg({ ok: false, message: String(e) });
++    }
++  }, []);
++
++  useEffect(() => {
++    if (draft.mode === "serial" && comPorts.length === 0) loadComPorts();
++  }, [draft.mode, comPorts.length, loadComPorts]);
++
+   function chooseMode(mode: PrinterConfig["mode"]) {
+     setMsg(null);
+     if (mode === "usb") setDraft({ mode: "usb", printerName: saved.mode === "usb" ? saved.printerName : "" });
+     else if (mode === "lan")
+       setDraft(saved.mode === "lan" ? saved : { mode: "lan", ip: "192.168.1.", port: 9100 });
++    else if (mode === "serial") setDraft(saved.mode === "serial" ? saved : { mode: "serial", port: "", baud: 9600 });
+     else setDraft({ mode: "none" });
+   }
+ 
+@@ -91,6 +106,10 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
+       setMsg({ ok: false, message: "Pick a printer first." });
+       return;
+     }
++    if (draft.mode === "serial" && !draft.port) {
++      setMsg({ ok: false, message: "Pick the printer's COM port first." });
++      return;
++    }
+     if (draft.mode === "lan" && !draft.ip.trim()) {
+       setMsg({ ok: false, message: "Enter the printer's IP address." });
+       return;
+@@ -145,6 +164,9 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
+         <button className={segCls(draft.mode === "lan")} onClick={() => chooseMode("lan")}>
+           Network / LAN
+         </button>
++        <button className={segCls(draft.mode === "serial")} onClick={() => chooseMode("serial")}>
++          Bluetooth / COM
++        </button>
+       </div>
+ 
+       {draft.mode === "usb" && (
+@@ -178,6 +200,57 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
+         </div>
+       )}
+ 
++      {draft.mode === "serial" && (
++        <div className="mb-4">
++          <p className="text-xs text-ink-mid mb-2">
++            For Bluetooth mini printers: first pair the printer in Windows (Settings → Bluetooth &amp; devices → Add
++            device), then pick its COM port below. Switch the printer on before printing. Most mini printers are 58 mm
++            — set Paper width to 58mm in Settings so receipts fit.
++          </p>
++          <div className="flex gap-2">
++            <select
++              value={draft.port}
++              onChange={(e) => setDraft({ mode: "serial", port: e.target.value, baud: draft.baud })}
++              className={`${inputCls} flex-1`}
++            >
++              <option value="">Select a COM port…</option>
++              {draft.port && !comPorts.some((p) => p.name === draft.port) && (
++                <option value={draft.port}>{draft.port} (not found on this PC)</option>
++              )}
++              {comPorts.map((p) => (
++                <option key={p.name} value={p.name}>
++                  {p.name} — {p.description}
++                </option>
++              ))}
++            </select>
++            <select
++              value={draft.baud}
++              onChange={(e) => setDraft({ mode: "serial", port: draft.port, baud: Number(e.target.value) })}
++              className={`${inputCls} w-28`}
++              title="Speed. Bluetooth printers usually ignore this; 9600 works for most."
++            >
++              {[9600, 19200, 38400, 57600, 115200].map((b) => (
++                <option key={b} value={b}>
++                  {b}
++                </option>
++              ))}
++            </select>
++            <button
++              onClick={loadComPorts}
++              className="px-4 py-2 rounded-lg border border-line bg-raised text-sm font-medium"
++            >
++              Refresh
++            </button>
++          </div>
++          {comPorts.length === 0 && (
++            <p className="text-xs text-ink-mid mt-2">
++              No COM ports found. If the printer is paired but no port appears, it is probably a Bluetooth LE-only model,
++              which this setting can't reach.
++            </p>
++          )}
++        </div>
++      )}
++
+       {draft.mode === "lan" && (
+         <div className="mb-4">
+           <p className="text-xs text-ink-mid mb-2">
+diff --git a/app/(restaurant)/printer-settings/printers.ts b/app/(restaurant)/printer-settings/printers.ts
+index 85716e3..55302a6 100644
+--- a/app/(restaurant)/printer-settings/printers.ts
++++ b/app/(restaurant)/printer-settings/printers.ts
+@@ -9,7 +9,9 @@ export type PrinterRole = "receipt" | "kitchen";
+ export type PrinterConfig =
+   | { mode: "none" }
+   | { mode: "usb"; printerName: string }
+-  | { mode: "lan"; ip: string; port: number };
++  | { mode: "lan"; ip: string; port: number }
++  // Bluetooth mini printers (paired in Windows) and USB-serial printers show up as a COM port.
++  | { mode: "serial"; port: string; baud: number };
+ 
+ export type PrinterStatus = {
+   state: "unconfigured" | "checking" | "connected" | "disconnected";
+@@ -37,6 +39,9 @@ export function loadPrinterConfig(role: PrinterRole): PrinterConfig {
+     if (parsed?.mode === "lan" && typeof parsed.ip === "string") {
+       return { mode: "lan", ip: parsed.ip, port: Number(parsed.port) || 9100 };
+     }
++    if (parsed?.mode === "serial" && typeof parsed.port === "string" && parsed.port) {
++      return { mode: "serial", port: parsed.port, baud: Number(parsed.baud) || 9600 };
++    }
+   } catch {
+     /* fall through */
+   }
+@@ -64,6 +69,10 @@ export async function checkPrinterStatus(config: PrinterConfig): Promise<Printer
+       await invokeTauri("test_printer_connection", { ip: config.ip, port: config.port });
+       return { state: "connected", detail: `Reachable at ${config.ip}:${config.port}` };
+     }
++    if (config.mode === "serial") {
++      const r = await invokeTauri<{ present: boolean; detail: string }>("check_serial_port", { port: config.port });
++      return { state: r.present ? "connected" : "disconnected", detail: r.detail };
++    }
+     const s = await invokeTauri<{ installed: boolean; online: boolean; detail: string }>(
+       "check_windows_printer",
+       { printerName: config.printerName },
+@@ -82,6 +91,8 @@ export async function printBytes(config: PrinterConfig, data: number[]): Promise
+     await invokeTauri("print_raw_windows", { printerName: config.printerName, data });
+   } else if (config.mode === "lan") {
+     await invokeTauri("print_raw", { ip: config.ip, port: config.port, data });
++  } else if (config.mode === "serial") {
++    await invokeTauri("print_raw_serial", { port: config.port, baud: config.baud, data });
+   } else {
+     throw new Error("No printer is set up for this role yet.");
+   }
+diff --git a/lib/posPrint.ts b/lib/posPrint.ts
+index 08d920d..dc123eb 100644
+--- a/lib/posPrint.ts
++++ b/lib/posPrint.ts
+@@ -8,7 +8,8 @@
+ type PrinterConfig =
+   | { mode: "none" }
+   | { mode: "usb"; printerName: string }
+-  | { mode: "lan"; ip: string; port: number };
++  | { mode: "lan"; ip: string; port: number }
++  | { mode: "serial"; port: string; baud: number };
+ 
+ const hasTauri = () => typeof window !== "undefined" && !!(window as any).__TAURI__;
+ 
+@@ -17,6 +18,7 @@ function loadPrinterConfig(role: "receipt" | "kitchen"): PrinterConfig {
+     const parsed = JSON.parse(window.localStorage.getItem(`restropro.printer.${role}`) || "null");
+     if (parsed?.mode === "usb" && typeof parsed.printerName === "string") return parsed;
+     if (parsed?.mode === "lan" && typeof parsed.ip === "string") return { mode: "lan", ip: parsed.ip, port: Number(parsed.port) || 9100 };
++    if (parsed?.mode === "serial" && typeof parsed.port === "string" && parsed.port) return { mode: "serial", port: parsed.port, baud: Number(parsed.baud) || 9600 };
+   } catch {}
+   return { mode: "none" };
+ }
+@@ -27,6 +29,7 @@ async function printToRole(role: "receipt" | "kitchen", data: number[]): Promise
+   const c = loadPrinterConfig(role);
+   if (c.mode === "usb") await invoke("print_raw_windows", { printerName: c.printerName, data });
+   else if (c.mode === "lan") await invoke("print_raw", { ip: c.ip, port: c.port, data });
++  else if (c.mode === "serial") await invoke("print_raw_serial", { port: c.port, baud: c.baud, data });
+   else throw new Error(`no ${role === "kitchen" ? "kitchen" : "receipt"} printer is set up (Printer settings)`);
+ }
+ 

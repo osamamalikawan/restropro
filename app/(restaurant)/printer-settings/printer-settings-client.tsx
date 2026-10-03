@@ -34,6 +34,7 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
   const [draft, setDraft] = useState<PrinterConfig>({ mode: "none" });
   const [status, setStatus] = useState<PrinterStatus>({ state: "checking", detail: "Checking…" });
   const [installed, setInstalled] = useState<string[]>([]);
+  const [comPorts, setComPorts] = useState<{ name: string; description: string; bluetooth: boolean }[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -76,11 +77,25 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
     if (draft.mode === "usb" && installed.length === 0) loadInstalled();
   }, [draft.mode, installed.length, loadInstalled]);
 
+  const loadComPorts = useCallback(async () => {
+    if (!hasTauri()) return;
+    try {
+      setComPorts(await invokeTauri("list_serial_ports"));
+    } catch (e) {
+      setMsg({ ok: false, message: String(e) });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (draft.mode === "serial" && comPorts.length === 0) loadComPorts();
+  }, [draft.mode, comPorts.length, loadComPorts]);
+
   function chooseMode(mode: PrinterConfig["mode"]) {
     setMsg(null);
     if (mode === "usb") setDraft({ mode: "usb", printerName: saved.mode === "usb" ? saved.printerName : "" });
     else if (mode === "lan")
       setDraft(saved.mode === "lan" ? saved : { mode: "lan", ip: "192.168.1.", port: 9100 });
+    else if (mode === "serial") setDraft(saved.mode === "serial" ? saved : { mode: "serial", port: "", baud: 9600 });
     else setDraft({ mode: "none" });
   }
 
@@ -89,6 +104,10 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
   function save() {
     if (draft.mode === "usb" && !draft.printerName) {
       setMsg({ ok: false, message: "Pick a printer first." });
+      return;
+    }
+    if (draft.mode === "serial" && !draft.port) {
+      setMsg({ ok: false, message: "Pick the printer's COM port first." });
       return;
     }
     if (draft.mode === "lan" && !draft.ip.trim()) {
@@ -145,6 +164,9 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
         <button className={segCls(draft.mode === "lan")} onClick={() => chooseMode("lan")}>
           Network / LAN
         </button>
+        <button className={segCls(draft.mode === "serial")} onClick={() => chooseMode("serial")}>
+          Bluetooth / COM
+        </button>
       </div>
 
       {draft.mode === "usb" && (
@@ -175,6 +197,57 @@ function PrinterCard({ role, title, subtitle }: { role: PrinterRole; title: stri
               Refresh
             </button>
           </div>
+        </div>
+      )}
+
+      {draft.mode === "serial" && (
+        <div className="mb-4">
+          <p className="text-xs text-ink-mid mb-2">
+            For Bluetooth mini printers: first pair the printer in Windows (Settings → Bluetooth &amp; devices → Add
+            device), then pick its COM port below. Switch the printer on before printing. Most mini printers are 58 mm
+            — set Paper width to 58mm in Settings so receipts fit.
+          </p>
+          <div className="flex gap-2">
+            <select
+              value={draft.port}
+              onChange={(e) => setDraft({ mode: "serial", port: e.target.value, baud: draft.baud })}
+              className={`${inputCls} flex-1`}
+            >
+              <option value="">Select a COM port…</option>
+              {draft.port && !comPorts.some((p) => p.name === draft.port) && (
+                <option value={draft.port}>{draft.port} (not found on this PC)</option>
+              )}
+              {comPorts.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name} — {p.description}
+                </option>
+              ))}
+            </select>
+            <select
+              value={draft.baud}
+              onChange={(e) => setDraft({ mode: "serial", port: draft.port, baud: Number(e.target.value) })}
+              className={`${inputCls} w-28`}
+              title="Speed. Bluetooth printers usually ignore this; 9600 works for most."
+            >
+              {[9600, 19200, 38400, 57600, 115200].map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={loadComPorts}
+              className="px-4 py-2 rounded-lg border border-line bg-raised text-sm font-medium"
+            >
+              Refresh
+            </button>
+          </div>
+          {comPorts.length === 0 && (
+            <p className="text-xs text-ink-mid mt-2">
+              No COM ports found. If the printer is paired but no port appears, it is probably a Bluetooth LE-only model,
+              which this setting can't reach.
+            </p>
+          )}
         </div>
       )}
 

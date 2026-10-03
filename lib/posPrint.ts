@@ -8,7 +8,8 @@
 type PrinterConfig =
   | { mode: "none" }
   | { mode: "usb"; printerName: string }
-  | { mode: "lan"; ip: string; port: number };
+  | { mode: "lan"; ip: string; port: number }
+  | { mode: "serial"; port: string; baud: number };
 
 const hasTauri = () => typeof window !== "undefined" && !!(window as any).__TAURI__;
 
@@ -17,6 +18,7 @@ function loadPrinterConfig(role: "receipt" | "kitchen"): PrinterConfig {
     const parsed = JSON.parse(window.localStorage.getItem(`restropro.printer.${role}`) || "null");
     if (parsed?.mode === "usb" && typeof parsed.printerName === "string") return parsed;
     if (parsed?.mode === "lan" && typeof parsed.ip === "string") return { mode: "lan", ip: parsed.ip, port: Number(parsed.port) || 9100 };
+    if (parsed?.mode === "serial" && typeof parsed.port === "string" && parsed.port) return { mode: "serial", port: parsed.port, baud: Number(parsed.baud) || 9600 };
   } catch {}
   return { mode: "none" };
 }
@@ -27,6 +29,7 @@ async function printToRole(role: "receipt" | "kitchen", data: number[]): Promise
   const c = loadPrinterConfig(role);
   if (c.mode === "usb") await invoke("print_raw_windows", { printerName: c.printerName, data });
   else if (c.mode === "lan") await invoke("print_raw", { ip: c.ip, port: c.port, data });
+  else if (c.mode === "serial") await invoke("print_raw_serial", { port: c.port, baud: c.baud, data });
   else throw new Error(`no ${role === "kitchen" ? "kitchen" : "receipt"} printer is set up (Printer settings)`);
 }
 
