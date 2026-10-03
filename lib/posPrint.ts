@@ -53,8 +53,14 @@ export type SaleSnapshot = {
   taxLabel: string; // e.g. "Cash tax (17%)"
   tax: number;
   fee: number; // FBR invoicing fee (0 when FBR is off)
+  serviceCharge?: number; // dine-in service charge (0 / absent when none)
+  serviceLabel?: string; // e.g. "Service charge (10%)"
   total: number;
   payments: { method: string; amount: number }[];
+  /** Settings -> Receipt templates: "classic" | "modern" | "minimal" | "bold" (default classic). */
+  template?: string;
+  /** FBR block printed on the invoice when enabled in Settings -> FBR Digital Invoicing. */
+  fbr?: { enabled: boolean; ntn: string; strn: string; posId: string } | null;
 };
 
 const ESC = 0x1b;
@@ -81,6 +87,9 @@ class Buf {
   }
   bold(on: boolean) {
     return this.raw(ESC, 0x45, on ? 1 : 0);
+  }
+  reverse(on: boolean) {
+    return this.raw(GS, 0x42, on ? 1 : 0);
   }
   size(big: boolean) {
     return this.raw(GS, 0x21, big ? 0x11 : 0x00);
@@ -126,35 +135,79 @@ export function buildKitchenSlip(s: SaleSnapshot, orderNo: string | number): num
   return b.cut().bytes;
 }
 
+/** Prints the invoice in the template picked in Settings -> Receipt templates. The four designs
+ *  mirror the on-screen previews as far as a thermal printer allows: Classic (plain, dashed
+ *  rules), Modern (header band + boxed total), Minimal (whitespace, no rules), Bold (all bold,
+ *  big total). Everything else — items, tax, FBR block, payments — is the same in every design. */
 export function buildInvoice(s: SaleSnapshot, orderNo: string | number): number[] {
+  const t = s.template === "modern" || s.template === "minimal" || s.template === "bold" ? s.template : "classic";
   const b = new Buf(colsFor(s.paper));
-  b.align("center").bold(true).size(true);
-  for (const l of wrap(s.restaurantName, Math.floor(b.cols / 2))) b.line(l);
-  b.size(false).bold(false);
+  const rule = (ch = "-") => (t === "minimal" ? b.line() : t === "modern" ? b.rule(ch === "-" ? "-" : ch) : b.rule(ch));
+
+  // ---- header ----
+  b.align("center");
+  if (t === "modern") {
+    b.reverse(true).bold(true);
+    for (const l of wrap(s.restaurantName, b.cols)) b.line(l.padStart(Math.floor((b.cols + l.length) / 2)).padEnd(b.cols));
+    b.reverse(false).bold(false);
+  } else {
+    b.bold(true).size(t !== "minimal");
+    for (const l of wrap(s.restaurantName, t === "minimal" ? b.cols : Math.floor(b.cols / 2))) b.line(l);
+    b.size(false).bold(t === "bold");
+  }
   if (s.address) b.line(s.address);
   if (s.phone) b.line(s.phone);
   if (s.header) b.line(s.header);
-  b.align("left").rule();
+  b.align("left");
+  if (t === "minimal") b.line();
+  rule();
+
+  // ---- order info ----
   b.row(`Order #${orderNo}`, new Date().toLocaleString());
   b.line(s.orderTypeLabel).line(`Cashier: ${s.cashier}`);
   if (s.customerName || s.customerPhone) b.line(`Customer: ${[s.customerName, s.customerPhone].filter(Boolean).join(" ")}`);
-  b.rule();
+  rule();
+
+  // ---- items ----
+  b.bold(t === "bold");
   for (const it of s.items) {
     const lines = wrap(`${it.qty} x ${it.name}`, b.cols - 12);
     lines.forEach((l, i) => (i === lines.length - 1 ? b.row(l, money(it.price * it.qty)) : b.line(l)));
   }
-  b.rule();
+  b.bold(false);
+  rule();
+
+  // ---- totals ----
   b.row("Subtotal", money(s.subtotal));
   if (s.delivery > 0) b.row("Delivery", money(s.delivery));
+  if ((s.serviceCharge ?? 0) > 0) b.row(s.serviceLabel ?? "Service charge", money(s.serviceCharge!));
   if (s.tax > 0) b.row(s.taxLabel, money(s.tax));
   if (s.fee > 0) b.row("FBR invoicing fee", money(s.fee));
-  b.rule();
-  b.bold(true).size(true).row("TOTAL", `Rs ${money(s.total)}`).size(false).bold(false);
-  const paid = s.payments.reduce((t, p) => t + p.amount, 0);
+  if (t === "modern") b.rule("=");
+  else rule();
+  b.bold(true).size(t !== "minimal").row("TOTAL", `Rs ${money(s.total)}`).size(false).bold(false);
+  if (t === "modern") b.rule("=");
+  if (t === "bold") b.bold(true);
+  const paid = s.payments.reduce((sum, p) => sum + p.amount, 0);
   for (const p of s.payments) b.row(p.method, money(p.amount));
-  if (paid < s.total) b.bold(true).row("Balance due", money(s.total - paid)).bold(false);
+  if (paid < s.total) b.bold(true).row("Balance due", money(s.total - paid)).bold(t === "bold");
   else if (paid > s.total) b.row("Change", money(paid - s.total));
-  if (s.footer) b.rule().align("center").line(s.footer);
+  b.bold(false);
+
+  // ---- FBR e-invoice block (Settings -> FBR Digital Invoicing) ----
+  if (s.fbr?.enabled) {
+    rule();
+    b.align("center").bold(true).line("FBR Digital Invoice").bold(false);
+    b.line(`Invoice #: FBR-${orderNo}-${new Date().getFullYear()}`);
+    b.line(`NTN: ${s.fbr.ntn || "-"}`).line(`STRN: ${s.fbr.strn || "-"}`).line(`POS ID: ${s.fbr.posId || "-"}`);
+    b.line("Verifiable via FBR Tax Asaan app").align("left");
+  }
+
+  if (s.footer) {
+    if (t === "minimal") b.line();
+    else rule();
+    b.align("center").line(s.footer);
+  }
   return b.cut().bytes;
 }
 

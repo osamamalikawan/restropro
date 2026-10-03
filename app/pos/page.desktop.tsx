@@ -13,7 +13,7 @@ function DesktopPos() {
 
 export default function PosPage() {
   return (
-    <DesktopShell syncBar={false}>
+    <DesktopShell>
       <DesktopPos />
     </DesktopShell>
   );

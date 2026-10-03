@@ -7,11 +7,10 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("tables")
-    .select("id, number, seats, is_active")
-    .eq("restaurant_id", session.restaurantId)
-    .order("number");
+  const base = () => admin.from("tables").select("id, number, seats, is_active").eq("restaurant_id", session.restaurantId);
+  // Owner-defined order first (Settings -> Tables); plain number order if migration 0016 isn't applied yet.
+  let { data, error } = await base().order("sort_order").order("number");
+  if (error) ({ data, error } = await base().order("number"));
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ tables: data });
 }

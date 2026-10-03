@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireDevice } from "@/lib/auth/require-device";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hasModuleAccess } from "@/lib/permissions";
+import { applyCustomerUpdate, applySaleExtras, type CustomerUpdate } from "@/lib/sales/extras";
 
 type OfflineSale = {
   clientSaleId: string;
@@ -18,6 +19,9 @@ type OfflineSale = {
   customerName?: string;
   customerPhone?: string;
   customerAddress?: string;
+  serviceCharge?: number;
+  fbrFee?: number;
+  customerUpdate?: CustomerUpdate;
 };
 
 type SaleResult =
@@ -140,21 +144,20 @@ export async function POST(req: Request) {
       created = true;
 
       const r = ((Array.isArray(data) ? data[0] : data) ?? {}) as { order_no?: number | string; total?: number; status?: string; balance?: number };
-      // The new sale's id lets the device map Ticket Rail moves made while the sale was still
-      // only on the device. Looked up by order number among this restaurant's newest rows.
-      let saleId: string | null = null;
-      if (r.order_no != null) {
-        const { data: row } = await admin
-          .from("sales")
-          .select("id")
-          .eq("restaurant_id", restaurantId)
-          .eq("order_no", r.order_no)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        saleId = row?.id ?? null;
-      }
-      const result = { orderNo: r.order_no ?? "", total: r.total ?? 0, status: r.status ?? "", balance: r.balance ?? 0, saleId };
+      // Dine-in service charge / FBR fee go into the bill total; the lookup also returns the new
+      // sale's id, which lets the device map Ticket Rail moves made while the sale was still only
+      // on the device.
+      const paid = payments.reduce((t, p) => t + (Number(p.amount) || 0), 0);
+      const done = await applySaleExtras(
+        admin,
+        restaurantId,
+        { orderNo: r.order_no ?? null, total: Number(r.total ?? 0), status: r.status ?? "", balance: Number(r.balance ?? 0) },
+        { serviceCharge: s.serviceCharge, fbrFee: s.fbrFee },
+        paid
+      );
+      await applyCustomerUpdate(admin, restaurantId, s.customerId, s.customerUpdate);
+      const saleId = done.saleId;
+      const result = { orderNo: done.orderNo ?? "", total: done.total, status: done.status, balance: done.balance, saleId };
 
       const { error: receiptError } = await admin
         .from("device_sale_receipts")

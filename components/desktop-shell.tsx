@@ -11,8 +11,8 @@ import { isOfflineOk, useOnline } from "@/lib/desktop/connectivity";
  *  top bar (DashboardShell), but the signed-in cashier, permissions and shift come from the device
  *  (Rust), not a cookie, so it works offline. Used by every back-office page (via
  *  app/(restaurant)/layout.desktop.tsx) and by the POS, so all of them look identical to the web
- *  app. `syncBar={false}` for the POS, which shows its own sync strip inside its menu pane. */
-export function DesktopShell({ children, syncBar = true }: { children: React.ReactNode; syncBar?: boolean }) {
+ *  app. The sync status sits in the header. */
+export function DesktopShell({ children }: { children: React.ReactNode }) {
   const [ctx, setCtx] = useState<DesktopCtx | null>(null);
   const pathname = usePathname() ?? "";
   const { online, recheck } = useOnline();
@@ -44,12 +44,8 @@ export function DesktopShell({ children, syncBar = true }: { children: React.Rea
         subStatus={ctx.subStatus}
         modulePerms={ctx.modulePerms}
         shiftLabel={ctx.shiftLabel}
+        headerExtra={<DesktopSyncBar />}
       >
-        {syncBar && (
-          <div className="px-4 pt-3 md:px-6">
-            <DesktopSyncBar />
-          </div>
-        )}
         {showOfflineNotice ? <DesktopOfflineNotice onRetry={recheck} /> : children}
       </DashboardShell>
     </DesktopCtxProvider>

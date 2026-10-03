@@ -4,6 +4,12 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getPermissionMatrix } from "@/lib/permissions";
 import { computeStatus } from "@/lib/subscription";
 
+/** Owner-defined order (sort_order) first; plain order if migration 0016 isn't applied yet. */
+async function ordered<T extends { order: (col: string) => any }>(build: () => T, fallbackCol: string) {
+  const first = await (build().order("sort_order") as any).order(fallbackCol);
+  return first.error ? await (build().order(fallbackCol) as any) : first;
+}
+
 /** Everything the desktop POS needs to run offline, in one round trip. The device calls this
  *  on activation, then whenever it is online (see restropro-desk/src/sync.rs). The response is
  *  stored verbatim in the device's local database, so keep the shapes identical to the staff
@@ -21,9 +27,9 @@ export async function GET(req: Request) {
       .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name)")
       .eq("restaurant_id", rid)
       .order("name"),
-    admin.from("tables").select("id, number, seats, is_active").eq("restaurant_id", rid).order("number"),
-    admin.from("delivery_areas").select("id, name, delivery_fee, is_active").eq("restaurant_id", rid).order("name"),
-    admin.from("payment_methods").select("id, name").eq("restaurant_id", rid).order("name"),
+    ordered(() => admin.from("tables").select("id, number, seats, is_active").eq("restaurant_id", rid), "number"),
+    ordered(() => admin.from("delivery_areas").select("id, name, delivery_fee, is_active").eq("restaurant_id", rid), "name"),
+    ordered(() => admin.from("payment_methods").select("id, name").eq("restaurant_id", rid), "name"),
     admin.from("employees").select("id, name, role, pin_hash, status").eq("restaurant_id", rid).not("pin_hash", "is", null),
     admin
       .from("customers")

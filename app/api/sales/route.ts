@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hasModuleAccess } from "@/lib/permissions";
+import { applyCustomerUpdate, applySaleExtras, type CustomerUpdate } from "@/lib/sales/extras";
 
 // NOTE: the order-edit handler that used to live in this file is in app/api/sales/edit/route.ts
 // (that's where components/edit-order-modal.tsx posts to).
@@ -76,6 +77,9 @@ export async function POST(req: Request) {
     customerName?: string;
     customerPhone?: string;
     customerAddress?: string;
+    serviceCharge?: number; // dine-in service charge shown on the bill
+    fbrFee?: number; // FBR invoicing fee shown on the bill
+    customerUpdate?: CustomerUpdate; // edited details of the selected existing customer
   };
   if (!b.items || b.items.length === 0) {
     return NextResponse.json({ error: "Order must have at least one item" }, { status: 400 });
@@ -118,11 +122,20 @@ export async function POST(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   const r = Array.isArray(data) ? data[0] : data;
+  const paid = payments.reduce((t, p) => t + (Number(p.amount) || 0), 0);
+  const done = await applySaleExtras(
+    admin,
+    session.restaurantId,
+    { orderNo: r.order_no, total: Number(r.total), status: r.status, balance: Number(r.balance ?? 0) },
+    { serviceCharge: b.serviceCharge, fbrFee: b.fbrFee },
+    paid
+  );
+  await applyCustomerUpdate(admin, session.restaurantId, b.customerId, b.customerUpdate);
   return NextResponse.json({
     success: true,
-    orderNo: r.order_no,
-    total: r.total,
-    status: r.status,
-    balance: r.balance ?? 0,
+    orderNo: done.orderNo,
+    total: done.total,
+    status: done.status,
+    balance: done.balance,
   });
 }

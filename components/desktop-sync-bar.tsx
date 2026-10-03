@@ -1,8 +1,9 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "@/lib/posData";
 import { useOnline } from "@/lib/desktop/connectivity";
+import { Spinner } from "@/components/ui/loading";
 
 type SyncStatus = {
   last_sync_at: string | null;
@@ -15,14 +16,27 @@ type SyncStatus = {
   last_error: string | null;
 };
 
-/** Desktop-only strip: shows when the POS last synced, how many sales are waiting to upload,
- *  and blocks the screen once the 3-day offline limit is reached (the Rust side enforces the
- *  same rule, so hiding this component doesn't unlock selling). */
+function ago(iso: string | null): string {
+  if (!iso) return "never";
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const h = Math.floor(mins / 60);
+  if (h < 48) return `${h} h ago`;
+  return `${Math.floor(h / 24)} days ago`;
+}
+
+/** Desktop sync status, shown in the header (top bar). A compact pill — status dot, short label,
+ *  and a count when sales are waiting to upload — that opens a small panel with the details and a
+ *  "Sync now" button. Also owns the full-screen "Sync required" block once the 3-day offline limit
+ *  is reached (the Rust side enforces the same rule, so hiding this doesn't unlock selling). */
 export function DesktopSyncBar() {
   const [st, setSt] = useState<SyncStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-  const { online } = useOnline();
+  const [open, setOpen] = useState(false);
+  const { online, recheck } = useOnline();
+  const box = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(() => {
     invoke<SyncStatus>("get_sync_status").then(setSt).catch(() => {});
@@ -35,11 +49,21 @@ export function DesktopSyncBar() {
     return () => clearInterval(t);
   }, [refresh]);
 
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
   async function syncNow(retryRejected = false) {
     setBusy(true);
     setMsg("");
     try {
       setSt(await invoke<SyncStatus>("sync_now", { retryRejected }));
+      recheck();
     } catch (e) {
       setMsg(typeof e === "string" ? e : "Sync failed");
       refresh();
@@ -50,52 +74,89 @@ export function DesktopSyncBar() {
 
   if (!isTauri() || !st) return null;
 
-  const warn = st.pending_sales > 0 || st.rejected_sales > 0 || (st.hours_left ?? 99) <= 24;
-  const label = st.last_sync_at
-    ? `Synced ${st.hours_since_sync === 0 ? "just now" : `${st.hours_since_sync}h ago`}`
-    : "Never synced";
+  const problem = !!(st.last_error || msg) || st.rejected_sales > 0;
+  const attention = st.pending_sales > 0 || (st.hours_left ?? 99) <= 24;
+  const tone = !online ? "off" : problem ? "bad" : attention ? "warn" : "ok";
+  const dot = { off: "bg-ink-faint", bad: "bg-crimson-500", warn: "bg-turmeric-500", ok: "bg-basil-500" }[tone];
+  const label = !online ? "Offline" : st.pending_sales > 0 ? `${st.pending_sales} to upload` : st.last_sync_at ? `Synced ${ago(st.last_sync_at)}` : "Not synced";
 
   return (
     <>
       {st.locked && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-6">
           <div className="max-w-sm rounded-2xl border border-line bg-surface p-6 text-center">
-            <h2 className="font-display text-lg font-semibold mb-2">Sync required</h2>
-            <p className="text-sm text-ink-faint mb-4">{st.lock_reason}</p>
-            {st.pending_sales > 0 && (
-              <p className="text-sm mb-4">{st.pending_sales} sale(s) are saved on this device and will upload during the sync.</p>
-            )}
-            {msg && <p className="text-sm text-chili-500 mb-3">{msg}</p>}
-            <button
-              onClick={() => syncNow()}
-              disabled={busy}
-              className="rounded-lg bg-chili-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            >
+            <h2 className="mb-2 font-display text-lg font-semibold">Sync required</h2>
+            <p className="mb-4 text-sm text-ink-faint">{st.lock_reason}</p>
+            {st.pending_sales > 0 && <p className="mb-4 text-sm">{st.pending_sales} sale(s) are saved on this device and will upload during the sync.</p>}
+            {msg && <p className="mb-3 text-sm text-crimson-400">{msg}</p>}
+            <button onClick={() => syncNow()} disabled={busy} className="rounded-lg bg-chili-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
               {busy ? "Syncing…" : "Sync now"}
             </button>
           </div>
         </div>
       )}
-      <div
-        className={`mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-xs ${
-          warn ? "border-turmeric-400/50 text-turmeric-400" : "border-line text-ink-faint"
-        }`}
-      >
-        {!online && (
-          <span className="rounded-full bg-turmeric-500/20 px-2 py-0.5 font-semibold text-turmeric-400">Offline</span>
-        )}
-        <span>{label}</span>
-        {st.hours_left != null && st.hours_left <= 24 && <span>· {st.hours_left}h left before sync is required</span>}
-        {st.pending_sales > 0 && <span>· {st.pending_sales} sale(s) waiting to upload</span>}
-        {st.rejected_sales > 0 && (
-          <button className="underline" onClick={() => syncNow(true)} disabled={busy}>
-            {st.rejected_sales} rejected — retry
-          </button>
-        )}
-        {(st.last_error || msg) && <span className="truncate">· {msg || st.last_error}</span>}
-        <button className="ml-auto underline" onClick={() => syncNow()} disabled={busy}>
-          {busy ? "Syncing…" : "Sync now"}
+
+      <div ref={box} className="relative">
+        <button
+          onClick={() => {
+            setOpen((v) => !v);
+            refresh();
+          }}
+          title="Sync status"
+          className="flex items-center gap-2 rounded-full border border-line bg-raised px-3 py-1.5 text-xs font-medium text-ink-mid transition-colors hover:border-chili-500 hover:text-ink-strong"
+        >
+          {busy ? <Spinner size={11} /> : <span className={`h-2 w-2 rounded-full ${dot}`} />}
+          <span className="hidden whitespace-nowrap lg:inline">{label}</span>
+          {st.pending_sales > 0 && (
+            <span className="rounded-full bg-turmeric-500/20 px-1.5 py-0.5 text-[10px] font-bold text-turmeric-400 lg:hidden">{st.pending_sales}</span>
+          )}
         </button>
+
+        {open && (
+          <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-line bg-surface p-4 shadow-2xl">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="font-display text-sm font-semibold text-ink-strong">Sync status</span>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${online ? "bg-basil-500/15 text-basil-400" : "bg-turmeric-500/20 text-turmeric-400"}`}>
+                {online ? "Online" : "Offline"}
+              </span>
+            </div>
+            <dl className="space-y-2 text-xs">
+              <div className="flex justify-between gap-3">
+                <dt className="text-ink-faint">Last synced</dt>
+                <dd className="text-right text-ink-strong">{st.last_sync_at ? `${ago(st.last_sync_at)} · ${new Date(st.last_sync_at).toLocaleString()}` : "Never"}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-ink-faint">Waiting to upload</dt>
+                <dd className="text-ink-strong">{st.pending_sales} sale(s)</dd>
+              </div>
+              {st.hours_left != null && (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-ink-faint">Sync needed within</dt>
+                  <dd className={st.hours_left <= 24 ? "text-turmeric-400" : "text-ink-strong"}>{st.hours_left} h</dd>
+                </div>
+              )}
+              {st.rejected_sales > 0 && (
+                <div className="flex items-center justify-between gap-3">
+                  <dt className="text-crimson-400">{st.rejected_sales} rejected by the server</dt>
+                  <dd>
+                    <button onClick={() => syncNow(true)} disabled={busy} className="underline text-ink-strong">
+                      Retry
+                    </button>
+                  </dd>
+                </div>
+              )}
+            </dl>
+            {(msg || st.last_error) && <p className="mt-3 break-words rounded-lg bg-crimson-500/10 px-2.5 py-2 text-[11px] text-crimson-400">{msg || st.last_error}</p>}
+            <button
+              onClick={() => syncNow()}
+              disabled={busy}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-chili-500 py-2 text-xs font-semibold text-white hover:bg-chili-600 disabled:opacity-60"
+            >
+              {busy && <Spinner size={12} />}
+              {busy ? "Syncing…" : "Sync now"}
+            </button>
+          </div>
+        )}
       </div>
     </>
   );

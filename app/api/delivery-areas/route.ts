@@ -7,11 +7,9 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("delivery_areas")
-    .select("id, name, delivery_fee, is_active")
-    .eq("restaurant_id", session.restaurantId)
-    .order("name");
+  const base = () => admin.from("delivery_areas").select("id, name, delivery_fee, is_active").eq("restaurant_id", session.restaurantId);
+  let { data, error } = await base().order("sort_order").order("name");
+  if (error) ({ data, error } = await base().order("name")); // migration 0016 not applied yet
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ areas: data });
 }

@@ -20,12 +20,14 @@ export function Topbar({
   role,
   employeeId,
   subStatus,
+  extra,
   onToggleSidebar,
 }: {
   employeeName: string;
   role: string;
   employeeId: string;
   subStatus: string;
+  extra?: React.ReactNode;
   onToggleSidebar: () => void;
 }) {
   const pathname = usePathname();
@@ -60,6 +62,7 @@ export function Topbar({
       </div>
 
       <div className="flex items-center gap-3 md:gap-4 shrink-0">
+        {extra}
         <span className="text-xs text-ink-faint font-mono hidden sm:inline">{time}</span>
         <ThemeToggle />
         <NotificationBell />

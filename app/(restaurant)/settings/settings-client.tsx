@@ -1,5 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "@/lib/posData";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 import { RECEIPT_TEMPLATES, DUMMY_SALE, type ReceiptTemplateId } from "@/components/receipt/templates";
 
@@ -24,6 +26,99 @@ type Settings = {
   fbr_fee: number;
   receipt_template: string;
 };
+
+/** Desktop app: pull the freshly saved settings / lists into this computer straight away (the POS
+ *  reads its saved copy, which would otherwise only update at the next scheduled sync). */
+function refreshDeviceData() {
+  if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {});
+}
+
+/** A list whose rows can be rearranged: drag a row by its handle, or use the up/down arrows
+ *  (always available — dragging is awkward on touch screens). Calls onChange with the new order. */
+function ReorderableList<T extends { id: string }>({
+  items,
+  onChange,
+  renderRow,
+  disabled,
+}: {
+  items: T[];
+  onChange: (next: T[]) => void;
+  renderRow: (item: T) => React.ReactNode;
+  disabled?: boolean;
+}) {
+  const dragId = useRef<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+
+  function move(from: number, to: number) {
+    if (to < 0 || to >= items.length || from === to) return;
+    const next = items.slice();
+    const [row] = next.splice(from, 1);
+    next.splice(to, 0, row);
+    onChange(next);
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {items.map((item, i) => (
+        <div
+          key={item.id}
+          draggable={!disabled}
+          onDragStart={(e) => {
+            dragId.current = item.id;
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", item.id);
+          }}
+          onDragOver={(e) => {
+            if (dragId.current && dragId.current !== item.id) {
+              e.preventDefault();
+              setOverId(item.id);
+            }
+          }}
+          onDragLeave={() => setOverId((cur) => (cur === item.id ? null : cur))}
+          onDrop={(e) => {
+            e.preventDefault();
+            const from = items.findIndex((x) => x.id === dragId.current);
+            if (from >= 0) move(from, i);
+            dragId.current = null;
+            setOverId(null);
+          }}
+          onDragEnd={() => {
+            dragId.current = null;
+            setOverId(null);
+          }}
+          className={`flex items-center gap-2 rounded-lg bg-raised px-3 py-2 text-sm ${overId === item.id ? "ring-1 ring-chili-500" : ""}`}
+        >
+          {!disabled && (
+            <span title="Drag to reorder" className="cursor-grab select-none text-ink-faint active:cursor-grabbing">
+              ⋮⋮
+            </span>
+          )}
+          <div className="flex min-w-0 flex-1 items-center justify-between gap-2">{renderRow(item)}</div>
+          {!disabled && (
+            <div className="flex shrink-0 gap-0.5">
+              <button
+                onClick={() => move(i, i - 1)}
+                disabled={i === 0}
+                aria-label="Move up"
+                className="grid h-6 w-6 place-items-center rounded text-ink-faint hover:bg-hover hover:text-ink-strong disabled:opacity-30"
+              >
+                ↑
+              </button>
+              <button
+                onClick={() => move(i, i + 1)}
+                disabled={i === items.length - 1}
+                aria-label="Move down"
+                className="grid h-6 w-6 place-items-center rounded text-ink-faint hover:bg-hover hover:text-ink-strong disabled:opacity-30"
+              >
+                ↓
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 type PaymentMethod = { id: string; name: string };
 type Table = { id: string; number: string; seats: number };
@@ -122,6 +217,7 @@ export function SettingsClient({
     }
     setTableNo("");
     loadTables();
+    refreshDeviceData();
   }
   async function removeTable(id: string) {
     setTablesError("");
@@ -131,6 +227,7 @@ export function SettingsClient({
       return;
     }
     loadTables();
+    refreshDeviceData();
   }
 
   async function addArea() {
@@ -148,6 +245,7 @@ export function SettingsClient({
     setAreaName("");
     setAreaFee("0");
     loadAreas();
+    refreshDeviceData();
   }
   async function removeArea(id: string) {
     setTablesError("");
@@ -157,6 +255,7 @@ export function SettingsClient({
       return;
     }
     loadAreas();
+    refreshDeviceData();
   }
 
   async function addMethod() {
@@ -178,6 +277,7 @@ export function SettingsClient({
     }
     setNewMethod("");
     loadMethods();
+    refreshDeviceData();
   }
 
   async function removeMethod(m: PaymentMethod) {
@@ -193,9 +293,32 @@ export function SettingsClient({
       return;
     }
     setMethods((prev) => prev.filter((x) => x.id !== m.id));
+    refreshDeviceData();
   }
 
   const [savingSection, setSavingSection] = useState<string | null>(null);
+
+  /** Show the new order at once, save it, and undo (with a message) if the server refuses. */
+  async function reorder<T extends { id: string }>(
+    kind: "payment_methods" | "tables" | "delivery_areas",
+    current: T[],
+    next: T[],
+    apply: (rows: T[]) => void,
+    fail: (message: string) => void
+  ) {
+    apply(next);
+    const res = await fetch("/api/reorder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind, ids: next.map((r) => r.id) }),
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      apply(current);
+      fail(res ? ((await res.json().catch(() => ({}))).error ?? "Could not save the new order") : "Could not reach the server.");
+      return;
+    }
+    refreshDeviceData();
+  }
 
   async function save(section: string, body: Record<string, unknown>, okMessage: string) {
     setMsg(null);
@@ -213,6 +336,7 @@ export function SettingsClient({
     }
     setMsg({ text: okMessage });
     setTimeout(() => setMsg(null), 2500);
+    refreshDeviceData();
   }
 
   function set<K extends keyof Settings>(key: K, value: Settings[K]) {
@@ -242,7 +366,6 @@ export function SettingsClient({
     ...(canSettings
       ? [
           { id: "pos-tax", label: "POS & Tax" },
-          { id: "printer", label: "Printer & receipt" },
           { id: "receipt-templates", label: "Receipt templates" },
           { id: "fbr", label: "FBR invoicing" },
         ]
@@ -313,16 +436,21 @@ export function SettingsClient({
         {/* Payment methods — one panel, so it lives here instead of its own page */}
         <div id="payment-methods" className="scroll-mt-20">
           <Panel title="Payment methods" subtitle="Options customers can split payment across">
-            <div className="space-y-1.5 mb-3">
-              {methods.map((m) => (
-                <div key={m.id} className="flex items-center justify-between rounded-lg bg-raised px-3 py-2 text-sm">
-                  <span>{m.name}</span>
-                  <button onClick={() => removeMethod(m)} className="text-ink-faint hover:text-crimson-400 text-xs">
-                    ✕
-                  </button>
-                </div>
-              ))}
+            <div className="mb-3">
+              <ReorderableList
+                items={methods}
+                onChange={(next) => reorder("payment_methods", methods, next, setMethods, setMethodError)}
+                renderRow={(m) => (
+                  <>
+                    <span>{m.name}</span>
+                    <button onClick={() => removeMethod(m)} className="text-ink-faint hover:text-crimson-400 text-xs">
+                      ✕
+                    </button>
+                  </>
+                )}
+              />
               {methods.length === 0 && <p className="text-xs text-ink-faint">No payment methods enabled — add one below.</p>}
+              {methods.length > 1 && <p className="mt-2 text-[11px] text-ink-faint">Drag or use the arrows to change the order shown at checkout.</p>}
             </div>
             {methodError && <p className="text-xs text-crimson-400 mb-2">{methodError}</p>}
             <div className="flex gap-2">
@@ -374,20 +502,26 @@ export function SettingsClient({
               }
             >
               {tablesError && <p className="text-xs text-crimson-400 mb-2">{tablesError}</p>}
-              <div className="space-y-1.5">
-                {tables.map((t) => (
-                  <div key={t.id} className="flex items-center justify-between rounded-lg bg-raised px-3 py-2 text-sm">
-                    <span>
-                      Table {t.number} <span className="text-ink-faint">({t.seats} seats)</span>
-                    </span>
-                    {canManageTables && (
-                      <button onClick={() => removeTable(t.id)} className="text-ink-faint hover:text-crimson-400 text-xs">
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                ))}
+              <div>
+                <ReorderableList
+                  items={tables}
+                  disabled={!canManageTables}
+                  onChange={(next) => reorder("tables", tables, next, setTables, setTablesError)}
+                  renderRow={(t) => (
+                    <>
+                      <span>
+                        Table {t.number} <span className="text-ink-faint">({t.seats} seats)</span>
+                      </span>
+                      {canManageTables && (
+                        <button onClick={() => removeTable(t.id)} className="text-ink-faint hover:text-crimson-400 text-xs">
+                          ✕
+                        </button>
+                      )}
+                    </>
+                  )}
+                />
                 {tables.length === 0 && <p className="text-xs text-ink-faint">No tables yet.</p>}
+                {canManageTables && tables.length > 1 && <p className="mt-2 text-[11px] text-ink-faint">Drag or use the arrows to change the order in the POS.</p>}
               </div>
             </Panel>
 
@@ -417,20 +551,26 @@ export function SettingsClient({
                 )
               }
             >
-              <div className="space-y-1.5">
-                {areas.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between rounded-lg bg-raised px-3 py-2 text-sm">
-                    <span>
-                      {a.name} <span className="text-ink-faint">— fee Rs {a.delivery_fee}</span>
-                    </span>
-                    {canManageTables && (
-                      <button onClick={() => removeArea(a.id)} className="text-ink-faint hover:text-crimson-400 text-xs">
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                ))}
+              <div>
+                <ReorderableList
+                  items={areas}
+                  disabled={!canManageTables}
+                  onChange={(next) => reorder("delivery_areas", areas, next, setAreas, setTablesError)}
+                  renderRow={(a) => (
+                    <>
+                      <span>
+                        {a.name} <span className="text-ink-faint">— fee Rs {a.delivery_fee}</span>
+                      </span>
+                      {canManageTables && (
+                        <button onClick={() => removeArea(a.id)} className="text-ink-faint hover:text-crimson-400 text-xs">
+                          ✕
+                        </button>
+                      )}
+                    </>
+                  )}
+                />
                 {areas.length === 0 && <p className="text-xs text-ink-faint">No areas yet.</p>}
+                {canManageTables && areas.length > 1 && <p className="mt-2 text-[11px] text-ink-faint">Drag or use the arrows to change the order in the POS.</p>}
               </div>
             </Panel>
           </div>
@@ -480,90 +620,41 @@ export function SettingsClient({
           </Panel>
         </div>
 
-        {/* Printer & receipt */}
-        <div id="printer" className="scroll-mt-20">
+        {/* Receipt design templates — spans both columns, needs room for 4 side-by-side previews */}
+        <div id="receipt-templates" className="scroll-mt-20 md:col-span-2">
           <Panel
-            title="Printer & receipt"
-            subtitle="80mm thermal receipt printer"
-            badge="Connected"
-            loading={savingSection === "printer"}
+            title="Receipt templates"
+            subtitle="Pick the design printed on every invoice and set the paper size and notes. Printers themselves are set up under Printer settings."
+            loading={savingSection === "receipt-templates"}
             footer={
-              <div className="flex gap-2.5">
-                <SaveButton
-                  loading={savingSection === "printer"}
-                  onClick={() =>
-                    save(
-                      "printer",
-                      {
-                        printerName: s.printer_name,
-                        paperWidth: s.paper_width,
-                        connection: s.connection,
-                        autoPrint: s.auto_print,
-                        receiptHeader: s.receipt_header,
-                        receiptFooter: s.receipt_footer,
-                      },
-                      "Printer settings saved"
-                    )
-                  }
-                >
-                  Save printer settings
-                </SaveButton>
-                <button
-                  onClick={() => setMsg({ text: "Test receipt sent to the printer (stub — no real printer wired up yet)." })}
-                  className="rounded-md border border-line text-ink-mid hover:text-ink-strong hover:border-chili-500 text-sm font-semibold px-4 py-2 transition-colors"
-                >
-                  Test print
-                </button>
-              </div>
+              <SaveButton
+                loading={savingSection === "receipt-templates"}
+                onClick={() =>
+                  save(
+                    "receipt-templates",
+                    { receiptTemplate: s.receipt_template, paperWidth: s.paper_width, receiptHeader: s.receipt_header, receiptFooter: s.receipt_footer },
+                    "Receipt settings saved"
+                  )
+                }
+              >
+                Save receipt settings
+              </SaveButton>
             }
           >
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Printer name">
-                <input value={s.printer_name ?? ""} onChange={(e) => set("printer_name", e.target.value)} className="input" />
-              </Field>
+            <div className="grid sm:grid-cols-3 gap-3 mb-5">
               <Field label="Paper width">
                 <select value={s.paper_width} onChange={(e) => set("paper_width", e.target.value)} className="input">
                   <option>80mm</option>
                   <option>58mm</option>
                 </select>
               </Field>
-            </div>
-            <div className="grid grid-cols-2 gap-3 items-end">
-              <Field label="Connection">
-                <select value={s.connection} onChange={(e) => set("connection", e.target.value)} className="input">
-                  <option>USB</option>
-                  <option>Network (IP)</option>
-                  <option>Bluetooth</option>
-                </select>
+              <Field label="Receipt header note">
+                <input value={s.receipt_header ?? ""} onChange={(e) => set("receipt_header", e.target.value)} className="input" />
               </Field>
-              <div className="mb-3">
-                <ToggleRow label="Auto-print on checkout" on={s.auto_print} onChange={(v) => set("auto_print", v)} noMargin />
-              </div>
+              <Field label="Receipt footer note">
+                <input value={s.receipt_footer ?? ""} onChange={(e) => set("receipt_footer", e.target.value)} className="input" />
+              </Field>
             </div>
-            <Field label="Receipt header note">
-              <input value={s.receipt_header ?? ""} onChange={(e) => set("receipt_header", e.target.value)} className="input" />
-            </Field>
-            <Field label="Receipt footer note">
-              <input value={s.receipt_footer ?? ""} onChange={(e) => set("receipt_footer", e.target.value)} className="input" />
-            </Field>
-          </Panel>
-        </div>
-
-        {/* Receipt design templates — spans both columns, needs room for 4 side-by-side previews */}
-        <div id="receipt-templates" className="scroll-mt-20 md:col-span-2">
-          <Panel
-            title="Receipt templates"
-            subtitle="Pick the design printed on every invoice — each renders with your restaurant's real profile and, when FBR is on below, its e-invoice block"
-            loading={savingSection === "receipt-templates"}
-            footer={
-              <SaveButton
-                loading={savingSection === "receipt-templates"}
-                onClick={() => save("receipt-templates", { receiptTemplate: s.receipt_template }, "Receipt template saved")}
-              >
-                Save receipt template
-              </SaveButton>
-            }
-          >
             <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
               {RECEIPT_TEMPLATES.map((t) => {
                 const selected = s.receipt_template === t.id;

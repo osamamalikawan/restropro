@@ -10,11 +10,9 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const admin = createAdminClient();
-  let { data } = await admin
-    .from("payment_methods")
-    .select("id, name")
-    .eq("restaurant_id", session.restaurantId)
-    .order("name");
+  const base = () => admin.from("payment_methods").select("id, name").eq("restaurant_id", session.restaurantId);
+  let { data, error: listError } = await base().order("sort_order").order("name");
+  if (listError) ({ data } = await base().order("name")); // migration 0016 not applied yet
 
   if (!data || data.length === 0) {
     const { data: created, error } = await admin

@@ -7,7 +7,6 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
 import { printSale, type SaleSnapshot, type SaveAction } from "@/lib/posPrint";
 import { invoke } from "@tauri-apps/api/core";
-import { DesktopSyncBar } from "@/components/desktop-sync-bar";
 import {
   getProducts,
   getTables,
@@ -32,12 +31,15 @@ type CartLine = { productId: string; name: string; price: number; qty: number };
 type Table = { id: string; number: string; seats: number };
 type Area = { id: string; name: string; delivery_fee: number };
 type OrderType = "dine_in" | "takeaway" | "delivery";
-type Customer = { id: string; name: string; phone: string; address?: string | null };
+type Customer = { id: string; name: string; phone: string; address?: string | null; area_id?: string | null };
 type PayRow = { id: number; method: string; amount: string };
 type PosSettings = {
   cashTaxRate: number; // percent
   cardTaxRate: number; // percent
   fbrFee: number; // 0 unless FBR is enabled
+  serviceChargeRate: number; // percent, applied to dine-in orders (Settings -> Default dine-in service charge)
+  receiptTemplate: string; // classic | modern | minimal | bold
+  fbr: { enabled: boolean; ntn: string; strn: string; posId: string } | null;
   showKitchenPrint: boolean;
   showPrintInvoice: boolean;
   receiptHeader: string;
@@ -114,6 +116,9 @@ export function PosClient({
     cashTaxRate: 5,
     cardTaxRate: 5,
     fbrFee: 0,
+    serviceChargeRate: 0,
+    receiptTemplate: "classic",
+    fbr: null,
     showKitchenPrint: true,
     showPrintInvoice: true,
     receiptHeader: "",
@@ -182,34 +187,55 @@ export function PosClient({
       getAreas().then((a) => !cancelled && setAreas(a)).catch(() => {});
     }
 
-    getSettings().then((d) => {
-      if (cancelled) return;
-      const st = d.settings ?? {};
-      const legacy = st.tax_rate != null ? Number(st.tax_rate) : 5; // older tenants only have a single tax_rate
-      setSettings({
-        cashTaxRate: st.cash_tax_rate != null ? Number(st.cash_tax_rate) : legacy,
-        cardTaxRate: st.card_tax_rate != null ? Number(st.card_tax_rate) : legacy,
-        fbrFee: st.fbr_enabled ? Number(st.fbr_fee) || 0 : 0,
-        showKitchenPrint: st.pos_show_kitchen_print !== false,
-        showPrintInvoice: st.pos_show_print_invoice !== false,
-        receiptHeader: st.receipt_header ?? "",
-        receiptFooter: st.receipt_footer ?? "",
-        paper: String(st.paper_width ?? "80"),
+    // Settings, payment methods and (on desktop) tables/areas are re-read regularly, so a change made
+    // on the Settings page shows up here without reloading the POS.
+    const loadSettings = () =>
+      getSettings().then((d) => {
+        if (cancelled) return;
+        const st = d.settings ?? {};
+        const legacy = st.tax_rate != null ? Number(st.tax_rate) : 5; // older tenants only have a single tax_rate
+        setSettings({
+          cashTaxRate: st.cash_tax_rate != null ? Number(st.cash_tax_rate) : legacy,
+          cardTaxRate: st.card_tax_rate != null ? Number(st.card_tax_rate) : legacy,
+          fbrFee: st.fbr_enabled ? Number(st.fbr_fee) || 0 : 0,
+          serviceChargeRate: Number(st.service_charge_rate) || 0,
+          receiptTemplate: String(st.receipt_template ?? "classic"),
+          fbr: st.fbr_enabled
+            ? { enabled: true, ntn: st.fbr_ntn ?? "", strn: st.fbr_strn ?? "", posId: st.fbr_pos_id ?? "" }
+            : null,
+          showKitchenPrint: st.pos_show_kitchen_print !== false,
+          showPrintInvoice: st.pos_show_print_invoice !== false,
+          receiptHeader: st.receipt_header ?? "",
+          receiptFooter: st.receipt_footer ?? "",
+          paper: String(st.paper_width ?? "80"),
+        });
+        setProfile({ address: d.restaurant?.address ?? "", phone: d.restaurant?.phone ?? "" });
       });
-      setProfile({ address: d.restaurant?.address ?? "", phone: d.restaurant?.phone ?? "" });
-    }).catch(() => {});
-    getPaymentMethods().then((methods) => {
-      if (cancelled) return;
-      const names = methods.map((m) => m.name);
-      if (names.length) {
-        setPaymentMethods(names);
-        setPayRows([{ id: 1, method: names[0], amount: "" }]);
-      }
-    }).catch(() => {});
+    let methodsInit = false;
+    const loadMethods = () =>
+      getPaymentMethods().then((methods) => {
+        if (cancelled) return;
+        const names = methods.map((m) => m.name);
+        if (!names.length) return;
+        setPaymentMethods((prev) => (prev.join("|") === names.join("|") ? prev : names));
+        if (!methodsInit) {
+          methodsInit = true; // first load: the first payment row starts on the first method in the owner's order
+          setPayRows([{ id: 1, method: names[0], amount: "" }]);
+        }
+      });
+    const refreshSettings = () => {
+      loadSettings().catch(() => {});
+      loadMethods().catch(() => {});
+    };
+    refreshSettings();
+    const settingsTimer = isTauri() ? setInterval(refreshSettings, 20_000) : null;
+    window.addEventListener("focus", refreshSettings);
 
     return () => {
       cancelled = true;
       stop();
+      if (settingsTimer) clearInterval(settingsTimer);
+      window.removeEventListener("focus", refreshSettings);
     };
   }, [restaurantId]);
 
@@ -294,8 +320,11 @@ export function PosClient({
     setCustAddress(c.address ?? "");
     setCustResults([]);
     setCustSearch("");
+    // a delivery order picks up the customer's saved area (and its fee)
+    if (orderType === "delivery" && c.area_id && areas.some((a) => a.id === c.area_id)) onAreaChange(c.area_id);
   }
-  function newCustomer() {
+  // Detach the saved customer (the small "Clear" link next to the name) to enter someone else.
+  function clearCustomer() {
     setSelectedCustomer(null);
     setCustName("");
     setCustPhone("");
@@ -303,10 +332,10 @@ export function PosClient({
     setCustResults([]);
     setCustSearch("");
   }
-  // editing name/phone after picking a saved customer means it's no longer that customer
+  // Editing the fields of a SELECTED customer changes that customer: the new details are saved to
+  // the customer record when the sale is made (see customerUpdate below).
   function editCust(setter: (v: string) => void, v: string) {
     setter(v);
-    if (selectedCustomer) setSelectedCustomer(null);
   }
 
   function updatePayRow(id: number, patch: Partial<PayRow>) {
@@ -336,7 +365,10 @@ export function PosClient({
   const taxLabel = `${isCash ? "Cash" : "Card"} tax (${taxPct}%)`;
   const tax = Math.round((subtotal * taxPct) / 100);
   const fee = settings.fbrFee;
-  const total = subtotal + tax + delivery + fee;
+  // Default dine-in service charge (Settings -> Restaurant profile), on the item subtotal.
+  const serviceCharge = orderType === "dine_in" ? Math.round((subtotal * settings.serviceChargeRate) / 100) : 0;
+  const serviceLabel = `Service charge (${settings.serviceChargeRate}%)`;
+  const total = subtotal + tax + delivery + fee + serviceCharge;
   const paid = payRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const remaining = total - paid;
 
@@ -416,13 +448,27 @@ export function PosClient({
       taxLabel,
       tax,
       fee,
+      serviceCharge,
+      serviceLabel,
       total,
       payments,
+      template: settings.receiptTemplate,
+      fbr: settings.fbr,
     };
     setSubmitting(true);
     setPendingAction(action);
     setError("");
     const paidNow = payments.reduce((sum, x) => sum + x.amount, 0);
+    // An existing customer whose name / phone / address / area was edited here is updated in the database.
+    const areaForCustomer = orderType === "delivery" && areaId ? areaId : undefined;
+    const customerUpdate =
+      selectedCustomer &&
+      (custName.trim() !== (selectedCustomer.name ?? "") ||
+        custPhone.trim() !== (selectedCustomer.phone ?? "") ||
+        custAddress.trim() !== (selectedCustomer.address ?? "") ||
+        (areaForCustomer !== undefined && areaForCustomer !== (selectedCustomer.area_id ?? undefined)))
+        ? { name: custName.trim(), phone: custPhone.trim(), address: custAddress.trim(), areaId: areaForCustomer }
+        : undefined;
     const result = await submitSale(
       {
         clientSaleId: saleIdRef.current,
@@ -437,6 +483,9 @@ export function PosClient({
         customerName: selectedCustomer ? undefined : custName.trim() || undefined,
         customerPhone: selectedCustomer ? undefined : custPhone.trim() || undefined,
         customerAddress: custAddress.trim() || undefined,
+        serviceCharge,
+        fbrFee: fee,
+        customerUpdate,
       },
       total,
       paidNow
@@ -469,7 +518,7 @@ export function PosClient({
     setIsResumed(false);
     setCheckoutOpen(false);
     setSheetOpen(false);
-    newCustomer();
+    clearCustomer(); // next sale starts with no customer selected
     setPayRows([{ id: 1, method: paymentMethods[0] ?? "Cash", amount: "" }]);
   }
 
@@ -541,7 +590,6 @@ export function PosClient({
         </div>
         )}
 
-        <DesktopSyncBar />
 
         {/* last sale banner */}
         {lastReceipt && (
@@ -761,6 +809,17 @@ export function PosClient({
           </SelectField>
         )}
 
+        {orderType === "delivery" && (
+          <SelectField value={areaId} onChange={(e) => onAreaChange(e.target.value)} className="mb-3">
+            <option value="">Select delivery area…</option>
+            {areas.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} — Rs {a.delivery_fee}
+              </option>
+            ))}
+          </SelectField>
+        )}
+
         <div className="rp-scroll flex-1 min-h-[80px] overflow-y-auto">
           {cart.length === 0 ? (
             <p className="py-4 text-sm text-ink-faint">Tap a product to start an order.</p>
@@ -805,9 +864,15 @@ export function PosClient({
               <span className="font-mono">Rs {fmt(delivery)}</span>
             </div>
           )}
+          {serviceCharge > 0 && (
+            <div className="flex justify-between text-sm text-ink-mid">
+              <span>{serviceLabel}</span>
+              <span className="font-mono">Rs {fmt(serviceCharge)}</span>
+            </div>
+          )}
           <div className="flex items-baseline justify-between pt-1">
             <span className="font-mono text-base font-bold">Total (before tax)</span>
-            <span className="font-mono text-lg font-bold">Rs {fmt(subtotal + delivery)}</span>
+            <span className="font-mono text-lg font-bold">Rs {fmt(subtotal + delivery + serviceCharge)}</span>
           </div>
           <p className="text-[11px] text-ink-faint">Tax and customer info are set at checkout.</p>
         </div>
@@ -888,13 +953,17 @@ export function PosClient({
                     </div>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={newCustomer}
-                  className="mt-2.5 rounded-lg border border-line bg-raised hover:bg-hover px-3 py-2 text-xs font-bold"
-                >
-                  + New customer
-                </button>
+                {selectedCustomer && (
+                  <p className="mt-2 flex items-center justify-between text-xs text-ink-mid">
+                    <span>
+                      Saved customer: <span className="font-semibold text-ink-strong">{selectedCustomer.name}</span> — changes you make below are saved to
+                      their record.
+                    </span>
+                    <button type="button" onClick={clearCustomer} className="ml-3 shrink-0 underline hover:text-ink-strong">
+                      Clear
+                    </button>
+                  </p>
+                )}
 
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 [&>div]:min-w-0">
                   <div>
@@ -926,20 +995,18 @@ export function PosClient({
                     />
                   </div>
                   <div>
-                    <label className={LABEL}>Area</label>
-                    <SelectField
-                      value={areaId}
-                      onChange={(e) => onAreaChange(e.target.value)}
-                      disabled={orderType !== "delivery"}
-                      className="mt-1.5"
+                    <label className={LABEL}>Delivery area</label>
+                    <div
+                      className={`${FIELD} mt-1.5 flex items-center text-ink-mid`}
+                      aria-readonly="true"
+                      title={orderType === "delivery" ? "Choose the area in the order panel" : "Only for delivery orders"}
                     >
-                      <option value="">No delivery area</option>
-                      {areas.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.name} — Rs {a.delivery_fee}
-                        </option>
-                      ))}
-                    </SelectField>
+                      {orderType !== "delivery"
+                        ? "—"
+                        : areas.find((a) => a.id === areaId)
+                          ? `${areas.find((a) => a.id === areaId)!.name} — Rs ${areas.find((a) => a.id === areaId)!.delivery_fee}`
+                          : "No area selected"}
+                    </div>
                   </div>
                 </div>
                 <p className="mt-3 text-xs text-ink-faint">
@@ -959,6 +1026,12 @@ export function PosClient({
                   <div className="flex justify-between text-ink-mid">
                     <span>Delivery</span>
                     <span>Rs {fmt(delivery)}</span>
+                  </div>
+                )}
+                {serviceCharge > 0 && (
+                  <div className="flex justify-between text-ink-mid">
+                    <span>{serviceLabel}</span>
+                    <span>Rs {fmt(serviceCharge)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-ink-mid">

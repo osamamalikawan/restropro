@@ -12,6 +12,7 @@ export function DashboardShell({
   subStatus,
   modulePerms,
   shiftLabel,
+  headerExtra,
   children,
 }: {
   role: Role;
@@ -21,6 +22,8 @@ export function DashboardShell({
   subStatus: string;
   modulePerms: Record<string, boolean>;
   shiftLabel: string | null;
+  /** extra content for the header (the desktop app puts its sync status here) */
+  headerExtra?: React.ReactNode;
   children: React.ReactNode;
 }) {
   // One boolean, same as the prototype's toggleSidebar(): false = the natural desktop
@@ -53,6 +56,7 @@ export function DashboardShell({
           employeeId={employeeId}
           role={role}
           subStatus={subStatus}
+          extra={headerExtra}
           onToggleSidebar={() => setNavToggled((v) => !v)}
         />
         <div className="flex-1 overflow-y-auto">{children}</div>
