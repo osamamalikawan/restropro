@@ -61,6 +61,8 @@ const SETTINGS_FIELD_MAP: Record<string, string> = {
   fbrEnvironment: "fbr_environment",
   fbrFee: "fbr_fee",
   receiptTemplate: "receipt_template",
+  showDiscount: "show_discount",
+  notePresets: "note_presets",
 };
 
 /**
@@ -91,6 +93,15 @@ export async function POST(req: Request) {
   const settingsPatch: Record<string, unknown> = {};
   for (const [bodyKey, column] of Object.entries(SETTINGS_FIELD_MAP)) {
     if (body[bodyKey] !== undefined) settingsPatch[column] = body[bodyKey];
+  }
+  if (settingsPatch.note_presets !== undefined) {
+    // keep a clean, short list of unique non-empty strings
+    const raw = Array.isArray(settingsPatch.note_presets) ? settingsPatch.note_presets : [];
+    const seen = new Set<string>();
+    settingsPatch.note_presets = raw
+      .map((x) => (typeof x === "string" ? x.trim().slice(0, 60) : ""))
+      .filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()))
+      .slice(0, 40);
   }
   if (Object.keys(settingsPatch).length > 0) {
     const { error } = await admin

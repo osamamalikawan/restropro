@@ -47,7 +47,14 @@ export type SaleSnapshot = {
   orderTypeLabel: string; // e.g. "Dine in · Table 4", "Takeaway"
   customerName: string;
   customerPhone: string;
-  items: { name: string; qty: number; price: number }[];
+  items: { name: string; qty: number; price: number; note?: string }[];
+  /** order-level instructions typed in the checkout popup */
+  orderNote?: string;
+  /** delivery orders only: where it goes */
+  deliveryAddress?: string;
+  deliveryArea?: string;
+  /** money taken off the items before tax (0 / absent when none) */
+  discount?: number;
   subtotal: number;
   delivery: number;
   taxLabel: string; // e.g. "Cash tax (17%)"
@@ -108,6 +115,21 @@ class Buf {
   }
 }
 
+/** Order-level instructions + delivery details, shared by the kitchen slip and the invoice. */
+function printOrderExtras(b: Buf, s: SaleSnapshot, big: boolean) {
+  if (s.deliveryArea || s.deliveryAddress) {
+    b.bold(true).line("DELIVER TO").bold(false);
+    if (s.deliveryAddress) for (const l of wrap(s.deliveryAddress, b.cols)) b.line(l);
+    if (s.deliveryArea) b.line(`Area: ${s.deliveryArea}`);
+  }
+  if (s.orderNote) {
+    b.bold(true).line("ORDER NOTE").bold(false);
+    if (big) b.bold(true);
+    for (const l of wrap(s.orderNote, b.cols)) b.line(l);
+    if (big) b.bold(false);
+  }
+}
+
 const colsFor = (paper: string) => (/58/.test(paper) ? 32 : 48);
 
 function wrap(s: string, width: number): string[] {
@@ -126,12 +148,20 @@ function wrap(s: string, width: number): string[] {
 export function buildKitchenSlip(s: SaleSnapshot, orderNo: string | number): number[] {
   const b = new Buf(colsFor(s.paper));
   b.align("center").bold(true).size(true).line("KITCHEN").size(false).bold(false);
-  b.bold(true).line(`Order #${orderNo}`).bold(false);
+  b.bold(true).size(true).line(`#${orderNo}`).size(false).bold(false);
   b.line(s.orderTypeLabel).line(new Date().toLocaleString());
   b.align("left").rule();
-  b.bold(true).size(true);
-  for (const it of s.items) for (const l of wrap(`${it.qty} x ${it.name}`, Math.floor(b.cols / 2))) b.line(l);
-  b.size(false).bold(false).rule();
+  for (const it of s.items) {
+    b.bold(true).size(true);
+    for (const l of wrap(`${it.qty} x ${it.name}`, Math.floor(b.cols / 2))) b.line(l);
+    b.size(false);
+    if (it.note) for (const l of wrap(`  >> ${it.note}`, b.cols)) b.line(l);
+    b.bold(false);
+  }
+  b.rule();
+  printOrderExtras(b, s, true);
+  if (s.deliveryArea || s.deliveryAddress || s.orderNote) b.rule();
+  if (s.customerName || s.customerPhone) b.line([s.customerName, s.customerPhone].filter(Boolean).join(" "));
   return b.cut().bytes;
 }
 
@@ -163,9 +193,11 @@ export function buildInvoice(s: SaleSnapshot, orderNo: string | number): number[
   rule();
 
   // ---- order info ----
-  b.row(`Order #${orderNo}`, new Date().toLocaleString());
+  b.bold(true).line(`Order #${orderNo}`).bold(false);
+  b.line(new Date().toLocaleString());
   b.line(s.orderTypeLabel).line(`Cashier: ${s.cashier}`);
   if (s.customerName || s.customerPhone) b.line(`Customer: ${[s.customerName, s.customerPhone].filter(Boolean).join(" ")}`);
+  printOrderExtras(b, s, false);
   rule();
 
   // ---- items ----
@@ -173,12 +205,14 @@ export function buildInvoice(s: SaleSnapshot, orderNo: string | number): number[
   for (const it of s.items) {
     const lines = wrap(`${it.qty} x ${it.name}`, b.cols - 12);
     lines.forEach((l, i) => (i === lines.length - 1 ? b.row(l, money(it.price * it.qty)) : b.line(l)));
+    if (it.note) for (const l of wrap(`  >> ${it.note}`, b.cols)) b.line(l);
   }
   b.bold(false);
   rule();
 
   // ---- totals ----
   b.row("Subtotal", money(s.subtotal));
+  if ((s.discount ?? 0) > 0) b.row("Discount", `-${money(s.discount!)}`);
   if (s.delivery > 0) b.row("Delivery", money(s.delivery));
   if ((s.serviceCharge ?? 0) > 0) b.row(s.serviceLabel ?? "Service charge", money(s.serviceCharge!));
   if (s.tax > 0) b.row(s.taxLabel, money(s.tax));

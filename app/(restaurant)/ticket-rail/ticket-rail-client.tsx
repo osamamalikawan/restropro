@@ -12,6 +12,9 @@ type OrderType = "dine_in" | "takeaway" | "delivery";
 type Sale = {
   id: string;
   order_no: number;
+  display_id?: string | null;
+  order_note?: string | null;
+  item_notes?: { productId: string; name: string; note: string }[] | null;
   order_type: OrderType;
   status: "completed" | "unpaid" | "cancelled";
   kitchen_status: Kitchen;
@@ -198,7 +201,13 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
       orderTypeLabel: TYPE_LABEL[s.order_type] + (s.tables?.number ? ` - Table ${s.tables.number}` : ""),
       customerName: s.customers?.name ?? "",
       customerPhone: "",
-      items: s.sale_items.map((i) => ({ name: i.name, qty: i.quantity, price: i.unit_price })),
+      items: s.sale_items.map((i) => ({
+        name: i.name,
+        qty: i.quantity,
+        price: i.unit_price,
+        note: (s.item_notes ?? []).find((n) => n.productId === i.product_id)?.note,
+      })),
+      orderNote: s.order_note ?? "",
       subtotal: 0,
       delivery: 0,
       taxLabel: "",
@@ -208,7 +217,7 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
       payments: [],
     };
     try {
-      await printSale("kitchen", snap, s.order_no);
+      await printSale("kitchen", snap, s.display_id ?? s.order_no);
     } catch (e) {
       setError(`Kitchen slip didn't print: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -298,7 +307,7 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
                         } ${dragKey === c.key ? "opacity-50" : ""}`}
                       >
                         <div className="mb-1.5 flex items-center justify-between gap-2">
-                          <span className="font-mono text-sm font-bold">{s ? `#${s.order_no}` : heldTitle(t!)}</span>
+                          <span className="font-mono text-sm font-bold">{s ? `#${s.display_id ?? s.order_no}` : heldTitle(t!)}</span>
                           <div className="flex items-center gap-1.5">
                             {s?.status === "unpaid" && (
                               <span className="rounded-full bg-turmeric-500/20 px-2 py-1 text-[10px] font-bold text-turmeric-400">UNPAID</span>

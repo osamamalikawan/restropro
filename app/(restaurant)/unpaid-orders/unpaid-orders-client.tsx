@@ -5,6 +5,7 @@ import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 type Sale = {
   id: string;
   order_no: number;
+  display_id?: string | null;
   order_type: string;
   total: number;
   created_at: string;
@@ -99,7 +100,7 @@ export function UnpaidOrdersClient() {
                 const balance = balanceOf(s);
                 return (
                   <tr key={s.id} className="border-t border-line">
-                    <td className="p-3 font-mono">#{s.order_no}</td>
+                    <td className="p-3 font-mono">#{s.display_id ?? s.order_no}</td>
                     <td className="p-3 text-ink-mid">
                       {new Date(s.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                     </td>
@@ -138,7 +139,7 @@ export function UnpaidOrdersClient() {
           }}
         >
           <div className="relative w-full max-w-sm rounded-xl border border-line bg-surface p-6 space-y-4">
-            <h3 className="font-display text-lg font-semibold">Collect payment — #{collecting.order_no}</h3>
+            <h3 className="font-display text-lg font-semibold">Collect payment — #{collecting.display_id ?? collecting.order_no}</h3>
             <div className="flex justify-between text-sm text-ink-mid">
               <span>Balance due</span>
               <span className="font-mono font-semibold text-ink-strong">Rs {balanceOf(collecting).toLocaleString()}</span>

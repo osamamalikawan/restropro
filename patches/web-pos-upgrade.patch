@@ -1,0 +1,1510 @@
+diff --git a/app/(restaurant)/customers/customers-client.tsx b/app/(restaurant)/customers/customers-client.tsx
+index e1610a2..0477140 100644
+--- a/app/(restaurant)/customers/customers-client.tsx
++++ b/app/(restaurant)/customers/customers-client.tsx
+@@ -12,7 +12,7 @@ const PAGE = 50; // customers (and order-history rows) per page
+ type Area = { id: string; name: string };
+ type Customer = { id: string; name: string; phone: string; address: string | null; area_id: string | null; delivery_areas?: { name: string } | null };
+ type SaleItem = { name: string; unit_price: number; quantity: number };
+-type Sale = { id: string; order_no: number; order_type: string; customer_id: string | null; total: number; status: string; created_at: string; sale_items: SaleItem[] };
++type Sale = { id: string; order_no: number; display_id?: string | null; order_type: string; customer_id: string | null; total: number; status: string; created_at: string; sale_items: SaleItem[] };
+ type Stat = { orders: number; spend: number; lastOrderAt: string | null };
+ 
+ export function CustomersClient() {
+@@ -181,7 +181,7 @@ export function CustomersClient() {
+         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+           <KpiCard label="Total orders" value={stats.totalOrders} />
+           <KpiCard label="Total spend" value={fmtMoney(stats.totalSpend)} />
+-          <KpiCard label="Last order" value={orders[0] ? `#${orders[0].order_no}` : stats.lastOrderAt ? fmtDateTime(stats.lastOrderAt) : "—"} />
++          <KpiCard label="Last order" value={orders[0] ? `#${orders[0].display_id ?? orders[0].order_no}` : stats.lastOrderAt ? fmtDateTime(stats.lastOrderAt) : "—"} />
+         </div>
+ 
+         <Panel loading={ordersLoading && orders.length === 0}>
+@@ -200,7 +200,7 @@ export function CustomersClient() {
+               <tbody>
+                 {orders.map((o) => (
+                   <tr key={o.id} className="border-b border-line last:border-0">
+-                    <Td className="font-mono font-medium">#{o.order_no}</Td>
++                    <Td className="font-mono font-medium">#{o.display_id ?? o.order_no}</Td>
+                     <Td className="text-ink-mid">{fmtDateTime(o.created_at)}</Td>
+                     <Td>
+                       <Badge>{o.order_type.replace("_", " ")}</Badge>
+diff --git a/app/(restaurant)/dashboard/dashboard-home-client.tsx b/app/(restaurant)/dashboard/dashboard-home-client.tsx
+index 185a107..b52cb05 100644
+--- a/app/(restaurant)/dashboard/dashboard-home-client.tsx
++++ b/app/(restaurant)/dashboard/dashboard-home-client.tsx
+@@ -21,6 +21,7 @@ type Summary = {
+ type Sale = {
+   id: string;
+   order_no: number;
++  display_id?: string | null;
+   order_type: string;
+   total: number;
+   delivery_charge: number;
+@@ -139,7 +140,7 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
+             <tbody>
+               {recent.map((s) => (
+                 <tr key={s.id} className="border-t border-line-soft">
+-                  <td className="p-3 font-mono text-xs">#{s.order_no}</td>
++                  <td className="p-3 font-mono text-xs">#{s.display_id ?? s.order_no}</td>
+                   <td className="p-3 text-xs text-ink-mid">{TYPE_LABEL[s.order_type] ?? s.order_type}</td>
+                   <td className="p-3 text-xs text-ink-mid">{s.employees?.name ?? "—"}</td>
+                   <td className="p-3 text-xs text-ink-mid">{s.sale_items.length} item(s)</td>
+diff --git a/app/(restaurant)/sales/sales-client.tsx b/app/(restaurant)/sales/sales-client.tsx
+index b5ebafb..7dd2276 100644
+--- a/app/(restaurant)/sales/sales-client.tsx
++++ b/app/(restaurant)/sales/sales-client.tsx
+@@ -8,6 +8,7 @@ const PAGE = 50; // orders per page: 50 load instantly, the rest on scroll / "Lo
+ type Sale = {
+   id: string;
+   order_no: number;
++  display_id?: string | null;
+   order_type: "dine_in" | "takeaway" | "delivery";
+   subtotal: number;
+   tax: number;
+@@ -140,7 +141,7 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
+                   <tr className="border-t border-line">
+                     <td className="p-3 font-mono">
+                       <button onClick={() => setExpanded(expanded === s.id ? null : s.id)} className="hover:underline">
+-                        #{s.order_no}
++                        #{s.display_id ?? s.order_no}
+                       </button>
+                     </td>
+                     <td className="p-3 text-ink-mid">
+diff --git a/app/(restaurant)/settings/settings-client.tsx b/app/(restaurant)/settings/settings-client.tsx
+index 59bc643..a4b4174 100644
+--- a/app/(restaurant)/settings/settings-client.tsx
++++ b/app/(restaurant)/settings/settings-client.tsx
+@@ -25,6 +25,8 @@ type Settings = {
+   fbr_environment: string;
+   fbr_fee: number;
+   receipt_template: string;
++  show_discount?: boolean;
++  note_presets?: string[];
+ };
+ 
+ /** Desktop app: pull the freshly saved settings / lists into this computer straight away (the POS
+@@ -157,6 +159,7 @@ export function SettingsClient({
+   const [areaName, setAreaName] = useState("");
+   const [areaFee, setAreaFee] = useState("0");
+   const [tablesError, setTablesError] = useState("");
++  const [newPreset, setNewPreset] = useState("");
+ 
+   useEffect(() => {
+     (async () => {
+@@ -186,6 +189,18 @@ export function SettingsClient({
+     })();
+   }, []);
+ 
++  function addPreset() {
++    const t = newPreset.trim();
++    if (!t || !s) return;
++    const list = s.note_presets ?? [];
++    if (list.some((x) => x.toLowerCase() === t.toLowerCase())) {
++      setNewPreset("");
++      return;
++    }
++    set("note_presets", [...list, t]);
++    setNewPreset("");
++  }
++
+   async function loadMethods() {
+     const res = await fetch("/api/payment-methods");
+     const data = await res.json();
+@@ -595,6 +610,7 @@ export function SettingsClient({
+                       cardTaxRate: s.card_tax_rate,
+                       posShowKitchenPrint: s.pos_show_kitchen_print,
+                       posShowPrintInvoice: s.pos_show_print_invoice,
++                      showDiscount: s.show_discount !== false,
+                     },
+                     "POS controls saved"
+                   )
+@@ -617,6 +633,54 @@ export function SettingsClient({
+             </p>
+             <ToggleRow label='Show "Kitchen Print" button' on={s.pos_show_kitchen_print} onChange={(v) => set("pos_show_kitchen_print", v)} />
+             <ToggleRow label='Show "Print Invoice" button' on={s.pos_show_print_invoice} onChange={(v) => set("pos_show_print_invoice", v)} />
++            <ToggleRow label="Allow discounts at checkout" on={s.show_discount !== false} onChange={(v) => set("show_discount", v)} />
++          </Panel>
++        </div>
++
++        {/* Quick notes for order items */}
++        <div id="item-notes" className="scroll-mt-20">
++          <Panel
++            title="Item note shortcuts"
++            subtitle="Quick-pick chips shown when a cashier taps an item in the order panel"
++            loading={savingSection === "item-notes"}
++            footer={
++              <SaveButton
++                loading={savingSection === "item-notes"}
++                onClick={() => save("item-notes", { notePresets: s.note_presets ?? [] }, "Note shortcuts saved")}
++              >
++                Save shortcuts
++              </SaveButton>
++            }
++          >
++            <ReorderableList
++              items={(s.note_presets ?? []).map((t) => ({ id: t, text: t }))}
++              onChange={(next) => set("note_presets", next.map((x) => x.text))}
++              renderRow={(item) => (
++                <>
++                  <span>{item.text}</span>
++                  <button
++                    onClick={() => set("note_presets", (s.note_presets ?? []).filter((x) => x !== item.text))}
++                    className="text-ink-faint hover:text-crimson-400 text-xs"
++                  >
++                    ✕
++                  </button>
++                </>
++              )}
++            />
++            {(s.note_presets ?? []).length === 0 && <p className="text-xs text-ink-faint">No shortcuts yet.</p>}
++            <div className="mt-3 flex gap-2">
++              <input
++                value={newPreset}
++                onChange={(e) => setNewPreset(e.target.value)}
++                onKeyDown={(e) => e.key === "Enter" && addPreset()}
++                placeholder="e.g. Extra Spices"
++                className="input flex-1"
++              />
++              <button onClick={addPreset} className="rounded-lg border border-line bg-raised px-4 text-sm font-semibold hover:bg-hover">
++                Add
++              </button>
++            </div>
++            <p className="mt-2 text-[11px] text-ink-faint">Drag or use the arrows to change the order shown in the POS.</p>
+           </Panel>
+         </div>
+ 
+diff --git a/app/(restaurant)/ticket-rail/ticket-rail-client.tsx b/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
+index faee038..618dab8 100644
+--- a/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
++++ b/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
+@@ -12,6 +12,9 @@ type OrderType = "dine_in" | "takeaway" | "delivery";
+ type Sale = {
+   id: string;
+   order_no: number;
++  display_id?: string | null;
++  order_note?: string | null;
++  item_notes?: { productId: string; name: string; note: string }[] | null;
+   order_type: OrderType;
+   status: "completed" | "unpaid" | "cancelled";
+   kitchen_status: Kitchen;
+@@ -198,7 +201,13 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
+       orderTypeLabel: TYPE_LABEL[s.order_type] + (s.tables?.number ? ` - Table ${s.tables.number}` : ""),
+       customerName: s.customers?.name ?? "",
+       customerPhone: "",
+-      items: s.sale_items.map((i) => ({ name: i.name, qty: i.quantity, price: i.unit_price })),
++      items: s.sale_items.map((i) => ({
++        name: i.name,
++        qty: i.quantity,
++        price: i.unit_price,
++        note: (s.item_notes ?? []).find((n) => n.productId === i.product_id)?.note,
++      })),
++      orderNote: s.order_note ?? "",
+       subtotal: 0,
+       delivery: 0,
+       taxLabel: "",
+@@ -208,7 +217,7 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
+       payments: [],
+     };
+     try {
+-      await printSale("kitchen", snap, s.order_no);
++      await printSale("kitchen", snap, s.display_id ?? s.order_no);
+     } catch (e) {
+       setError(`Kitchen slip didn't print: ${e instanceof Error ? e.message : String(e)}`);
+     }
+@@ -298,7 +307,7 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
+                         } ${dragKey === c.key ? "opacity-50" : ""}`}
+                       >
+                         <div className="mb-1.5 flex items-center justify-between gap-2">
+-                          <span className="font-mono text-sm font-bold">{s ? `#${s.order_no}` : heldTitle(t!)}</span>
++                          <span className="font-mono text-sm font-bold">{s ? `#${s.display_id ?? s.order_no}` : heldTitle(t!)}</span>
+                           <div className="flex items-center gap-1.5">
+                             {s?.status === "unpaid" && (
+                               <span className="rounded-full bg-turmeric-500/20 px-2 py-1 text-[10px] font-bold text-turmeric-400">UNPAID</span>
+diff --git a/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx b/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx
+index 4cf41f5..76fc7e1 100644
+--- a/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx
++++ b/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx
+@@ -5,6 +5,7 @@ import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
+ type Sale = {
+   id: string;
+   order_no: number;
++  display_id?: string | null;
+   order_type: string;
+   total: number;
+   created_at: string;
+@@ -99,7 +100,7 @@ export function UnpaidOrdersClient() {
+                 const balance = balanceOf(s);
+                 return (
+                   <tr key={s.id} className="border-t border-line">
+-                    <td className="p-3 font-mono">#{s.order_no}</td>
++                    <td className="p-3 font-mono">#{s.display_id ?? s.order_no}</td>
+                     <td className="p-3 text-ink-mid">
+                       {new Date(s.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                     </td>
+@@ -138,7 +139,7 @@ export function UnpaidOrdersClient() {
+           }}
+         >
+           <div className="relative w-full max-w-sm rounded-xl border border-line bg-surface p-6 space-y-4">
+-            <h3 className="font-display text-lg font-semibold">Collect payment — #{collecting.order_no}</h3>
++            <h3 className="font-display text-lg font-semibold">Collect payment — #{collecting.display_id ?? collecting.order_no}</h3>
+             <div className="flex justify-between text-sm text-ink-mid">
+               <span>Balance due</span>
+               <span className="font-mono font-semibold text-ink-strong">Rs {balanceOf(collecting).toLocaleString()}</span>
+diff --git a/app/api/device/sales/route.ts b/app/api/device/sales/route.ts
+index 3f6ee37..ecadf6a 100644
+--- a/app/api/device/sales/route.ts
++++ b/app/api/device/sales/route.ts
+@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
+ import { requireDevice } from "@/lib/auth/require-device";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ import { hasModuleAccess } from "@/lib/permissions";
+-import { applyCustomerUpdate, applySaleExtras, type CustomerUpdate } from "@/lib/sales/extras";
++import { applyCustomerUpdate, applySaleExtras, discountTaxReduction, type CustomerUpdate } from "@/lib/sales/extras";
+ 
+ type OfflineSale = {
+   clientSaleId: string;
+@@ -22,10 +22,16 @@ type OfflineSale = {
+   serviceCharge?: number;
+   fbrFee?: number;
+   customerUpdate?: CustomerUpdate;
++  discount?: number;
++  discountPercent?: number;
++  orderNote?: string;
++  itemNotes?: { productId: string; name: string; note: string }[];
++  /** counter that only this device increments (the Windows app uses its outbox row number) */
++  deviceSeq?: number;
+ };
+ 
+ type SaleResult =
+-  | { clientSaleId: string; ok: true; orderNo: number | string; total: number; status: string; balance: number; saleId?: string | null; duplicate?: boolean }
++  | { clientSaleId: string; ok: true; orderNo: number | string; displayId?: string | null; total: number; status: string; balance: number; saleId?: string | null; duplicate?: boolean }
+   | { clientSaleId: string; ok: false; error: string; retryable: boolean };
+ 
+ const MAX_BATCH = 50;
+@@ -48,7 +54,11 @@ export async function POST(req: Request) {
+   }
+ 
+   const admin = createAdminClient();
+-  const { data: st } = await admin.from("restaurant_settings").select("*").eq("restaurant_id", restaurantId).maybeSingle();
++  const [{ data: st }, { data: dev }] = await Promise.all([
++    admin.from("restaurant_settings").select("*").eq("restaurant_id", restaurantId).maybeSingle(),
++    admin.from("devices").select("device_no").eq("id", deviceId).maybeSingle(),
++  ]);
++  const deviceNo: number | null = dev?.device_no ?? null; // null until migration 0017 is applied
+ 
+   const cashierCache = new Map<string, { ok: boolean; reason?: string }>();
+   async function cashierAllowed(employeeId: string) {
+@@ -148,16 +158,35 @@ export async function POST(req: Request) {
+       // sale's id, which lets the device map Ticket Rail moves made while the sale was still only
+       // on the device.
+       const paid = payments.reduce((t, p) => t + (Number(p.amount) || 0), 0);
+-      const done = await applySaleExtras(
+-        admin,
+-        restaurantId,
+-        { orderNo: r.order_no ?? null, total: Number(r.total ?? 0), status: r.status ?? "", balance: Number(r.balance ?? 0) },
+-        { serviceCharge: s.serviceCharge, fbrFee: s.fbrFee },
+-        paid
+-      );
+-      await applyCustomerUpdate(admin, restaurantId, s.customerId, s.customerUpdate);
++      // The order id is built HERE from this device's number + its own counter, never taken as text
++      // from the device: D2-0045. (Same device + same counter can only ever be stored once.)
++      const seq = Number.isInteger(s.deviceSeq) && (s.deviceSeq as number) > 0 ? (s.deviceSeq as number) : null;
++      const displayId = deviceNo && seq ? `D${deviceNo}-${String(seq).padStart(4, "0")}` : null;
++      const discountOn = st?.show_discount !== false;
++      const { discount, taxReduction } = discountOn ? discountTaxReduction(s.items, s.discount, pct) : { discount: 0, taxReduction: 0 };
++      const [done] = await Promise.all([
++        applySaleExtras(
++          admin,
++          restaurantId,
++          { orderNo: r.order_no ?? null, total: Number(r.total ?? 0), status: r.status ?? "", balance: Number(r.balance ?? 0) },
++          {
++            serviceCharge: s.serviceCharge,
++            fbrFee: s.fbrFee,
++            discount,
++            taxReduction,
++            discountPercent: s.discountPercent,
++            orderNote: s.orderNote,
++            itemNotes: s.itemNotes,
++            displayId,
++            deviceId: displayId ? deviceId : null,
++            deviceSeq: displayId ? seq : null,
++          },
++          paid
++        ),
++        applyCustomerUpdate(admin, restaurantId, s.customerId, s.customerUpdate),
++      ]);
+       const saleId = done.saleId;
+-      const result = { orderNo: done.orderNo ?? "", total: done.total, status: done.status, balance: done.balance, saleId };
++      const result = { orderNo: done.orderNo ?? "", displayId, total: done.total, status: done.status, balance: done.balance, saleId };
+ 
+       const { error: receiptError } = await admin
+         .from("device_sale_receipts")
+diff --git a/app/api/device/sync/route.ts b/app/api/device/sync/route.ts
+index a25706a..9968383 100644
+--- a/app/api/device/sync/route.ts
++++ b/app/api/device/sync/route.ts
+@@ -69,8 +69,12 @@ export async function GET(req: Request) {
+     settings = created;
+   }
+ 
++  // This device's number (D<n>-0001 order ids). Absent until migration 0017 is applied.
++  const { data: devRow } = await admin.from("devices").select("device_no").eq("id", auth.device.deviceId).maybeSingle();
++
+   return NextResponse.json({
+     serverTime: new Date().toISOString(),
++    deviceNo: devRow?.device_no ?? null,
+     restaurant: restaurant.data,
+     settings: settings ?? {},
+     products: products.data ?? [],
+diff --git a/app/api/sales/route.ts b/app/api/sales/route.ts
+index 8f9b4ea..72254d5 100644
+--- a/app/api/sales/route.ts
++++ b/app/api/sales/route.ts
+@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
+ import { requireStaffSession } from "@/lib/auth/require-staff";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ import { hasModuleAccess } from "@/lib/permissions";
+-import { applyCustomerUpdate, applySaleExtras, type CustomerUpdate } from "@/lib/sales/extras";
++import { applyCustomerUpdate, applySaleExtras, discountTaxReduction, type CustomerUpdate } from "@/lib/sales/extras";
+ 
+ // NOTE: the order-edit handler that used to live in this file is in app/api/sales/edit/route.ts
+ // (that's where components/edit-order-modal.tsx posts to).
+@@ -61,9 +61,6 @@ export async function GET(req: Request) {
+ export async function POST(req: Request) {
+   const session = await requireStaffSession();
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+-  if (!(await hasModuleAccess(session.restaurantId, session.role, "pos"))) {
+-    return NextResponse.json({ error: "Not permitted" }, { status: 403 });
+-  }
+ 
+   const b = (await req.json().catch(() => ({}))) as {
+     orderType?: string;
+@@ -80,6 +77,10 @@ export async function POST(req: Request) {
+     serviceCharge?: number; // dine-in service charge shown on the bill
+     fbrFee?: number; // FBR invoicing fee shown on the bill
+     customerUpdate?: CustomerUpdate; // edited details of the selected existing customer
++    discount?: number; // money off the item subtotal, before tax
++    discountPercent?: number;
++    orderNote?: string;
++    itemNotes?: { productId: string; name: string; note: string }[];
+   };
+   if (!b.items || b.items.length === 0) {
+     return NextResponse.json({ error: "Order must have at least one item" }, { status: 400 });
+@@ -92,11 +93,12 @@ export async function POST(req: Request) {
+ 
+   // The tax rate is read here, not trusted from the browser. Cash vs card follows the payment
+   // method that carries the most money (or the method selected, when nothing is paid yet).
+-  const { data: st } = await admin
+-    .from("restaurant_settings")
+-    .select("*")
+-    .eq("restaurant_id", session.restaurantId)
+-    .single();
++  // permission check and settings read are independent: run them together (one round trip less)
++  const [allowed, { data: st }] = await Promise.all([
++    hasModuleAccess(session.restaurantId, session.role, "pos"),
++    admin.from("restaurant_settings").select("*").eq("restaurant_id", session.restaurantId).single(),
++  ]);
++  if (!allowed) return NextResponse.json({ error: "Not permitted" }, { status: 403 });
+   const payments = b.payments ?? [];
+   const method = [...payments].sort((a, c) => c.amount - a.amount)[0]?.method ?? b.taxMethod ?? "Cash";
+   const legacy = st?.tax_rate != null ? Number(st.tax_rate) : 5;
+@@ -123,14 +125,28 @@ export async function POST(req: Request) {
+ 
+   const r = Array.isArray(data) ? data[0] : data;
+   const paid = payments.reduce((t, p) => t + (Number(p.amount) || 0), 0);
+-  const done = await applySaleExtras(
+-    admin,
+-    session.restaurantId,
+-    { orderNo: r.order_no, total: Number(r.total), status: r.status, balance: Number(r.balance ?? 0) },
+-    { serviceCharge: b.serviceCharge, fbrFee: b.fbrFee },
+-    paid
+-  );
+-  await applyCustomerUpdate(admin, session.restaurantId, b.customerId, b.customerUpdate);
++
++  // The discount is an admin switch (Settings -> POS controls); when it is off, any discount sent is ignored.
++  const discountOn = st?.show_discount !== false;
++  const { discount, taxReduction } = discountOn ? discountTaxReduction(b.items, b.discount, pct) : { discount: 0, taxReduction: 0 };
++  const [done] = await Promise.all([
++    applySaleExtras(
++      admin,
++      session.restaurantId,
++      { orderNo: r.order_no, total: Number(r.total), status: r.status, balance: Number(r.balance ?? 0) },
++      {
++        serviceCharge: b.serviceCharge,
++        fbrFee: b.fbrFee,
++        discount,
++        taxReduction,
++        discountPercent: b.discountPercent,
++        orderNote: b.orderNote,
++        itemNotes: b.itemNotes,
++      },
++      paid
++    ),
++    applyCustomerUpdate(admin, session.restaurantId, b.customerId, b.customerUpdate),
++  ]);
+   return NextResponse.json({
+     success: true,
+     orderNo: done.orderNo,
+diff --git a/app/api/settings/route.ts b/app/api/settings/route.ts
+index 19f3fc5..ae69112 100644
+--- a/app/api/settings/route.ts
++++ b/app/api/settings/route.ts
+@@ -61,6 +61,8 @@ const SETTINGS_FIELD_MAP: Record<string, string> = {
+   fbrEnvironment: "fbr_environment",
+   fbrFee: "fbr_fee",
+   receiptTemplate: "receipt_template",
++  showDiscount: "show_discount",
++  notePresets: "note_presets",
+ };
+ 
+ /**
+@@ -92,6 +94,15 @@ export async function POST(req: Request) {
+   for (const [bodyKey, column] of Object.entries(SETTINGS_FIELD_MAP)) {
+     if (body[bodyKey] !== undefined) settingsPatch[column] = body[bodyKey];
+   }
++  if (settingsPatch.note_presets !== undefined) {
++    // keep a clean, short list of unique non-empty strings
++    const raw = Array.isArray(settingsPatch.note_presets) ? settingsPatch.note_presets : [];
++    const seen = new Set<string>();
++    settingsPatch.note_presets = raw
++      .map((x) => (typeof x === "string" ? x.trim().slice(0, 60) : ""))
++      .filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()))
++      .slice(0, 40);
++  }
+   if (Object.keys(settingsPatch).length > 0) {
+     const { error } = await admin
+       .from("restaurant_settings")
+diff --git a/app/pos/pos-client.tsx b/app/pos/pos-client.tsx
+index a356154..44ee9bb 100644
+--- a/app/pos/pos-client.tsx
++++ b/app/pos/pos-client.tsx
+@@ -27,7 +27,7 @@ type Product = {
+   // joined by /api/products; supabase returns an object for many-to-one, handle an array defensively
+   menu_categories?: { name: string } | { name: string }[] | null;
+ };
+-type CartLine = { productId: string; name: string; price: number; qty: number };
++type CartLine = { productId: string; name: string; price: number; qty: number; note?: string };
+ type Table = { id: string; number: string; seats: number };
+ type Area = { id: string; name: string; delivery_fee: number };
+ type OrderType = "dine_in" | "takeaway" | "delivery";
+@@ -42,6 +42,8 @@ type PosSettings = {
+   fbr: { enabled: boolean; ntn: string; strn: string; posId: string } | null;
+   showKitchenPrint: boolean;
+   showPrintInvoice: boolean;
++  showDiscount: boolean; // Settings -> POS controls -> Allow discounts at checkout
++  notePresets: string[]; // quick-note chips for order items (Settings -> Item note shortcuts)
+   receiptHeader: string;
+   receiptFooter: string;
+   paper: string;
+@@ -121,6 +123,8 @@ export function PosClient({
+     fbr: null,
+     showKitchenPrint: true,
+     showPrintInvoice: true,
++    showDiscount: true,
++    notePresets: [],
+     receiptHeader: "",
+     receiptFooter: "",
+     paper: "80",
+@@ -140,6 +144,11 @@ export function PosClient({
+   const [custName, setCustName] = useState("");
+   const [custPhone, setCustPhone] = useState("");
+   const [custAddress, setCustAddress] = useState("");
++  const [orderNote, setOrderNote] = useState("");
++  const [discountMode, setDiscountMode] = useState<"amount" | "percent">("amount");
++  const [discountInput, setDiscountInput] = useState("");
++  const [noteFor, setNoteFor] = useState<string | null>(null); // productId whose note popup is open
++  const [noteDraft, setNoteDraft] = useState("");
+   const [pendingAction, setPendingAction] = useState<SaveAction | null>(null);
+   const [printNote, setPrintNote] = useState("");
+   const [submitting, setSubmitting] = useState(false);
+@@ -205,6 +214,8 @@ export function PosClient({
+             : null,
+           showKitchenPrint: st.pos_show_kitchen_print !== false,
+           showPrintInvoice: st.pos_show_print_invoice !== false,
++          showDiscount: st.show_discount !== false,
++          notePresets: Array.isArray(st.note_presets) ? st.note_presets.filter((x: unknown) => typeof x === "string") : [],
+           receiptHeader: st.receipt_header ?? "",
+           receiptFooter: st.receipt_footer ?? "",
+           paper: String(st.paper_width ?? "80"),
+@@ -283,6 +294,23 @@ export function PosClient({
+         .filter((l) => l.qty > 0)
+     );
+   }
++  function openNote(productId: string) {
++    setNoteFor(productId);
++    setNoteDraft(cart.find((l) => l.productId === productId)?.note ?? "");
++  }
++  function togglePreset(text: string) {
++    setNoteDraft((d) => {
++      const parts = d.split(",").map((x) => x.trim()).filter(Boolean);
++      const has = parts.some((x) => x.toLowerCase() === text.toLowerCase());
++      return (has ? parts.filter((x) => x.toLowerCase() !== text.toLowerCase()) : [...parts, text]).join(", ");
++    });
++  }
++  function saveNote() {
++    const text = noteDraft.trim().slice(0, 300);
++    setCart((prev) => prev.map((l) => (l.productId === noteFor ? { ...l, note: text || undefined } : l)));
++    setNoteFor(null);
++  }
++
+   function selectOrderType(t: OrderType) {
+     setOrderType(t);
+     if (t !== "dine_in") setTableId("");
+@@ -368,12 +396,20 @@ export function PosClient({
+   const isCash = /cash/i.test(primaryMethod);
+   const taxPct = isCash ? settings.cashTaxRate : settings.cardTaxRate;
+   const taxLabel = `${isCash ? "Cash" : "Card"} tax (${taxPct}%)`;
+-  const tax = Math.round((subtotal * taxPct) / 100);
++  // Discount comes off the item subtotal BEFORE tax and service charge.
++  const discountRaw = settings.showDiscount ? Math.max(0, Number(discountInput) || 0) : 0;
++  const discount =
++    discountMode === "percent"
++      ? Math.round((subtotal * Math.min(100, discountRaw)) / 100)
++      : Math.min(Math.round(discountRaw), subtotal);
++  const discountPercent = subtotal > 0 ? Math.round((discount / subtotal) * 10000) / 100 : 0;
++  const taxable = subtotal - discount;
++  const tax = Math.round((taxable * taxPct) / 100);
+   const fee = settings.fbrFee;
+-  // Default dine-in service charge (Settings -> Restaurant profile), on the item subtotal.
+-  const serviceCharge = orderType === "dine_in" ? Math.round((subtotal * settings.serviceChargeRate) / 100) : 0;
++  // Default dine-in service charge (Settings -> Restaurant profile), on the discounted item subtotal.
++  const serviceCharge = orderType === "dine_in" ? Math.round((taxable * settings.serviceChargeRate) / 100) : 0;
+   const serviceLabel = `Service charge (${settings.serviceChargeRate}%)`;
+-  const total = subtotal + tax + delivery + fee + serviceCharge;
++  const total = taxable + tax + delivery + fee + serviceCharge;
+   const paid = payRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+   const remaining = total - paid;
+ 
+@@ -430,6 +466,10 @@ export function PosClient({
+       setError("Select a table first");
+       return;
+     }
++    if (orderType === "delivery" && !areaId) {
++      setError("Select a delivery area first");
++      return;
++    }
+     if (payRows.some((r) => r.amount !== "" && (Number.isNaN(Number(r.amount)) || Number(r.amount) < 0))) {
+       setError("Enter valid payment amounts");
+       return;
+@@ -447,7 +487,11 @@ export function PosClient({
+       orderTypeLabel: orderType === "dine_in" ? (tb ? `Dine in - Table ${tb.number}` : "Dine in") : TYPE_TAG[orderType],
+       customerName: custName.trim(),
+       customerPhone: custPhone.trim(),
+-      items: cart.map((l) => ({ name: l.name, price: l.price, qty: l.qty })),
++      items: cart.map((l) => ({ name: l.name, price: l.price, qty: l.qty, note: l.note })),
++      orderNote: orderNote.trim(),
++      deliveryAddress: orderType === "delivery" ? custAddress.trim() : "",
++      deliveryArea: orderType === "delivery" ? areas.find((a) => a.id === areaId)?.name ?? "" : "",
++      discount,
+       subtotal,
+       delivery,
+       taxLabel,
+@@ -491,6 +535,10 @@ export function PosClient({
+         serviceCharge,
+         fbrFee: fee,
+         customerUpdate,
++        discount,
++        discountPercent,
++        orderNote: orderNote.trim() || undefined,
++        itemNotes: cart.filter((l) => l.note).map((l) => ({ productId: l.productId, name: l.name, note: l.note })),
+       },
+       total,
+       paidNow
+@@ -504,18 +552,9 @@ export function PosClient({
+     saleIdRef.current = crypto.randomUUID(); // next sale gets a fresh id; a failed attempt above keeps its id so a retry can't double-post
+     const data = { orderNo: result.orderNo ?? "", total: result.total ?? total, balance: result.balance ?? 0, offline: !!result.offline };
+ 
+-    // The sale is saved at this point — a printer problem must never undo or block it.
+-    let note = "";
+-    if (action !== "save") {
+-      try {
+-        await printSale(action, snap, data.orderNo);
+-      } catch (e) {
+-        note = `Sale saved, but the ${action === "kitchen" ? "kitchen slip" : "invoice"} didn't print: ${
+-          e instanceof Error ? e.message : String(e)
+-        }`;
+-      }
+-    }
+-    setPrintNote(note);
++    // The sale is saved at this point. Close the checkout straight away; printing happens after, and
++    // a printer problem must never undo or block the sale.
++    setPrintNote("");
+     setSubmitting(false);
+     setPendingAction(null);
+     setLastReceipt({ orderNo: data.orderNo, total: data.total, balance: data.balance ?? 0, offline: data.offline });
+@@ -523,8 +562,21 @@ export function PosClient({
+     setIsResumed(false);
+     setCheckoutOpen(false);
+     setSheetOpen(false);
++    setOrderNote("");
++    setDiscountInput("");
++    setDiscountMode("amount");
+     clearCustomer(); // next sale starts with no customer selected
+     setPayRows([{ id: 1, method: paymentMethods[0] ?? "Cash", amount: "" }]);
++
++    if (action !== "save") {
++      try {
++        await printSale(action, snap, data.orderNo);
++      } catch (e) {
++        setPrintNote(
++          `Sale saved, but the ${action === "kitchen" ? "kitchen slip" : "invoice"} didn't print: ${e instanceof Error ? e.message : String(e)}`
++        );
++      }
++    }
+   }
+ 
+   const ORDER_TYPES: { id: OrderType; label: string; icon: string }[] = [
+@@ -814,27 +866,21 @@ export function PosClient({
+           </SelectField>
+         )}
+ 
+-        {orderType === "delivery" && (
+-          <SelectField value={areaId} onChange={(e) => onAreaChange(e.target.value)} className="mb-3">
+-            <option value="">Select delivery area…</option>
+-            {areas.map((a) => (
+-              <option key={a.id} value={a.id}>
+-                {a.name} — Rs {a.delivery_fee}
+-              </option>
+-            ))}
+-          </SelectField>
+-        )}
+-
+         <div className="rp-scroll flex-1 min-h-[80px] overflow-y-auto">
+           {cart.length === 0 ? (
+             <p className="py-4 text-sm text-ink-faint">Tap a product to start an order.</p>
+           ) : (
+             cart.map((l) => (
+               <div key={l.productId} className="flex items-center gap-2 border-b border-line-soft py-3 last:border-b-0">
+-                <div className="min-w-0 flex-1">
++                <button type="button" onClick={() => openNote(l.productId)} className="min-w-0 flex-1 text-left" title="Tap to add a note">
+                   <div className="text-sm font-semibold leading-snug">{l.name}</div>
+                   <div className="font-mono text-[11px] text-ink-faint">Rs {fmt(l.price)} each</div>
+-                </div>
++                  {l.note ? (
++                    <div className="mt-0.5 text-[11px] italic leading-snug text-turmeric-400">{l.note}</div>
++                  ) : (
++                    <div className="mt-0.5 text-[11px] text-ink-faint/70">+ add note</div>
++                  )}
++                </button>
+                 <div className="flex items-center gap-1.5">
+                   <button
+                     onClick={() => changeQty(l.productId, -1)}
+@@ -879,7 +925,9 @@ export function PosClient({
+             <span className="font-mono text-base font-bold">Total (before tax)</span>
+             <span className="font-mono text-lg font-bold">Rs {fmt(subtotal + delivery + serviceCharge)}</span>
+           </div>
+-          <p className="text-[11px] text-ink-faint">Tax and customer info are set at checkout.</p>
++          <p className="text-[11px] text-ink-faint">
++            {orderType === "delivery" ? "Delivery area, tax and customer info are set at checkout." : "Tax and customer info are set at checkout."}
++          </p>
+         </div>
+ 
+         <div className="mt-4 flex gap-2">
+@@ -913,6 +961,69 @@ export function PosClient({
+         </div>
+       </aside>
+ 
++      {/* ================= item note popup ================= */}
++      {noteFor && (
++        <div
++          className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm sm:p-4"
++          onMouseDown={(e) => e.target === e.currentTarget && setNoteFor(null)}
++        >
++          <div className="w-full sm:max-w-[420px] rounded-t-2xl sm:rounded-2xl border border-line bg-surface p-5 shadow-2xl">
++            <div className="flex items-center justify-between">
++              <h3 className="font-display text-lg font-semibold">{cart.find((l) => l.productId === noteFor)?.name ?? "Item note"}</h3>
++              <button
++                onClick={() => setNoteFor(null)}
++                aria-label="Close"
++                className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-raised text-ink-mid hover:text-ink-strong"
++              >
++                <X size={16} />
++              </button>
++            </div>
++            {settings.notePresets.length > 0 && (
++              <div className="mt-4 flex flex-wrap gap-2">
++                {settings.notePresets.map((t) => {
++                  const on = noteDraft.split(",").some((x) => x.trim().toLowerCase() === t.toLowerCase());
++                  return (
++                    <button
++                      key={t}
++                      type="button"
++                      onClick={() => togglePreset(t)}
++                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
++                        on ? "border-chili-500 bg-chili-500/15 text-chili-400" : "border-line bg-raised text-ink-mid hover:border-chili-500/60"
++                      }`}
++                    >
++                      {t}
++                    </button>
++                  );
++                })}
++              </div>
++            )}
++            <textarea
++              value={noteDraft}
++              onChange={(e) => setNoteDraft(e.target.value)}
++              rows={3}
++              maxLength={300}
++              autoFocus
++              placeholder="Type a note for the kitchen…"
++              className={`${FIELD} mt-4 resize-none`}
++            />
++            <div className="mt-4 flex justify-end gap-2">
++              {noteDraft && (
++                <button
++                  type="button"
++                  onClick={() => setNoteDraft("")}
++                  className="rounded-xl border border-line bg-raised px-4 py-2.5 text-sm font-semibold hover:bg-hover"
++                >
++                  Clear
++                </button>
++              )}
++              <button type="button" onClick={saveNote} className="rounded-xl bg-basil-500 px-6 py-2.5 text-sm font-bold text-white hover:bg-basil-600">
++                Save note
++              </button>
++            </div>
++          </div>
++        </div>
++      )}
++
+       {/* ================= checkout modal ================= */}
+       {checkoutOpen && (
+         <div
+@@ -921,9 +1032,18 @@ export function PosClient({
+             if (e.target === e.currentTarget && !submitting) setCheckoutOpen(false);
+           }}
+         >
+-          <div className="relative flex w-full sm:max-w-[460px] max-h-[94dvh] flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-line bg-surface shadow-2xl">
++          <div className="relative flex w-full sm:max-w-[820px] max-h-[94dvh] flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-line bg-surface shadow-2xl">
+             <div className="flex items-center justify-between border-b border-line px-5 py-4">
+-              <h3 className="font-display text-lg font-semibold">Checkout</h3>
++              <div>
++                <h3 className="font-display text-lg font-semibold">Checkout</h3>
++                <p className="text-xs text-ink-faint">
++                  {orderType === "dine_in"
++                    ? `Dine in${tables.find((t) => t.id === tableId) ? ` · Table ${tables.find((t) => t.id === tableId)!.number}` : ""}`
++                    : TYPE_TAG[orderType]}
++                  {" · "}
++                  {itemCount} item{itemCount === 1 ? "" : "s"}
++                </p>
++              </div>
+               <button
+                 onClick={() => !submitting && setCheckoutOpen(false)}
+                 aria-label="Close checkout"
+@@ -933,204 +1053,266 @@ export function PosClient({
+               </button>
+             </div>
+ 
+-            <div className="rp-scroll flex-1 overflow-y-auto overflow-x-hidden px-5 py-4 space-y-4">
+-              {/* customer */}
+-              <div>
+-                <label className={LABEL}>Customer</label>
+-                <div className="relative mt-2">
+-                  <input
+-                    value={custSearch}
+-                    onChange={(e) => searchCustomers(e.target.value)}
+-                    placeholder="Search by name or phone…"
+-                    className={FIELD}
+-                  />
+-                  {custResults.length > 0 && (
+-                    <div className="absolute inset-x-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-line bg-surface shadow-xl">
+-                      {custResults.map((c) => (
+-                        <button
+-                          key={c.id}
+-                          onClick={() => selectCustomer(c)}
+-                          className="w-full text-left px-3 py-2 text-sm hover:bg-hover border-b border-line last:border-b-0"
+-                        >
+-                          {c.name} <span className="text-ink-faint">· {c.phone}</span>
+-                        </button>
+-                      ))}
++            <div className="rp-scroll flex-1 overflow-y-auto overflow-x-hidden px-5 py-4">
++              <div className="grid gap-6 md:grid-cols-2">
++                {/* ---------- left: customer + instructions ---------- */}
++                <div className="space-y-4 min-w-0">
++                  <div>
++                    <label className={LABEL}>Customer</label>
++                    <div className="relative mt-2">
++                      <input
++                        value={custSearch}
++                        onChange={(e) => searchCustomers(e.target.value)}
++                        placeholder="Search by name or phone…"
++                        className={FIELD}
++                      />
++                      {custResults.length > 0 && (
++                        <div className="absolute inset-x-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-line bg-surface shadow-xl">
++                          {custResults.map((c) => (
++                            <button
++                              key={c.id}
++                              onClick={() => selectCustomer(c)}
++                              className="w-full text-left px-3 py-2 text-sm hover:bg-hover border-b border-line last:border-b-0"
++                            >
++                              {c.name} <span className="text-ink-faint">· {c.phone}</span>
++                            </button>
++                          ))}
++                        </div>
++                      )}
+                     </div>
+-                  )}
+-                </div>
+-                {selectedCustomer && (
+-                  <p className="mt-2 flex items-center justify-between text-xs text-ink-mid">
+-                    <span>
+-                      Saved customer: <span className="font-semibold text-ink-strong">{selectedCustomer.name}</span> — changes you make below are saved to
+-                      their record.
+-                    </span>
+-                    <button type="button" onClick={clearCustomer} className="ml-3 shrink-0 underline hover:text-ink-strong">
+-                      Clear
+-                    </button>
+-                  </p>
+-                )}
++                    {selectedCustomer && (
++                      <p className="mt-2 flex items-center justify-between text-xs text-ink-mid">
++                        <span>
++                          Saved customer: <span className="font-semibold text-ink-strong">{selectedCustomer.name}</span>. Changes you make below are saved to
++                          their record.
++                        </span>
++                        <button type="button" onClick={clearCustomer} className="ml-3 shrink-0 underline hover:text-ink-strong">
++                          Clear
++                        </button>
++                      </p>
++                    )}
+ 
+-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 [&>div]:min-w-0">
+-                  <div>
+-                    <label className={LABEL}>Name</label>
+-                    <input
+-                      value={custName}
+-                      onChange={(e) => editCust(setCustName, e.target.value)}
+-                      placeholder="Walk-in"
+-                      className={`${FIELD} mt-1.5`}
+-                    />
+-                  </div>
+-                  <div>
+-                    <label className={LABEL}>Phone (unique)</label>
+-                    <input
+-                      value={custPhone}
+-                      onChange={(e) => editCust(setCustPhone, e.target.value)}
+-                      inputMode="tel"
+-                      placeholder="03xx-xxxxxxx"
+-                      className={`${FIELD} mt-1.5`}
+-                    />
++                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 [&>div]:min-w-0">
++                      <div>
++                        <label className={LABEL}>Name</label>
++                        <input
++                          value={custName}
++                          onChange={(e) => editCust(setCustName, e.target.value)}
++                          placeholder="Walk-in"
++                          className={`${FIELD} mt-1.5`}
++                        />
++                      </div>
++                      <div>
++                        <label className={LABEL}>Phone (unique)</label>
++                        <input
++                          value={custPhone}
++                          onChange={(e) => editCust(setCustPhone, e.target.value)}
++                          inputMode="tel"
++                          placeholder="03xx-xxxxxxx"
++                          className={`${FIELD} mt-1.5`}
++                        />
++                      </div>
++                      <div>
++                        <label className={LABEL}>Address</label>
++                        <input
++                          value={custAddress}
++                          onChange={(e) => setCustAddress(e.target.value)}
++                          placeholder="House / street"
++                          className={`${FIELD} mt-1.5`}
++                        />
++                      </div>
++                      <div>
++                        <label className={LABEL}>Delivery area</label>
++                        {orderType !== "delivery" ? (
++                          <div className={`${FIELD} mt-1.5 flex items-center text-ink-mid`} title="Only for delivery orders">
++                            —
++                          </div>
++                        ) : (
++                          <SelectField value={areaId} onChange={(e) => onAreaChange(e.target.value)} className="mt-1.5">
++                            <option value="">Select delivery area…</option>
++                            {areas.map((a) => (
++                              <option key={a.id} value={a.id}>
++                                {a.name} — Rs {a.delivery_fee}
++                              </option>
++                            ))}
++                          </SelectField>
++                        )}
++                      </div>
++                    </div>
+                   </div>
++
+                   <div>
+-                    <label className={LABEL}>Address</label>
+-                    <input
+-                      value={custAddress}
+-                      onChange={(e) => setCustAddress(e.target.value)}
+-                      placeholder="House / street"
+-                      className={`${FIELD} mt-1.5`}
++                    <label className={LABEL}>Order instructions</label>
++                    <textarea
++                      value={orderNote}
++                      onChange={(e) => setOrderNote(e.target.value)}
++                      rows={3}
++                      maxLength={500}
++                      placeholder="Anything the kitchen or rider should know about this order…"
++                      className={`${FIELD} mt-1.5 resize-none`}
+                     />
+                   </div>
+-                  <div>
+-                    <label className={LABEL}>Delivery area</label>
+-                    {orderType !== "delivery" ? (
+-                      <div className={`${FIELD} mt-1.5 flex items-center text-ink-mid`} title="Only for delivery orders">
+-                        —
++                </div>
++
++                {/* ---------- right: totals, discount, payment ---------- */}
++                <div className="space-y-4 min-w-0">
++                  <div className="rounded-xl border border-line bg-raised/40 p-4 space-y-2 text-sm">
++                    <div className="flex justify-between text-ink-mid">
++                      <span>Subtotal</span>
++                      <span>Rs {fmt(subtotal)}</span>
++                    </div>
++                    {discount > 0 && (
++                      <div className="flex justify-between text-basil-400">
++                        <span>Discount{discountMode === "percent" ? ` (${discountRaw}%)` : ""}</span>
++                        <span>- Rs {fmt(discount)}</span>
+                       </div>
+-                    ) : (
+-                      <SelectField value={areaId} onChange={(e) => onAreaChange(e.target.value)} className="mt-1.5">
+-                        <option value="">Select delivery area…</option>
+-                        {areas.map((a) => (
+-                          <option key={a.id} value={a.id}>
+-                            {a.name} — Rs {a.delivery_fee}
+-                          </option>
+-                        ))}
+-                      </SelectField>
+                     )}
++                    {delivery > 0 && (
++                      <div className="flex justify-between text-ink-mid">
++                        <span>Delivery</span>
++                        <span>Rs {fmt(delivery)}</span>
++                      </div>
++                    )}
++                    {serviceCharge > 0 && (
++                      <div className="flex justify-between text-ink-mid">
++                        <span>{serviceLabel}</span>
++                        <span>Rs {fmt(serviceCharge)}</span>
++                      </div>
++                    )}
++                    <div className="flex justify-between text-ink-mid">
++                      <span>{taxLabel}</span>
++                      <span>Rs {fmt(tax)}</span>
++                    </div>
++                    {fee > 0 && (
++                      <div className="flex justify-between text-ink-mid">
++                        <span>FBR invoicing fee</span>
++                        <span>Rs {fmt(fee)}</span>
++                      </div>
++                    )}
++                    <div className="flex items-baseline justify-between border-t border-dashed border-line pt-2.5">
++                      <span className="font-mono text-base font-bold">Total due</span>
++                      <span className="font-mono text-xl font-bold">Rs {fmt(total)}</span>
++                    </div>
+                   </div>
+-                </div>
+-                <p className="mt-3 text-xs text-ink-faint">
+-                  {orderType === "dine_in"
+-                    ? `Dine in${tables.find((t) => t.id === tableId) ? ` · Table ${tables.find((t) => t.id === tableId)!.number}` : ""}`
+-                    : TYPE_TAG[orderType]}
+-                </p>
+-              </div>
+ 
+-              {/* totals */}
+-              <div className="border-t border-line pt-4 space-y-2 text-sm">
+-                <div className="flex justify-between text-ink-mid">
+-                  <span>Subtotal</span>
+-                  <span>Rs {fmt(subtotal)}</span>
+-                </div>
+-                {delivery > 0 && (
+-                  <div className="flex justify-between text-ink-mid">
+-                    <span>Delivery</span>
+-                    <span>Rs {fmt(delivery)}</span>
+-                  </div>
+-                )}
+-                {serviceCharge > 0 && (
+-                  <div className="flex justify-between text-ink-mid">
+-                    <span>{serviceLabel}</span>
+-                    <span>Rs {fmt(serviceCharge)}</span>
+-                  </div>
+-                )}
+-                <div className="flex justify-between text-ink-mid">
+-                  <span>{taxLabel}</span>
+-                  <span>Rs {fmt(tax)}</span>
+-                </div>
+-                {fee > 0 && (
+-                  <div className="flex justify-between text-ink-mid">
+-                    <span>FBR invoicing fee</span>
+-                    <span>Rs {fmt(fee)}</span>
+-                  </div>
+-                )}
+-                <div className="flex items-baseline justify-between border-t border-dashed border-line pt-2.5">
+-                  <span className="font-mono text-base font-bold">Total due</span>
+-                  <span className="font-mono text-lg font-bold">Rs {fmt(total)}</span>
+-                </div>
+-              </div>
++                  {settings.showDiscount && (
++                    <div>
++                      <label className={LABEL}>Discount</label>
++                      <div className="mt-1.5 flex items-center gap-2">
++                        <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-line text-xs font-bold">
++                          {(["amount", "percent"] as const).map((m) => (
++                            <button
++                              key={m}
++                              type="button"
++                              onClick={() => setDiscountMode(m)}
++                              className={`px-3 py-2.5 ${discountMode === m ? "bg-chili-500 text-white" : "bg-raised text-ink-mid hover:bg-hover"}`}
++                            >
++                              {m === "amount" ? "Rs" : "%"}
++                            </button>
++                          ))}
++                        </div>
++                        <input
++                          type="number"
++                          inputMode="decimal"
++                          min={0}
++                          value={discountInput}
++                          placeholder="0"
++                          onChange={(e) => setDiscountInput(e.target.value)}
++                          className={`${FIELD_BASE} flex-1`}
++                        />
++                        {discountInput && (
++                          <button
++                            type="button"
++                            onClick={() => setDiscountInput("")}
++                            aria-label="Remove discount"
++                            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-faint hover:text-crimson-400"
++                          >
++                            <X size={15} />
++                          </button>
++                        )}
++                      </div>
++                      {discount > 0 && (
++                        <p className="mt-1.5 text-xs text-ink-faint">
++                          Takes Rs {fmt(discount)} ({discountPercent}%) off the items, before tax.
++                        </p>
++                      )}
++                    </div>
++                  )}
+ 
+-              {/* split payment */}
+-              <div>
+-                <label className={LABEL}>Split payment</label>
+-                <div className="mt-2 space-y-2">
+-                  {payRows.map((r) => (
+-                    <div key={r.id} className="flex items-center gap-2">
+-                      <SelectField
+-                        value={r.method}
+-                        onChange={(e) => updatePayRow(r.id, { method: e.target.value })}
+-                        className="flex-1"
++                  <div>
++                    <label className={LABEL}>Payment</label>
++                    <div className="mt-2 space-y-2">
++                      {payRows.map((r) => (
++                        <div key={r.id} className="flex items-center gap-2">
++                          <SelectField
++                            value={r.method}
++                            onChange={(e) => updatePayRow(r.id, { method: e.target.value })}
++                            className="flex-1"
++                          >
++                            {paymentMethods.map((m) => (
++                              <option key={m}>{m}</option>
++                            ))}
++                          </SelectField>
++                          <input
++                            type="number"
++                            inputMode="decimal"
++                            min={0}
++                            value={r.amount}
++                            placeholder="0"
++                            onChange={(e) => updatePayRow(r.id, { amount: e.target.value })}
++                            className={`${FIELD_BASE} w-28 shrink-0`}
++                          />
++                          {payRows.length > 1 && (
++                            <button
++                              onClick={() => removePayRow(r.id)}
++                              aria-label="Remove payment method"
++                              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-faint hover:text-crimson-400"
++                            >
++                              <X size={15} />
++                            </button>
++                          )}
++                        </div>
++                      ))}
++                    </div>
++                    <div className="mt-2.5 flex items-center gap-2">
++                      <button
++                        type="button"
++                        onClick={addPayRow}
++                        className="rounded-lg border border-line bg-raised hover:bg-hover px-3 py-2 text-xs font-bold"
+                       >
+-                        {paymentMethods.map((m) => (
+-                          <option key={m}>{m}</option>
+-                        ))}
+-                      </SelectField>
+-                      <input
+-                        type="number"
+-                        inputMode="decimal"
+-                        min={0}
+-                        value={r.amount}
+-                        placeholder="0"
+-                        onChange={(e) => updatePayRow(r.id, { amount: e.target.value })}
+-                        className={`${FIELD_BASE} w-28 shrink-0`}
+-                      />
+-                      {payRows.length > 1 && (
++                        + Add payment method
++                      </button>
++                      {remaining > 0 && (
+                         <button
+-                          onClick={() => removePayRow(r.id)}
+-                          aria-label="Remove payment method"
+-                          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-faint hover:text-crimson-400"
++                          type="button"
++                          onClick={() => {
++                            const last = payRows[payRows.length - 1];
++                            updatePayRow(last.id, { amount: String((Number(last.amount) || 0) + remaining) });
++                          }}
++                          className="rounded-lg px-2 py-2 text-xs font-semibold text-basil-400 hover:underline"
+                         >
+-                          <X size={15} />
++                          Fill remaining
+                         </button>
+                       )}
+                     </div>
+-                  ))}
+-                </div>
+-                <div className="mt-2.5 flex items-center gap-2">
+-                  <button
+-                    type="button"
+-                    onClick={addPayRow}
+-                    className="rounded-lg border border-line bg-raised hover:bg-hover px-3 py-2 text-xs font-bold"
+-                  >
+-                    + Add payment method
+-                  </button>
+-                  {remaining > 0 && (
+-                    <button
+-                      type="button"
+-                      onClick={() => {
+-                        const last = payRows[payRows.length - 1];
+-                        updatePayRow(last.id, { amount: String((Number(last.amount) || 0) + remaining) });
+-                      }}
+-                      className="rounded-lg px-2 py-2 text-xs font-semibold text-basil-400 hover:underline"
+-                    >
+-                      Fill remaining
+-                    </button>
+-                  )}
++                    <div className="mt-3 flex items-center justify-between rounded-lg bg-raised/60 px-3 py-2.5 text-sm font-semibold">
++                      <span className="text-ink-mid">Received Rs {fmt(paid)}</span>
++                      {remaining > 0 ? (
++                        <span className="text-crimson-400">Remaining Rs {fmt(remaining)}</span>
++                      ) : remaining < 0 ? (
++                        <span className="text-basil-400">Return Rs {fmt(-remaining)}</span>
++                      ) : (
++                        <span className="text-basil-400">Paid in full</span>
++                      )}
++                    </div>
++                    {remaining > 0 && paid > 0 && (
++                      <p className="mt-1.5 text-xs text-turmeric-400">The rest is left as an unpaid balance (see Unpaid Orders).</p>
++                    )}
++                  </div>
+                 </div>
+               </div>
+ 
+-              <div className="border-t border-dashed border-line pt-3 text-xs font-semibold">
+-                {remaining > 0 ? (
+-                  <span className="text-crimson-400">Remaining: Rs {fmt(remaining)}</span>
+-                ) : remaining < 0 ? (
+-                  <span className="text-basil-400">Change: Rs {fmt(-remaining)}</span>
+-                ) : (
+-                  <span className="text-basil-400">Paid in full</span>
+-                )}
+-                {remaining > 0 && paid > 0 && (
+-                  <span className="ml-2 font-normal text-turmeric-400">— left as an unpaid balance (see Unpaid Orders)</span>
+-                )}
+-              </div>
+-
+-              {error && <p className="text-crimson-400 text-sm">{error}</p>}
++              {error && <p className="mt-4 text-crimson-400 text-sm">{error}</p>}
+             </div>
+ 
+             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+diff --git a/lib/posPrint.ts b/lib/posPrint.ts
+index 69136c4..b4c79c3 100644
+--- a/lib/posPrint.ts
++++ b/lib/posPrint.ts
+@@ -47,7 +47,14 @@ export type SaleSnapshot = {
+   orderTypeLabel: string; // e.g. "Dine in · Table 4", "Takeaway"
+   customerName: string;
+   customerPhone: string;
+-  items: { name: string; qty: number; price: number }[];
++  items: { name: string; qty: number; price: number; note?: string }[];
++  /** order-level instructions typed in the checkout popup */
++  orderNote?: string;
++  /** delivery orders only: where it goes */
++  deliveryAddress?: string;
++  deliveryArea?: string;
++  /** money taken off the items before tax (0 / absent when none) */
++  discount?: number;
+   subtotal: number;
+   delivery: number;
+   taxLabel: string; // e.g. "Cash tax (17%)"
+@@ -108,6 +115,21 @@ class Buf {
+   }
+ }
+ 
++/** Order-level instructions + delivery details, shared by the kitchen slip and the invoice. */
++function printOrderExtras(b: Buf, s: SaleSnapshot, big: boolean) {
++  if (s.deliveryArea || s.deliveryAddress) {
++    b.bold(true).line("DELIVER TO").bold(false);
++    if (s.deliveryAddress) for (const l of wrap(s.deliveryAddress, b.cols)) b.line(l);
++    if (s.deliveryArea) b.line(`Area: ${s.deliveryArea}`);
++  }
++  if (s.orderNote) {
++    b.bold(true).line("ORDER NOTE").bold(false);
++    if (big) b.bold(true);
++    for (const l of wrap(s.orderNote, b.cols)) b.line(l);
++    if (big) b.bold(false);
++  }
++}
++
+ const colsFor = (paper: string) => (/58/.test(paper) ? 32 : 48);
+ 
+ function wrap(s: string, width: number): string[] {
+@@ -126,12 +148,20 @@ function wrap(s: string, width: number): string[] {
+ export function buildKitchenSlip(s: SaleSnapshot, orderNo: string | number): number[] {
+   const b = new Buf(colsFor(s.paper));
+   b.align("center").bold(true).size(true).line("KITCHEN").size(false).bold(false);
+-  b.bold(true).line(`Order #${orderNo}`).bold(false);
++  b.bold(true).size(true).line(`#${orderNo}`).size(false).bold(false);
+   b.line(s.orderTypeLabel).line(new Date().toLocaleString());
+   b.align("left").rule();
+-  b.bold(true).size(true);
+-  for (const it of s.items) for (const l of wrap(`${it.qty} x ${it.name}`, Math.floor(b.cols / 2))) b.line(l);
+-  b.size(false).bold(false).rule();
++  for (const it of s.items) {
++    b.bold(true).size(true);
++    for (const l of wrap(`${it.qty} x ${it.name}`, Math.floor(b.cols / 2))) b.line(l);
++    b.size(false);
++    if (it.note) for (const l of wrap(`  >> ${it.note}`, b.cols)) b.line(l);
++    b.bold(false);
++  }
++  b.rule();
++  printOrderExtras(b, s, true);
++  if (s.deliveryArea || s.deliveryAddress || s.orderNote) b.rule();
++  if (s.customerName || s.customerPhone) b.line([s.customerName, s.customerPhone].filter(Boolean).join(" "));
+   return b.cut().bytes;
+ }
+ 
+@@ -163,9 +193,11 @@ export function buildInvoice(s: SaleSnapshot, orderNo: string | number): number[
+   rule();
+ 
+   // ---- order info ----
+-  b.row(`Order #${orderNo}`, new Date().toLocaleString());
++  b.bold(true).line(`Order #${orderNo}`).bold(false);
++  b.line(new Date().toLocaleString());
+   b.line(s.orderTypeLabel).line(`Cashier: ${s.cashier}`);
+   if (s.customerName || s.customerPhone) b.line(`Customer: ${[s.customerName, s.customerPhone].filter(Boolean).join(" ")}`);
++  printOrderExtras(b, s, false);
+   rule();
+ 
+   // ---- items ----
+@@ -173,12 +205,14 @@ export function buildInvoice(s: SaleSnapshot, orderNo: string | number): number[
+   for (const it of s.items) {
+     const lines = wrap(`${it.qty} x ${it.name}`, b.cols - 12);
+     lines.forEach((l, i) => (i === lines.length - 1 ? b.row(l, money(it.price * it.qty)) : b.line(l)));
++    if (it.note) for (const l of wrap(`  >> ${it.note}`, b.cols)) b.line(l);
+   }
+   b.bold(false);
+   rule();
+ 
+   // ---- totals ----
+   b.row("Subtotal", money(s.subtotal));
++  if ((s.discount ?? 0) > 0) b.row("Discount", `-${money(s.discount!)}`);
+   if (s.delivery > 0) b.row("Delivery", money(s.delivery));
+   if ((s.serviceCharge ?? 0) > 0) b.row(s.serviceLabel ?? "Service charge", money(s.serviceCharge!));
+   if (s.tax > 0) b.row(s.taxLabel, money(s.tax));
+diff --git a/lib/sales/extras.ts b/lib/sales/extras.ts
+index 0863dfc..ecff9f9 100644
+--- a/lib/sales/extras.ts
++++ b/lib/sales/extras.ts
+@@ -4,7 +4,21 @@ import type { SupabaseClient } from "@supabase/supabase-js";
+  *  the dine-in service charge and the FBR invoicing fee. create_sale() is a database function we
+  *  don't change, so they are applied right after it succeeds: the sale's total, its paid/unpaid
+  *  status and (when migration 0016 is applied) the two breakdown columns are updated together. */
+-export type SaleExtras = { serviceCharge?: unknown; fbrFee?: unknown };
++export type SaleExtras = {
++  serviceCharge?: unknown;
++  fbrFee?: unknown;
++  /** money taken off the item subtotal (before tax) */
++  discount?: unknown;
++  discountPercent?: unknown;
++  /** tax that create_sale() charged on the discounted part; taken off the total again */
++  taxReduction?: unknown;
++  orderNote?: unknown;
++  itemNotes?: unknown;
++  /** set for sales made on a desktop device: D<deviceNo>-<seq> */
++  displayId?: string | null;
++  deviceId?: string | null;
++  deviceSeq?: number | null;
++};
+ export type SaleBase = { orderNo: number | string | null; total: number; status: string; balance: number };
+ 
+ const money = (v: unknown) => {
+@@ -12,6 +26,20 @@ const money = (v: unknown) => {
+   return Number.isFinite(n) && n > 0 && n < 10_000_000 ? Math.round(n * 100) / 100 : 0;
+ };
+ 
++const cleanText = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
++
++/** Item notes arrive as [{productId, name, note}]; keep only well-formed, non-empty ones. */
++export function cleanItemNotes(v: unknown): { productId: string; name: string; note: string }[] {
++  if (!Array.isArray(v)) return [];
++  return v
++    .map((x) => ({ productId: cleanText(x?.productId, 64), name: cleanText(x?.name, 160), note: cleanText(x?.note, 300) }))
++    .filter((x) => x.note)
++    .slice(0, 100);
++}
++
++/** One lookup and one UPDATE for everything the POS adds on top of create_sale(): service charge,
++ *  FBR fee, discount, notes and the device order id. Falls back to the older column set when a
++ *  migration has not been applied yet, so a sale is never lost to a missing column. */
+ export async function applySaleExtras(
+   admin: SupabaseClient,
+   restaurantId: string,
+@@ -21,8 +49,15 @@ export async function applySaleExtras(
+ ): Promise<SaleBase & { saleId: string | null }> {
+   const serviceCharge = money(extras.serviceCharge);
+   const fbrFee = money(extras.fbrFee);
+-  const extra = serviceCharge + fbrFee;
++  const discount = money(extras.discount);
++  const taxReduction = discount > 0 ? money(extras.taxReduction) : 0;
++  const discountPercent = discount > 0 ? Math.min(100, money(extras.discountPercent)) : 0;
++  const orderNote = cleanText(extras.orderNote, 500);
++  const itemNotes = cleanItemNotes(extras.itemNotes);
++  const displayId = extras.displayId ?? null;
++  const net = serviceCharge + fbrFee - discount - taxReduction;
+ 
++  const hasMeta = !!(orderNote || itemNotes.length || displayId || discount > 0);
+   let saleId: string | null = null;
+   if (base.orderNo != null && base.orderNo !== "") {
+     const { data: row } = await admin
+@@ -35,14 +70,29 @@ export async function applySaleExtras(
+       .maybeSingle();
+     saleId = row?.id ?? null;
+   }
+-  if (extra <= 0 || !saleId) return { ...base, saleId };
++  if (!saleId || (net === 0 && !hasMeta)) return { ...base, saleId };
+ 
+-  const total = Math.round((Number(base.total) + extra) * 100) / 100;
++  const total = Math.max(0, Math.round((Number(base.total) + net) * 100) / 100);
+   const status = base.status === "cancelled" ? base.status : paid + 0.005 >= total ? base.status : "unpaid";
+-  const patch = { total, status };
++  const core = { total, status };
++  const charges = { service_charge: serviceCharge, fbr_fee: fbrFee };
++  const meta = {
++    discount_amount: discount,
++    discount_percent: discountPercent,
++    order_note: orderNote || null,
++    item_notes: itemNotes,
++    display_id: displayId,
++    device_id: extras.deviceId ?? null,
++    device_seq: extras.deviceSeq ?? null,
++  };
+ 
+-  let { error } = await admin.from("sales").update({ ...patch, service_charge: serviceCharge, fbr_fee: fbrFee }).eq("id", saleId);
+-  if (error) ({ error } = await admin.from("sales").update(patch).eq("id", saleId)); // migration 0016 not applied yet
++  // newest schema first, then step back so older databases still work
++  const { display_id, device_id, device_seq, ...notesOnly } = meta;
++  let { error } = await admin.from("sales").update({ ...core, ...charges, ...meta }).eq("id", saleId);
++  // e.g. the device order id is already taken (app reinstalled): keep the sale, drop only the id
++  if (error) ({ error } = await admin.from("sales").update({ ...core, ...charges, ...notesOnly }).eq("id", saleId));
++  if (error) ({ error } = await admin.from("sales").update({ ...core, ...charges }).eq("id", saleId));
++  if (error) ({ error } = await admin.from("sales").update(core).eq("id", saleId));
+   if (error) {
+     console.error("sale extras not applied", error);
+     return { ...base, saleId };
+@@ -50,6 +100,20 @@ export async function applySaleExtras(
+   return { orderNo: base.orderNo, total, status, balance: Math.max(0, Math.round((total - paid) * 100) / 100), saleId };
+ }
+ 
++/** Clamp a requested discount to the item subtotal and work out the tax create_sale() will have
++ *  charged on the part that was discounted (the discount comes off BEFORE tax). */
++export function discountTaxReduction(
++  items: { price?: unknown; qty?: unknown }[],
++  requested: unknown,
++  taxPct: number
++): { discount: number; taxReduction: number } {
++  const sub = items.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.qty) || 0), 0);
++  const discount = Math.min(money(requested), sub);
++  if (discount <= 0) return { discount: 0, taxReduction: 0 };
++  const taxReduction = Math.round((sub * taxPct) / 100) - Math.round(((sub - discount) * taxPct) / 100);
++  return { discount, taxReduction: Math.max(0, taxReduction) };
++}
++
+ export type CustomerUpdate = { name?: unknown; phone?: unknown; address?: unknown; areaId?: unknown };
+ 
+ /** The cashier edited an existing customer's details in the checkout popup: save them. Never
+diff --git a/supabase/migrations/0017_discount_notes_device_ids.sql b/supabase/migrations/0017_discount_notes_device_ids.sql
+new file mode 100644
+index 0000000..70de002
+--- /dev/null
++++ b/supabase/migrations/0017_discount_notes_device_ids.sql
+@@ -0,0 +1,49 @@
++-- =====================================================================
++-- RESTRO PRO - Supabase migration 0017
++-- 1. Discounts: sales.discount_amount / discount_percent, and an admin switch
++--    restaurant_settings.show_discount (Settings -> POS controls) that hides the discount
++--    field in the checkout popup.
++-- 2. Order instructions + item notes: sales.order_note, sales.item_notes (json list of
++--    {productId, name, note}) and restaurant_settings.note_presets (the quick-note chips shown
++--    when a cashier taps an item in the order panel; the owner edits and orders them in Settings).
++-- 3. Device-based order IDs: every activated desktop device gets a short number (devices.device_no,
++--    1, 2, 3 ... per restaurant). A sale made on it is labelled D<device_no>-<counter>, for example
++--    D2-0045 (stored in sales.display_id). The counter only ever grows on that one device, so
++--    offline sales from several devices can never collide. Safe to run twice.
++-- =====================================================================
++
++alter table public.sales add column if not exists discount_amount numeric not null default 0;
++alter table public.sales add column if not exists discount_percent numeric not null default 0;
++alter table public.sales add column if not exists order_note text;
++alter table public.sales add column if not exists item_notes jsonb not null default '[]'::jsonb;
++alter table public.sales add column if not exists display_id text;
++alter table public.sales add column if not exists device_id uuid;
++alter table public.sales add column if not exists device_seq bigint;
++
++alter table public.restaurant_settings add column if not exists show_discount boolean not null default true;
++alter table public.restaurant_settings add column if not exists note_presets jsonb not null default '["Extra spicy","No vegetables","Extra mayo","No onion"]'::jsonb;
++
++alter table public.devices add column if not exists device_no integer;
++
++-- number the devices that already exist (oldest first, per restaurant)
++update public.devices d set device_no = r.rn
++  from (select id, row_number() over (partition by restaurant_id order by created_at, id) as rn from public.devices) r
++  where r.id = d.id and d.device_no is null;
++
++-- new devices get the next number automatically
++create or replace function public.assign_device_no() returns trigger language plpgsql as $$
++begin
++  if new.device_no is null then
++    select coalesce(max(device_no), 0) + 1 into new.device_no from public.devices where restaurant_id = new.restaurant_id;
++  end if;
++  return new;
++end $$;
++drop trigger if exists trg_assign_device_no on public.devices;
++create trigger trg_assign_device_no before insert on public.devices for each row execute function public.assign_device_no();
++
++create unique index if not exists devices_restaurant_device_no_key on public.devices (restaurant_id, device_no);
++-- the same device can never use the same counter twice
++create unique index if not exists sales_device_seq_key on public.sales (device_id, device_seq) where device_id is not null;
++create unique index if not exists sales_display_id_key on public.sales (restaurant_id, display_id) where display_id is not null;
++
++notify pgrst, 'reload schema';

@@ -25,6 +25,8 @@ type Settings = {
   fbr_environment: string;
   fbr_fee: number;
   receipt_template: string;
+  show_discount?: boolean;
+  note_presets?: string[];
 };
 
 /** Desktop app: pull the freshly saved settings / lists into this computer straight away (the POS
@@ -157,6 +159,7 @@ export function SettingsClient({
   const [areaName, setAreaName] = useState("");
   const [areaFee, setAreaFee] = useState("0");
   const [tablesError, setTablesError] = useState("");
+  const [newPreset, setNewPreset] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -185,6 +188,18 @@ export function SettingsClient({
       setLoading(false);
     })();
   }, []);
+
+  function addPreset() {
+    const t = newPreset.trim();
+    if (!t || !s) return;
+    const list = s.note_presets ?? [];
+    if (list.some((x) => x.toLowerCase() === t.toLowerCase())) {
+      setNewPreset("");
+      return;
+    }
+    set("note_presets", [...list, t]);
+    setNewPreset("");
+  }
 
   async function loadMethods() {
     const res = await fetch("/api/payment-methods");
@@ -595,6 +610,7 @@ export function SettingsClient({
                       cardTaxRate: s.card_tax_rate,
                       posShowKitchenPrint: s.pos_show_kitchen_print,
                       posShowPrintInvoice: s.pos_show_print_invoice,
+                      showDiscount: s.show_discount !== false,
                     },
                     "POS controls saved"
                   )
@@ -617,6 +633,54 @@ export function SettingsClient({
             </p>
             <ToggleRow label='Show "Kitchen Print" button' on={s.pos_show_kitchen_print} onChange={(v) => set("pos_show_kitchen_print", v)} />
             <ToggleRow label='Show "Print Invoice" button' on={s.pos_show_print_invoice} onChange={(v) => set("pos_show_print_invoice", v)} />
+            <ToggleRow label="Allow discounts at checkout" on={s.show_discount !== false} onChange={(v) => set("show_discount", v)} />
+          </Panel>
+        </div>
+
+        {/* Quick notes for order items */}
+        <div id="item-notes" className="scroll-mt-20">
+          <Panel
+            title="Item note shortcuts"
+            subtitle="Quick-pick chips shown when a cashier taps an item in the order panel"
+            loading={savingSection === "item-notes"}
+            footer={
+              <SaveButton
+                loading={savingSection === "item-notes"}
+                onClick={() => save("item-notes", { notePresets: s.note_presets ?? [] }, "Note shortcuts saved")}
+              >
+                Save shortcuts
+              </SaveButton>
+            }
+          >
+            <ReorderableList
+              items={(s.note_presets ?? []).map((t) => ({ id: t, text: t }))}
+              onChange={(next) => set("note_presets", next.map((x) => x.text))}
+              renderRow={(item) => (
+                <>
+                  <span>{item.text}</span>
+                  <button
+                    onClick={() => set("note_presets", (s.note_presets ?? []).filter((x) => x !== item.text))}
+                    className="text-ink-faint hover:text-crimson-400 text-xs"
+                  >
+                    ✕
+                  </button>
+                </>
+              )}
+            />
+            {(s.note_presets ?? []).length === 0 && <p className="text-xs text-ink-faint">No shortcuts yet.</p>}
+            <div className="mt-3 flex gap-2">
+              <input
+                value={newPreset}
+                onChange={(e) => setNewPreset(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addPreset()}
+                placeholder="e.g. Extra Spices"
+                className="input flex-1"
+              />
+              <button onClick={addPreset} className="rounded-lg border border-line bg-raised px-4 text-sm font-semibold hover:bg-hover">
+                Add
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] text-ink-faint">Drag or use the arrows to change the order shown in the POS.</p>
           </Panel>
         </div>
 

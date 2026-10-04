@@ -12,7 +12,7 @@ const PAGE = 50; // customers (and order-history rows) per page
 type Area = { id: string; name: string };
 type Customer = { id: string; name: string; phone: string; address: string | null; area_id: string | null; delivery_areas?: { name: string } | null };
 type SaleItem = { name: string; unit_price: number; quantity: number };
-type Sale = { id: string; order_no: number; order_type: string; customer_id: string | null; total: number; status: string; created_at: string; sale_items: SaleItem[] };
+type Sale = { id: string; order_no: number; display_id?: string | null; order_type: string; customer_id: string | null; total: number; status: string; created_at: string; sale_items: SaleItem[] };
 type Stat = { orders: number; spend: number; lastOrderAt: string | null };
 
 export function CustomersClient() {
@@ -181,7 +181,7 @@ export function CustomersClient() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <KpiCard label="Total orders" value={stats.totalOrders} />
           <KpiCard label="Total spend" value={fmtMoney(stats.totalSpend)} />
-          <KpiCard label="Last order" value={orders[0] ? `#${orders[0].order_no}` : stats.lastOrderAt ? fmtDateTime(stats.lastOrderAt) : "—"} />
+          <KpiCard label="Last order" value={orders[0] ? `#${orders[0].display_id ?? orders[0].order_no}` : stats.lastOrderAt ? fmtDateTime(stats.lastOrderAt) : "—"} />
         </div>
 
         <Panel loading={ordersLoading && orders.length === 0}>
@@ -200,7 +200,7 @@ export function CustomersClient() {
               <tbody>
                 {orders.map((o) => (
                   <tr key={o.id} className="border-b border-line last:border-0">
-                    <Td className="font-mono font-medium">#{o.order_no}</Td>
+                    <Td className="font-mono font-medium">#{o.display_id ?? o.order_no}</Td>
                     <Td className="text-ink-mid">{fmtDateTime(o.created_at)}</Td>
                     <Td>
                       <Badge>{o.order_type.replace("_", " ")}</Badge>

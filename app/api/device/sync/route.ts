@@ -69,8 +69,12 @@ export async function GET(req: Request) {
     settings = created;
   }
 
+  // This device's number (D<n>-0001 order ids). Absent until migration 0017 is applied.
+  const { data: devRow } = await admin.from("devices").select("device_no").eq("id", auth.device.deviceId).maybeSingle();
+
   return NextResponse.json({
     serverTime: new Date().toISOString(),
+    deviceNo: devRow?.device_no ?? null,
     restaurant: restaurant.data,
     settings: settings ?? {},
     products: products.data ?? [],

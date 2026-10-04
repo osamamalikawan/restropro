@@ -27,7 +27,7 @@ type Product = {
   // joined by /api/products; supabase returns an object for many-to-one, handle an array defensively
   menu_categories?: { name: string } | { name: string }[] | null;
 };
-type CartLine = { productId: string; name: string; price: number; qty: number };
+type CartLine = { productId: string; name: string; price: number; qty: number; note?: string };
 type Table = { id: string; number: string; seats: number };
 type Area = { id: string; name: string; delivery_fee: number };
 type OrderType = "dine_in" | "takeaway" | "delivery";
@@ -42,6 +42,8 @@ type PosSettings = {
   fbr: { enabled: boolean; ntn: string; strn: string; posId: string } | null;
   showKitchenPrint: boolean;
   showPrintInvoice: boolean;
+  showDiscount: boolean; // Settings -> POS controls -> Allow discounts at checkout
+  notePresets: string[]; // quick-note chips for order items (Settings -> Item note shortcuts)
   receiptHeader: string;
   receiptFooter: string;
   paper: string;
@@ -121,6 +123,8 @@ export function PosClient({
     fbr: null,
     showKitchenPrint: true,
     showPrintInvoice: true,
+    showDiscount: true,
+    notePresets: [],
     receiptHeader: "",
     receiptFooter: "",
     paper: "80",
@@ -140,6 +144,11 @@ export function PosClient({
   const [custName, setCustName] = useState("");
   const [custPhone, setCustPhone] = useState("");
   const [custAddress, setCustAddress] = useState("");
+  const [orderNote, setOrderNote] = useState("");
+  const [discountMode, setDiscountMode] = useState<"amount" | "percent">("amount");
+  const [discountInput, setDiscountInput] = useState("");
+  const [noteFor, setNoteFor] = useState<string | null>(null); // productId whose note popup is open
+  const [noteDraft, setNoteDraft] = useState("");
   const [pendingAction, setPendingAction] = useState<SaveAction | null>(null);
   const [printNote, setPrintNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -205,6 +214,8 @@ export function PosClient({
             : null,
           showKitchenPrint: st.pos_show_kitchen_print !== false,
           showPrintInvoice: st.pos_show_print_invoice !== false,
+          showDiscount: st.show_discount !== false,
+          notePresets: Array.isArray(st.note_presets) ? st.note_presets.filter((x: unknown) => typeof x === "string") : [],
           receiptHeader: st.receipt_header ?? "",
           receiptFooter: st.receipt_footer ?? "",
           paper: String(st.paper_width ?? "80"),
@@ -283,6 +294,23 @@ export function PosClient({
         .filter((l) => l.qty > 0)
     );
   }
+  function openNote(productId: string) {
+    setNoteFor(productId);
+    setNoteDraft(cart.find((l) => l.productId === productId)?.note ?? "");
+  }
+  function togglePreset(text: string) {
+    setNoteDraft((d) => {
+      const parts = d.split(",").map((x) => x.trim()).filter(Boolean);
+      const has = parts.some((x) => x.toLowerCase() === text.toLowerCase());
+      return (has ? parts.filter((x) => x.toLowerCase() !== text.toLowerCase()) : [...parts, text]).join(", ");
+    });
+  }
+  function saveNote() {
+    const text = noteDraft.trim().slice(0, 300);
+    setCart((prev) => prev.map((l) => (l.productId === noteFor ? { ...l, note: text || undefined } : l)));
+    setNoteFor(null);
+  }
+
   function selectOrderType(t: OrderType) {
     setOrderType(t);
     if (t !== "dine_in") setTableId("");
@@ -368,12 +396,20 @@ export function PosClient({
   const isCash = /cash/i.test(primaryMethod);
   const taxPct = isCash ? settings.cashTaxRate : settings.cardTaxRate;
   const taxLabel = `${isCash ? "Cash" : "Card"} tax (${taxPct}%)`;
-  const tax = Math.round((subtotal * taxPct) / 100);
+  // Discount comes off the item subtotal BEFORE tax and service charge.
+  const discountRaw = settings.showDiscount ? Math.max(0, Number(discountInput) || 0) : 0;
+  const discount =
+    discountMode === "percent"
+      ? Math.round((subtotal * Math.min(100, discountRaw)) / 100)
+      : Math.min(Math.round(discountRaw), subtotal);
+  const discountPercent = subtotal > 0 ? Math.round((discount / subtotal) * 10000) / 100 : 0;
+  const taxable = subtotal - discount;
+  const tax = Math.round((taxable * taxPct) / 100);
   const fee = settings.fbrFee;
-  // Default dine-in service charge (Settings -> Restaurant profile), on the item subtotal.
-  const serviceCharge = orderType === "dine_in" ? Math.round((subtotal * settings.serviceChargeRate) / 100) : 0;
+  // Default dine-in service charge (Settings -> Restaurant profile), on the discounted item subtotal.
+  const serviceCharge = orderType === "dine_in" ? Math.round((taxable * settings.serviceChargeRate) / 100) : 0;
   const serviceLabel = `Service charge (${settings.serviceChargeRate}%)`;
-  const total = subtotal + tax + delivery + fee + serviceCharge;
+  const total = taxable + tax + delivery + fee + serviceCharge;
   const paid = payRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const remaining = total - paid;
 
@@ -430,6 +466,10 @@ export function PosClient({
       setError("Select a table first");
       return;
     }
+    if (orderType === "delivery" && !areaId) {
+      setError("Select a delivery area first");
+      return;
+    }
     if (payRows.some((r) => r.amount !== "" && (Number.isNaN(Number(r.amount)) || Number(r.amount) < 0))) {
       setError("Enter valid payment amounts");
       return;
@@ -447,7 +487,11 @@ export function PosClient({
       orderTypeLabel: orderType === "dine_in" ? (tb ? `Dine in - Table ${tb.number}` : "Dine in") : TYPE_TAG[orderType],
       customerName: custName.trim(),
       customerPhone: custPhone.trim(),
-      items: cart.map((l) => ({ name: l.name, price: l.price, qty: l.qty })),
+      items: cart.map((l) => ({ name: l.name, price: l.price, qty: l.qty, note: l.note })),
+      orderNote: orderNote.trim(),
+      deliveryAddress: orderType === "delivery" ? custAddress.trim() : "",
+      deliveryArea: orderType === "delivery" ? areas.find((a) => a.id === areaId)?.name ?? "" : "",
+      discount,
       subtotal,
       delivery,
       taxLabel,
@@ -491,6 +535,10 @@ export function PosClient({
         serviceCharge,
         fbrFee: fee,
         customerUpdate,
+        discount,
+        discountPercent,
+        orderNote: orderNote.trim() || undefined,
+        itemNotes: cart.filter((l) => l.note).map((l) => ({ productId: l.productId, name: l.name, note: l.note })),
       },
       total,
       paidNow
@@ -504,18 +552,9 @@ export function PosClient({
     saleIdRef.current = crypto.randomUUID(); // next sale gets a fresh id; a failed attempt above keeps its id so a retry can't double-post
     const data = { orderNo: result.orderNo ?? "", total: result.total ?? total, balance: result.balance ?? 0, offline: !!result.offline };
 
-    // The sale is saved at this point — a printer problem must never undo or block it.
-    let note = "";
-    if (action !== "save") {
-      try {
-        await printSale(action, snap, data.orderNo);
-      } catch (e) {
-        note = `Sale saved, but the ${action === "kitchen" ? "kitchen slip" : "invoice"} didn't print: ${
-          e instanceof Error ? e.message : String(e)
-        }`;
-      }
-    }
-    setPrintNote(note);
+    // The sale is saved at this point. Close the checkout straight away; printing happens after, and
+    // a printer problem must never undo or block the sale.
+    setPrintNote("");
     setSubmitting(false);
     setPendingAction(null);
     setLastReceipt({ orderNo: data.orderNo, total: data.total, balance: data.balance ?? 0, offline: data.offline });
@@ -523,8 +562,21 @@ export function PosClient({
     setIsResumed(false);
     setCheckoutOpen(false);
     setSheetOpen(false);
+    setOrderNote("");
+    setDiscountInput("");
+    setDiscountMode("amount");
     clearCustomer(); // next sale starts with no customer selected
     setPayRows([{ id: 1, method: paymentMethods[0] ?? "Cash", amount: "" }]);
+
+    if (action !== "save") {
+      try {
+        await printSale(action, snap, data.orderNo);
+      } catch (e) {
+        setPrintNote(
+          `Sale saved, but the ${action === "kitchen" ? "kitchen slip" : "invoice"} didn't print: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+    }
   }
 
   const ORDER_TYPES: { id: OrderType; label: string; icon: string }[] = [
@@ -814,27 +866,21 @@ export function PosClient({
           </SelectField>
         )}
 
-        {orderType === "delivery" && (
-          <SelectField value={areaId} onChange={(e) => onAreaChange(e.target.value)} className="mb-3">
-            <option value="">Select delivery area…</option>
-            {areas.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} — Rs {a.delivery_fee}
-              </option>
-            ))}
-          </SelectField>
-        )}
-
         <div className="rp-scroll flex-1 min-h-[80px] overflow-y-auto">
           {cart.length === 0 ? (
             <p className="py-4 text-sm text-ink-faint">Tap a product to start an order.</p>
           ) : (
             cart.map((l) => (
               <div key={l.productId} className="flex items-center gap-2 border-b border-line-soft py-3 last:border-b-0">
-                <div className="min-w-0 flex-1">
+                <button type="button" onClick={() => openNote(l.productId)} className="min-w-0 flex-1 text-left" title="Tap to add a note">
                   <div className="text-sm font-semibold leading-snug">{l.name}</div>
                   <div className="font-mono text-[11px] text-ink-faint">Rs {fmt(l.price)} each</div>
-                </div>
+                  {l.note ? (
+                    <div className="mt-0.5 text-[11px] italic leading-snug text-turmeric-400">{l.note}</div>
+                  ) : (
+                    <div className="mt-0.5 text-[11px] text-ink-faint/70">+ add note</div>
+                  )}
+                </button>
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => changeQty(l.productId, -1)}
@@ -879,7 +925,9 @@ export function PosClient({
             <span className="font-mono text-base font-bold">Total (before tax)</span>
             <span className="font-mono text-lg font-bold">Rs {fmt(subtotal + delivery + serviceCharge)}</span>
           </div>
-          <p className="text-[11px] text-ink-faint">Tax and customer info are set at checkout.</p>
+          <p className="text-[11px] text-ink-faint">
+            {orderType === "delivery" ? "Delivery area, tax and customer info are set at checkout." : "Tax and customer info are set at checkout."}
+          </p>
         </div>
 
         <div className="mt-4 flex gap-2">
@@ -913,6 +961,69 @@ export function PosClient({
         </div>
       </aside>
 
+      {/* ================= item note popup ================= */}
+      {noteFor && (
+        <div
+          className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm sm:p-4"
+          onMouseDown={(e) => e.target === e.currentTarget && setNoteFor(null)}
+        >
+          <div className="w-full sm:max-w-[420px] rounded-t-2xl sm:rounded-2xl border border-line bg-surface p-5 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-lg font-semibold">{cart.find((l) => l.productId === noteFor)?.name ?? "Item note"}</h3>
+              <button
+                onClick={() => setNoteFor(null)}
+                aria-label="Close"
+                className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-raised text-ink-mid hover:text-ink-strong"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {settings.notePresets.length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {settings.notePresets.map((t) => {
+                  const on = noteDraft.split(",").some((x) => x.trim().toLowerCase() === t.toLowerCase());
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => togglePreset(t)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        on ? "border-chili-500 bg-chili-500/15 text-chili-400" : "border-line bg-raised text-ink-mid hover:border-chili-500/60"
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <textarea
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              rows={3}
+              maxLength={300}
+              autoFocus
+              placeholder="Type a note for the kitchen…"
+              className={`${FIELD} mt-4 resize-none`}
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              {noteDraft && (
+                <button
+                  type="button"
+                  onClick={() => setNoteDraft("")}
+                  className="rounded-xl border border-line bg-raised px-4 py-2.5 text-sm font-semibold hover:bg-hover"
+                >
+                  Clear
+                </button>
+              )}
+              <button type="button" onClick={saveNote} className="rounded-xl bg-basil-500 px-6 py-2.5 text-sm font-bold text-white hover:bg-basil-600">
+                Save note
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ================= checkout modal ================= */}
       {checkoutOpen && (
         <div
@@ -921,9 +1032,18 @@ export function PosClient({
             if (e.target === e.currentTarget && !submitting) setCheckoutOpen(false);
           }}
         >
-          <div className="relative flex w-full sm:max-w-[460px] max-h-[94dvh] flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-line bg-surface shadow-2xl">
+          <div className="relative flex w-full sm:max-w-[820px] max-h-[94dvh] flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-line bg-surface shadow-2xl">
             <div className="flex items-center justify-between border-b border-line px-5 py-4">
-              <h3 className="font-display text-lg font-semibold">Checkout</h3>
+              <div>
+                <h3 className="font-display text-lg font-semibold">Checkout</h3>
+                <p className="text-xs text-ink-faint">
+                  {orderType === "dine_in"
+                    ? `Dine in${tables.find((t) => t.id === tableId) ? ` · Table ${tables.find((t) => t.id === tableId)!.number}` : ""}`
+                    : TYPE_TAG[orderType]}
+                  {" · "}
+                  {itemCount} item{itemCount === 1 ? "" : "s"}
+                </p>
+              </div>
               <button
                 onClick={() => !submitting && setCheckoutOpen(false)}
                 aria-label="Close checkout"
@@ -933,204 +1053,266 @@ export function PosClient({
               </button>
             </div>
 
-            <div className="rp-scroll flex-1 overflow-y-auto overflow-x-hidden px-5 py-4 space-y-4">
-              {/* customer */}
-              <div>
-                <label className={LABEL}>Customer</label>
-                <div className="relative mt-2">
-                  <input
-                    value={custSearch}
-                    onChange={(e) => searchCustomers(e.target.value)}
-                    placeholder="Search by name or phone…"
-                    className={FIELD}
-                  />
-                  {custResults.length > 0 && (
-                    <div className="absolute inset-x-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-line bg-surface shadow-xl">
-                      {custResults.map((c) => (
-                        <button
-                          key={c.id}
-                          onClick={() => selectCustomer(c)}
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-hover border-b border-line last:border-b-0"
-                        >
-                          {c.name} <span className="text-ink-faint">· {c.phone}</span>
+            <div className="rp-scroll flex-1 overflow-y-auto overflow-x-hidden px-5 py-4">
+              <div className="grid gap-6 md:grid-cols-2">
+                {/* ---------- left: customer + instructions ---------- */}
+                <div className="space-y-4 min-w-0">
+                  <div>
+                    <label className={LABEL}>Customer</label>
+                    <div className="relative mt-2">
+                      <input
+                        value={custSearch}
+                        onChange={(e) => searchCustomers(e.target.value)}
+                        placeholder="Search by name or phone…"
+                        className={FIELD}
+                      />
+                      {custResults.length > 0 && (
+                        <div className="absolute inset-x-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-line bg-surface shadow-xl">
+                          {custResults.map((c) => (
+                            <button
+                              key={c.id}
+                              onClick={() => selectCustomer(c)}
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-hover border-b border-line last:border-b-0"
+                            >
+                              {c.name} <span className="text-ink-faint">· {c.phone}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {selectedCustomer && (
+                      <p className="mt-2 flex items-center justify-between text-xs text-ink-mid">
+                        <span>
+                          Saved customer: <span className="font-semibold text-ink-strong">{selectedCustomer.name}</span>. Changes you make below are saved to
+                          their record.
+                        </span>
+                        <button type="button" onClick={clearCustomer} className="ml-3 shrink-0 underline hover:text-ink-strong">
+                          Clear
                         </button>
-                      ))}
+                      </p>
+                    )}
+
+                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 [&>div]:min-w-0">
+                      <div>
+                        <label className={LABEL}>Name</label>
+                        <input
+                          value={custName}
+                          onChange={(e) => editCust(setCustName, e.target.value)}
+                          placeholder="Walk-in"
+                          className={`${FIELD} mt-1.5`}
+                        />
+                      </div>
+                      <div>
+                        <label className={LABEL}>Phone (unique)</label>
+                        <input
+                          value={custPhone}
+                          onChange={(e) => editCust(setCustPhone, e.target.value)}
+                          inputMode="tel"
+                          placeholder="03xx-xxxxxxx"
+                          className={`${FIELD} mt-1.5`}
+                        />
+                      </div>
+                      <div>
+                        <label className={LABEL}>Address</label>
+                        <input
+                          value={custAddress}
+                          onChange={(e) => setCustAddress(e.target.value)}
+                          placeholder="House / street"
+                          className={`${FIELD} mt-1.5`}
+                        />
+                      </div>
+                      <div>
+                        <label className={LABEL}>Delivery area</label>
+                        {orderType !== "delivery" ? (
+                          <div className={`${FIELD} mt-1.5 flex items-center text-ink-mid`} title="Only for delivery orders">
+                            —
+                          </div>
+                        ) : (
+                          <SelectField value={areaId} onChange={(e) => onAreaChange(e.target.value)} className="mt-1.5">
+                            <option value="">Select delivery area…</option>
+                            {areas.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.name} — Rs {a.delivery_fee}
+                              </option>
+                            ))}
+                          </SelectField>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className={LABEL}>Order instructions</label>
+                    <textarea
+                      value={orderNote}
+                      onChange={(e) => setOrderNote(e.target.value)}
+                      rows={3}
+                      maxLength={500}
+                      placeholder="Anything the kitchen or rider should know about this order…"
+                      className={`${FIELD} mt-1.5 resize-none`}
+                    />
+                  </div>
+                </div>
+
+                {/* ---------- right: totals, discount, payment ---------- */}
+                <div className="space-y-4 min-w-0">
+                  <div className="rounded-xl border border-line bg-raised/40 p-4 space-y-2 text-sm">
+                    <div className="flex justify-between text-ink-mid">
+                      <span>Subtotal</span>
+                      <span>Rs {fmt(subtotal)}</span>
+                    </div>
+                    {discount > 0 && (
+                      <div className="flex justify-between text-basil-400">
+                        <span>Discount{discountMode === "percent" ? ` (${discountRaw}%)` : ""}</span>
+                        <span>- Rs {fmt(discount)}</span>
+                      </div>
+                    )}
+                    {delivery > 0 && (
+                      <div className="flex justify-between text-ink-mid">
+                        <span>Delivery</span>
+                        <span>Rs {fmt(delivery)}</span>
+                      </div>
+                    )}
+                    {serviceCharge > 0 && (
+                      <div className="flex justify-between text-ink-mid">
+                        <span>{serviceLabel}</span>
+                        <span>Rs {fmt(serviceCharge)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-ink-mid">
+                      <span>{taxLabel}</span>
+                      <span>Rs {fmt(tax)}</span>
+                    </div>
+                    {fee > 0 && (
+                      <div className="flex justify-between text-ink-mid">
+                        <span>FBR invoicing fee</span>
+                        <span>Rs {fmt(fee)}</span>
+                      </div>
+                    )}
+                    <div className="flex items-baseline justify-between border-t border-dashed border-line pt-2.5">
+                      <span className="font-mono text-base font-bold">Total due</span>
+                      <span className="font-mono text-xl font-bold">Rs {fmt(total)}</span>
+                    </div>
+                  </div>
+
+                  {settings.showDiscount && (
+                    <div>
+                      <label className={LABEL}>Discount</label>
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-line text-xs font-bold">
+                          {(["amount", "percent"] as const).map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => setDiscountMode(m)}
+                              className={`px-3 py-2.5 ${discountMode === m ? "bg-chili-500 text-white" : "bg-raised text-ink-mid hover:bg-hover"}`}
+                            >
+                              {m === "amount" ? "Rs" : "%"}
+                            </button>
+                          ))}
+                        </div>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          value={discountInput}
+                          placeholder="0"
+                          onChange={(e) => setDiscountInput(e.target.value)}
+                          className={`${FIELD_BASE} flex-1`}
+                        />
+                        {discountInput && (
+                          <button
+                            type="button"
+                            onClick={() => setDiscountInput("")}
+                            aria-label="Remove discount"
+                            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-faint hover:text-crimson-400"
+                          >
+                            <X size={15} />
+                          </button>
+                        )}
+                      </div>
+                      {discount > 0 && (
+                        <p className="mt-1.5 text-xs text-ink-faint">
+                          Takes Rs {fmt(discount)} ({discountPercent}%) off the items, before tax.
+                        </p>
+                      )}
                     </div>
                   )}
-                </div>
-                {selectedCustomer && (
-                  <p className="mt-2 flex items-center justify-between text-xs text-ink-mid">
-                    <span>
-                      Saved customer: <span className="font-semibold text-ink-strong">{selectedCustomer.name}</span> — changes you make below are saved to
-                      their record.
-                    </span>
-                    <button type="button" onClick={clearCustomer} className="ml-3 shrink-0 underline hover:text-ink-strong">
-                      Clear
-                    </button>
-                  </p>
-                )}
 
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 [&>div]:min-w-0">
                   <div>
-                    <label className={LABEL}>Name</label>
-                    <input
-                      value={custName}
-                      onChange={(e) => editCust(setCustName, e.target.value)}
-                      placeholder="Walk-in"
-                      className={`${FIELD} mt-1.5`}
-                    />
-                  </div>
-                  <div>
-                    <label className={LABEL}>Phone (unique)</label>
-                    <input
-                      value={custPhone}
-                      onChange={(e) => editCust(setCustPhone, e.target.value)}
-                      inputMode="tel"
-                      placeholder="03xx-xxxxxxx"
-                      className={`${FIELD} mt-1.5`}
-                    />
-                  </div>
-                  <div>
-                    <label className={LABEL}>Address</label>
-                    <input
-                      value={custAddress}
-                      onChange={(e) => setCustAddress(e.target.value)}
-                      placeholder="House / street"
-                      className={`${FIELD} mt-1.5`}
-                    />
-                  </div>
-                  <div>
-                    <label className={LABEL}>Delivery area</label>
-                    {orderType !== "delivery" ? (
-                      <div className={`${FIELD} mt-1.5 flex items-center text-ink-mid`} title="Only for delivery orders">
-                        —
-                      </div>
-                    ) : (
-                      <SelectField value={areaId} onChange={(e) => onAreaChange(e.target.value)} className="mt-1.5">
-                        <option value="">Select delivery area…</option>
-                        {areas.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.name} — Rs {a.delivery_fee}
-                          </option>
-                        ))}
-                      </SelectField>
-                    )}
-                  </div>
-                </div>
-                <p className="mt-3 text-xs text-ink-faint">
-                  {orderType === "dine_in"
-                    ? `Dine in${tables.find((t) => t.id === tableId) ? ` · Table ${tables.find((t) => t.id === tableId)!.number}` : ""}`
-                    : TYPE_TAG[orderType]}
-                </p>
-              </div>
-
-              {/* totals */}
-              <div className="border-t border-line pt-4 space-y-2 text-sm">
-                <div className="flex justify-between text-ink-mid">
-                  <span>Subtotal</span>
-                  <span>Rs {fmt(subtotal)}</span>
-                </div>
-                {delivery > 0 && (
-                  <div className="flex justify-between text-ink-mid">
-                    <span>Delivery</span>
-                    <span>Rs {fmt(delivery)}</span>
-                  </div>
-                )}
-                {serviceCharge > 0 && (
-                  <div className="flex justify-between text-ink-mid">
-                    <span>{serviceLabel}</span>
-                    <span>Rs {fmt(serviceCharge)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between text-ink-mid">
-                  <span>{taxLabel}</span>
-                  <span>Rs {fmt(tax)}</span>
-                </div>
-                {fee > 0 && (
-                  <div className="flex justify-between text-ink-mid">
-                    <span>FBR invoicing fee</span>
-                    <span>Rs {fmt(fee)}</span>
-                  </div>
-                )}
-                <div className="flex items-baseline justify-between border-t border-dashed border-line pt-2.5">
-                  <span className="font-mono text-base font-bold">Total due</span>
-                  <span className="font-mono text-lg font-bold">Rs {fmt(total)}</span>
-                </div>
-              </div>
-
-              {/* split payment */}
-              <div>
-                <label className={LABEL}>Split payment</label>
-                <div className="mt-2 space-y-2">
-                  {payRows.map((r) => (
-                    <div key={r.id} className="flex items-center gap-2">
-                      <SelectField
-                        value={r.method}
-                        onChange={(e) => updatePayRow(r.id, { method: e.target.value })}
-                        className="flex-1"
+                    <label className={LABEL}>Payment</label>
+                    <div className="mt-2 space-y-2">
+                      {payRows.map((r) => (
+                        <div key={r.id} className="flex items-center gap-2">
+                          <SelectField
+                            value={r.method}
+                            onChange={(e) => updatePayRow(r.id, { method: e.target.value })}
+                            className="flex-1"
+                          >
+                            {paymentMethods.map((m) => (
+                              <option key={m}>{m}</option>
+                            ))}
+                          </SelectField>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            value={r.amount}
+                            placeholder="0"
+                            onChange={(e) => updatePayRow(r.id, { amount: e.target.value })}
+                            className={`${FIELD_BASE} w-28 shrink-0`}
+                          />
+                          {payRows.length > 1 && (
+                            <button
+                              onClick={() => removePayRow(r.id)}
+                              aria-label="Remove payment method"
+                              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-faint hover:text-crimson-400"
+                            >
+                              <X size={15} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-2.5 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={addPayRow}
+                        className="rounded-lg border border-line bg-raised hover:bg-hover px-3 py-2 text-xs font-bold"
                       >
-                        {paymentMethods.map((m) => (
-                          <option key={m}>{m}</option>
-                        ))}
-                      </SelectField>
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        value={r.amount}
-                        placeholder="0"
-                        onChange={(e) => updatePayRow(r.id, { amount: e.target.value })}
-                        className={`${FIELD_BASE} w-28 shrink-0`}
-                      />
-                      {payRows.length > 1 && (
+                        + Add payment method
+                      </button>
+                      {remaining > 0 && (
                         <button
-                          onClick={() => removePayRow(r.id)}
-                          aria-label="Remove payment method"
-                          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-faint hover:text-crimson-400"
+                          type="button"
+                          onClick={() => {
+                            const last = payRows[payRows.length - 1];
+                            updatePayRow(last.id, { amount: String((Number(last.amount) || 0) + remaining) });
+                          }}
+                          className="rounded-lg px-2 py-2 text-xs font-semibold text-basil-400 hover:underline"
                         >
-                          <X size={15} />
+                          Fill remaining
                         </button>
                       )}
                     </div>
-                  ))}
-                </div>
-                <div className="mt-2.5 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={addPayRow}
-                    className="rounded-lg border border-line bg-raised hover:bg-hover px-3 py-2 text-xs font-bold"
-                  >
-                    + Add payment method
-                  </button>
-                  {remaining > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const last = payRows[payRows.length - 1];
-                        updatePayRow(last.id, { amount: String((Number(last.amount) || 0) + remaining) });
-                      }}
-                      className="rounded-lg px-2 py-2 text-xs font-semibold text-basil-400 hover:underline"
-                    >
-                      Fill remaining
-                    </button>
-                  )}
+                    <div className="mt-3 flex items-center justify-between rounded-lg bg-raised/60 px-3 py-2.5 text-sm font-semibold">
+                      <span className="text-ink-mid">Received Rs {fmt(paid)}</span>
+                      {remaining > 0 ? (
+                        <span className="text-crimson-400">Remaining Rs {fmt(remaining)}</span>
+                      ) : remaining < 0 ? (
+                        <span className="text-basil-400">Return Rs {fmt(-remaining)}</span>
+                      ) : (
+                        <span className="text-basil-400">Paid in full</span>
+                      )}
+                    </div>
+                    {remaining > 0 && paid > 0 && (
+                      <p className="mt-1.5 text-xs text-turmeric-400">The rest is left as an unpaid balance (see Unpaid Orders).</p>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="border-t border-dashed border-line pt-3 text-xs font-semibold">
-                {remaining > 0 ? (
-                  <span className="text-crimson-400">Remaining: Rs {fmt(remaining)}</span>
-                ) : remaining < 0 ? (
-                  <span className="text-basil-400">Change: Rs {fmt(-remaining)}</span>
-                ) : (
-                  <span className="text-basil-400">Paid in full</span>
-                )}
-                {remaining > 0 && paid > 0 && (
-                  <span className="ml-2 font-normal text-turmeric-400">— left as an unpaid balance (see Unpaid Orders)</span>
-                )}
-              </div>
-
-              {error && <p className="text-crimson-400 text-sm">{error}</p>}
+              {error && <p className="mt-4 text-crimson-400 text-sm">{error}</p>}
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">

@@ -8,6 +8,7 @@ const PAGE = 50; // orders per page: 50 load instantly, the rest on scroll / "Lo
 type Sale = {
   id: string;
   order_no: number;
+  display_id?: string | null;
   order_type: "dine_in" | "takeaway" | "delivery";
   subtotal: number;
   tax: number;
@@ -140,7 +141,7 @@ export function SalesClient({ canCancel }: { canCancel: boolean }) {
                   <tr className="border-t border-line">
                     <td className="p-3 font-mono">
                       <button onClick={() => setExpanded(expanded === s.id ? null : s.id)} className="hover:underline">
-                        #{s.order_no}
+                        #{s.display_id ?? s.order_no}
                       </button>
                     </td>
                     <td className="p-3 text-ink-mid">

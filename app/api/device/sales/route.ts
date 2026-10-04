@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireDevice } from "@/lib/auth/require-device";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hasModuleAccess } from "@/lib/permissions";
-import { applyCustomerUpdate, applySaleExtras, type CustomerUpdate } from "@/lib/sales/extras";
+import { applyCustomerUpdate, applySaleExtras, discountTaxReduction, type CustomerUpdate } from "@/lib/sales/extras";
 
 type OfflineSale = {
   clientSaleId: string;
@@ -22,10 +22,16 @@ type OfflineSale = {
   serviceCharge?: number;
   fbrFee?: number;
   customerUpdate?: CustomerUpdate;
+  discount?: number;
+  discountPercent?: number;
+  orderNote?: string;
+  itemNotes?: { productId: string; name: string; note: string }[];
+  /** counter that only this device increments (the Windows app uses its outbox row number) */
+  deviceSeq?: number;
 };
 
 type SaleResult =
-  | { clientSaleId: string; ok: true; orderNo: number | string; total: number; status: string; balance: number; saleId?: string | null; duplicate?: boolean }
+  | { clientSaleId: string; ok: true; orderNo: number | string; displayId?: string | null; total: number; status: string; balance: number; saleId?: string | null; duplicate?: boolean }
   | { clientSaleId: string; ok: false; error: string; retryable: boolean };
 
 const MAX_BATCH = 50;
@@ -48,7 +54,11 @@ export async function POST(req: Request) {
   }
 
   const admin = createAdminClient();
-  const { data: st } = await admin.from("restaurant_settings").select("*").eq("restaurant_id", restaurantId).maybeSingle();
+  const [{ data: st }, { data: dev }] = await Promise.all([
+    admin.from("restaurant_settings").select("*").eq("restaurant_id", restaurantId).maybeSingle(),
+    admin.from("devices").select("device_no").eq("id", deviceId).maybeSingle(),
+  ]);
+  const deviceNo: number | null = dev?.device_no ?? null; // null until migration 0017 is applied
 
   const cashierCache = new Map<string, { ok: boolean; reason?: string }>();
   async function cashierAllowed(employeeId: string) {
@@ -148,16 +158,35 @@ export async function POST(req: Request) {
       // sale's id, which lets the device map Ticket Rail moves made while the sale was still only
       // on the device.
       const paid = payments.reduce((t, p) => t + (Number(p.amount) || 0), 0);
-      const done = await applySaleExtras(
-        admin,
-        restaurantId,
-        { orderNo: r.order_no ?? null, total: Number(r.total ?? 0), status: r.status ?? "", balance: Number(r.balance ?? 0) },
-        { serviceCharge: s.serviceCharge, fbrFee: s.fbrFee },
-        paid
-      );
-      await applyCustomerUpdate(admin, restaurantId, s.customerId, s.customerUpdate);
+      // The order id is built HERE from this device's number + its own counter, never taken as text
+      // from the device: D2-0045. (Same device + same counter can only ever be stored once.)
+      const seq = Number.isInteger(s.deviceSeq) && (s.deviceSeq as number) > 0 ? (s.deviceSeq as number) : null;
+      const displayId = deviceNo && seq ? `D${deviceNo}-${String(seq).padStart(4, "0")}` : null;
+      const discountOn = st?.show_discount !== false;
+      const { discount, taxReduction } = discountOn ? discountTaxReduction(s.items, s.discount, pct) : { discount: 0, taxReduction: 0 };
+      const [done] = await Promise.all([
+        applySaleExtras(
+          admin,
+          restaurantId,
+          { orderNo: r.order_no ?? null, total: Number(r.total ?? 0), status: r.status ?? "", balance: Number(r.balance ?? 0) },
+          {
+            serviceCharge: s.serviceCharge,
+            fbrFee: s.fbrFee,
+            discount,
+            taxReduction,
+            discountPercent: s.discountPercent,
+            orderNote: s.orderNote,
+            itemNotes: s.itemNotes,
+            displayId,
+            deviceId: displayId ? deviceId : null,
+            deviceSeq: displayId ? seq : null,
+          },
+          paid
+        ),
+        applyCustomerUpdate(admin, restaurantId, s.customerId, s.customerUpdate),
+      ]);
       const saleId = done.saleId;
-      const result = { orderNo: done.orderNo ?? "", total: done.total, status: done.status, balance: done.balance, saleId };
+      const result = { orderNo: done.orderNo ?? "", displayId, total: done.total, status: done.status, balance: done.balance, saleId };
 
       const { error: receiptError } = await admin
         .from("device_sale_receipts")

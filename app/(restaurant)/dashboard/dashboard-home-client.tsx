@@ -21,6 +21,7 @@ type Summary = {
 type Sale = {
   id: string;
   order_no: number;
+  display_id?: string | null;
   order_type: string;
   total: number;
   delivery_charge: number;
@@ -139,7 +140,7 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
             <tbody>
               {recent.map((s) => (
                 <tr key={s.id} className="border-t border-line-soft">
-                  <td className="p-3 font-mono text-xs">#{s.order_no}</td>
+                  <td className="p-3 font-mono text-xs">#{s.display_id ?? s.order_no}</td>
                   <td className="p-3 text-xs text-ink-mid">{TYPE_LABEL[s.order_type] ?? s.order_type}</td>
                   <td className="p-3 text-xs text-ink-mid">{s.employees?.name ?? "—"}</td>
                   <td className="p-3 text-xs text-ink-mid">{s.sale_items.length} item(s)</td>

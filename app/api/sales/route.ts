@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hasModuleAccess } from "@/lib/permissions";
-import { applyCustomerUpdate, applySaleExtras, type CustomerUpdate } from "@/lib/sales/extras";
+import { applyCustomerUpdate, applySaleExtras, discountTaxReduction, type CustomerUpdate } from "@/lib/sales/extras";
 
 // NOTE: the order-edit handler that used to live in this file is in app/api/sales/edit/route.ts
 // (that's where components/edit-order-modal.tsx posts to).
@@ -61,9 +61,6 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
-  if (!(await hasModuleAccess(session.restaurantId, session.role, "pos"))) {
-    return NextResponse.json({ error: "Not permitted" }, { status: 403 });
-  }
 
   const b = (await req.json().catch(() => ({}))) as {
     orderType?: string;
@@ -80,6 +77,10 @@ export async function POST(req: Request) {
     serviceCharge?: number; // dine-in service charge shown on the bill
     fbrFee?: number; // FBR invoicing fee shown on the bill
     customerUpdate?: CustomerUpdate; // edited details of the selected existing customer
+    discount?: number; // money off the item subtotal, before tax
+    discountPercent?: number;
+    orderNote?: string;
+    itemNotes?: { productId: string; name: string; note: string }[];
   };
   if (!b.items || b.items.length === 0) {
     return NextResponse.json({ error: "Order must have at least one item" }, { status: 400 });
@@ -92,11 +93,12 @@ export async function POST(req: Request) {
 
   // The tax rate is read here, not trusted from the browser. Cash vs card follows the payment
   // method that carries the most money (or the method selected, when nothing is paid yet).
-  const { data: st } = await admin
-    .from("restaurant_settings")
-    .select("*")
-    .eq("restaurant_id", session.restaurantId)
-    .single();
+  // permission check and settings read are independent: run them together (one round trip less)
+  const [allowed, { data: st }] = await Promise.all([
+    hasModuleAccess(session.restaurantId, session.role, "pos"),
+    admin.from("restaurant_settings").select("*").eq("restaurant_id", session.restaurantId).single(),
+  ]);
+  if (!allowed) return NextResponse.json({ error: "Not permitted" }, { status: 403 });
   const payments = b.payments ?? [];
   const method = [...payments].sort((a, c) => c.amount - a.amount)[0]?.method ?? b.taxMethod ?? "Cash";
   const legacy = st?.tax_rate != null ? Number(st.tax_rate) : 5;
@@ -123,14 +125,28 @@ export async function POST(req: Request) {
 
   const r = Array.isArray(data) ? data[0] : data;
   const paid = payments.reduce((t, p) => t + (Number(p.amount) || 0), 0);
-  const done = await applySaleExtras(
-    admin,
-    session.restaurantId,
-    { orderNo: r.order_no, total: Number(r.total), status: r.status, balance: Number(r.balance ?? 0) },
-    { serviceCharge: b.serviceCharge, fbrFee: b.fbrFee },
-    paid
-  );
-  await applyCustomerUpdate(admin, session.restaurantId, b.customerId, b.customerUpdate);
+
+  // The discount is an admin switch (Settings -> POS controls); when it is off, any discount sent is ignored.
+  const discountOn = st?.show_discount !== false;
+  const { discount, taxReduction } = discountOn ? discountTaxReduction(b.items, b.discount, pct) : { discount: 0, taxReduction: 0 };
+  const [done] = await Promise.all([
+    applySaleExtras(
+      admin,
+      session.restaurantId,
+      { orderNo: r.order_no, total: Number(r.total), status: r.status, balance: Number(r.balance ?? 0) },
+      {
+        serviceCharge: b.serviceCharge,
+        fbrFee: b.fbrFee,
+        discount,
+        taxReduction,
+        discountPercent: b.discountPercent,
+        orderNote: b.orderNote,
+        itemNotes: b.itemNotes,
+      },
+      paid
+    ),
+    applyCustomerUpdate(admin, session.restaurantId, b.customerId, b.customerUpdate),
+  ]);
   return NextResponse.json({
     success: true,
     orderNo: done.orderNo,
