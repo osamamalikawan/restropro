@@ -1,0 +1,57 @@
+diff --git a/app/pos/pos-client.tsx b/app/pos/pos-client.tsx
+index 67544d4..a356154 100644
+--- a/app/pos/pos-client.tsx
++++ b/app/pos/pos-client.tsx
+@@ -184,7 +184,7 @@ export function PosClient({
+       })();
+       stop = startBackgroundSync("products", restaurantId);
+       getTables().then((t) => !cancelled && setTables(t)).catch(() => {});
+-      getAreas().then((a) => !cancelled && setAreas(a)).catch(() => {});
++      getAreas().then((a) => !cancelled && setAreas(a.filter((x: any) => x.is_active !== false))).catch(() => {});
+     }
+ 
+     // Settings, payment methods and (on desktop) tables/areas are re-read regularly, so a change made
+@@ -289,6 +289,11 @@ export function PosClient({
+     if (t !== "delivery") {
+       setAreaId("");
+       setDeliveryCharge(0);
++    } else if (!isTauri()) {
++      // pick up areas added in Settings since the POS was opened
++      getAreas()
++        .then((a) => setAreas(a.filter((x: any) => x.is_active !== false)))
++        .catch(() => {});
+     }
+   }
+   function onAreaChange(id: string) {
+@@ -996,17 +1001,20 @@ export function PosClient({
+                   </div>
+                   <div>
+                     <label className={LABEL}>Delivery area</label>
+-                    <div
+-                      className={`${FIELD} mt-1.5 flex items-center text-ink-mid`}
+-                      aria-readonly="true"
+-                      title={orderType === "delivery" ? "Choose the area in the order panel" : "Only for delivery orders"}
+-                    >
+-                      {orderType !== "delivery"
+-                        ? "—"
+-                        : areas.find((a) => a.id === areaId)
+-                          ? `${areas.find((a) => a.id === areaId)!.name} — Rs ${areas.find((a) => a.id === areaId)!.delivery_fee}`
+-                          : "No area selected"}
+-                    </div>
++                    {orderType !== "delivery" ? (
++                      <div className={`${FIELD} mt-1.5 flex items-center text-ink-mid`} title="Only for delivery orders">
++                        —
++                      </div>
++                    ) : (
++                      <SelectField value={areaId} onChange={(e) => onAreaChange(e.target.value)} className="mt-1.5">
++                        <option value="">Select delivery area…</option>
++                        {areas.map((a) => (
++                          <option key={a.id} value={a.id}>
++                            {a.name} — Rs {a.delivery_fee}
++                          </option>
++                        ))}
++                      </SelectField>
++                    )}
+                   </div>
+                 </div>
+                 <p className="mt-3 text-xs text-ink-faint">
