@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, NotebookText, Image as ImageIcon } from "lucide-react";
+import { Pencil, NotebookText, Trash2, Image as ImageIcon } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "@/lib/posData";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
 import { Switch } from "@/components/ui/switch";
@@ -34,7 +36,7 @@ type Deal = {
   deal_items: { id: string; quantity: number; component_product_id: string; component: { id: string; name: string; price: number } | null }[];
 };
 
-export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolean; canRemove?: boolean }) {
   const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -54,6 +56,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [removeError, setRemoveError] = useState("");
 
   const [deals, setDeals] = useState<Deal[]>([]);
   const [dealModalOpen, setDealModalOpen] = useState(false);
@@ -176,13 +179,25 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
     setDealModalOpen(false);
     await load();
   }
-  async function removeDeal(id: string) {
-    if (!confirm("Remove this deal? This cannot be undone.")) return;
-    await fetch("/api/deals", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "delete", id }),
-    });
+  /** "Remove" hides the item everywhere (Menu, Products, Deals, POS) but keeps the row so past sales
+   *  and reports stay correct. Admin only; the server enforces it too. */
+  async function removeItem(kind: "product" | "deal", id: string, name: string) {
+    if (
+      !confirm(
+        `Remove "${name}"?\n\nIt will disappear from the menu, the Products page and the POS. Past sales and reports are not affected.`
+      )
+    )
+      return;
+    setRemoveError("");
+    const res =
+      kind === "deal"
+        ? await fetch("/api/deals", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "delete", id }) })
+        : await fetch("/api/products", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "delete", row: { id } }) });
+    if (!res.ok) {
+      setRemoveError((await res.json().catch(() => ({}))).error ?? `Could not remove ${name}`);
+      return;
+    }
+    if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS drops it now
     await load();
   }
 
@@ -252,6 +267,9 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
             </button>
           )}
         </PanelHead>
+        {removeError && (
+          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{removeError}</p>
+        )}
         {loadError && (
           <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
             Couldn&apos;t load products: {loadError}
@@ -304,6 +322,11 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
                         {canEdit && (
                           <IconBtn title="Edit" onClick={() => openEdit(p)}>
                             <Pencil className="h-3.5 w-3.5" />
+                          </IconBtn>
+                        )}
+                        {canRemove && (
+                          <IconBtn title="Remove product" onClick={() => removeItem("product", p.id, p.name)}>
+                            <Trash2 className="h-3.5 w-3.5" />
                           </IconBtn>
                         )}
                       </div>
@@ -364,9 +387,11 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
                         <IconBtn title="Edit" onClick={() => openEditDeal(d)}>
                           <Pencil className="h-3.5 w-3.5" />
                         </IconBtn>
-                        <IconBtn title="Remove" onClick={() => removeDeal(d.id)}>
-                          ✕
-                        </IconBtn>
+                        {canRemove && (
+                          <IconBtn title="Remove deal" onClick={() => removeItem("deal", d.id, d.name)}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </IconBtn>
+                        )}
                       </div>
                     )}
                   </Td>

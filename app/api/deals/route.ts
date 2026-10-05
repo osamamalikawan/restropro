@@ -24,15 +24,18 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("products")
-    .select(
-      "id, name, description, price, image_url, is_available, updated_at, " +
-        "deal_items!deal_items_deal_product_id_fkey(id, quantity, component_product_id, component:products!deal_items_component_product_id_fkey(id, name, price))"
-    )
-    .eq("restaurant_id", session.restaurantId)
-    .eq("is_deal", true)
-    .order("name");
+  const list = () =>
+    admin
+      .from("products")
+      .select(
+        "id, name, description, price, image_url, is_available, updated_at, " +
+          "deal_items!deal_items_deal_product_id_fkey(id, quantity, component_product_id, component:products!deal_items_component_product_id_fkey(id, name, price))"
+      )
+      .eq("restaurant_id", session.restaurantId)
+      .eq("is_deal", true)
+      .order("name");
+  let { data, error } = await list().is("deleted_at", null); // removed deals are hidden (see migration 0018)
+  if (error && /deleted_at/.test(error.message)) ({ data, error } = await list());
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ deals: data });
 }
@@ -58,8 +61,18 @@ export async function POST(req: Request) {
 
   if (body.op === "delete") {
     if (!body.id) return NextResponse.json({ error: "id is required" }, { status: 400 });
-    const { error } = await admin.from("products").delete().eq("id", body.id).eq("restaurant_id", session.restaurantId).eq("is_deal", true);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    // Soft delete (admin only): hidden everywhere, row kept for past sales.
+    if (session.role !== "admin") return NextResponse.json({ error: "Only an admin can remove deals" }, { status: 403 });
+    const { error } = await admin
+      .from("products")
+      .update({ deleted_at: new Date().toISOString(), is_available: false, updated_at: new Date().toISOString() })
+      .eq("id", body.id)
+      .eq("restaurant_id", session.restaurantId)
+      .eq("is_deal", true);
+    if (error) {
+      const missing = /deleted_at/.test(error.message);
+      return NextResponse.json({ error: missing ? "Run migration 0018_soft_delete_products.sql in Supabase first" : error.message }, { status: 500 });
+    }
     return NextResponse.json({ success: true });
   }
 

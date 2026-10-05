@@ -173,16 +173,6 @@ export function MenuClient() {
     loadAll();
   }
 
-  async function removeProduct(id: string) {
-    if (!confirm("Remove this menu item? Its recipe will also be deleted. This cannot be undone.")) return;
-    await fetch("/api/products", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "delete", row: { id } }),
-    });
-    loadAll();
-  }
-
   const shownProducts = products.filter((p) =>
     filterCat === "all" ? true : filterCat === "none" ? !p.category_id : p.category_id === filterCat
   );
@@ -299,17 +289,6 @@ export function MenuClient() {
         title={editingId ? "Edit menu item" : "Add menu item"}
         footer={
           <>
-            {editingId && (
-              <button
-                onClick={() => {
-                  setModalOpen(false);
-                  removeProduct(editingId);
-                }}
-                className="mr-auto text-xs text-crimson-400 hover:underline"
-              >
-                Remove item
-              </button>
-            )}
             <button onClick={() => setModalOpen(false)} className={btnGhost}>
               Cancel
             </button>

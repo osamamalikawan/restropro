@@ -1,0 +1,306 @@
+diff --git a/app/(restaurant)/menu/menu-client.tsx b/app/(restaurant)/menu/menu-client.tsx
+index 33eadac..9aeab48 100644
+--- a/app/(restaurant)/menu/menu-client.tsx
++++ b/app/(restaurant)/menu/menu-client.tsx
+@@ -173,16 +173,6 @@ export function MenuClient() {
+     loadAll();
+   }
+ 
+-  async function removeProduct(id: string) {
+-    if (!confirm("Remove this menu item? Its recipe will also be deleted. This cannot be undone.")) return;
+-    await fetch("/api/products", {
+-      method: "POST",
+-      headers: { "content-type": "application/json" },
+-      body: JSON.stringify({ op: "delete", row: { id } }),
+-    });
+-    loadAll();
+-  }
+-
+   const shownProducts = products.filter((p) =>
+     filterCat === "all" ? true : filterCat === "none" ? !p.category_id : p.category_id === filterCat
+   );
+@@ -299,17 +289,6 @@ export function MenuClient() {
+         title={editingId ? "Edit menu item" : "Add menu item"}
+         footer={
+           <>
+-            {editingId && (
+-              <button
+-                onClick={() => {
+-                  setModalOpen(false);
+-                  removeProduct(editingId);
+-                }}
+-                className="mr-auto text-xs text-crimson-400 hover:underline"
+-              >
+-                Remove item
+-              </button>
+-            )}
+             <button onClick={() => setModalOpen(false)} className={btnGhost}>
+               Cancel
+             </button>
+diff --git a/app/(restaurant)/products/page.desktop.tsx b/app/(restaurant)/products/page.desktop.tsx
+index 342f33e..161c651 100644
+--- a/app/(restaurant)/products/page.desktop.tsx
++++ b/app/(restaurant)/products/page.desktop.tsx
+@@ -5,7 +5,7 @@ import { DesktopGuard } from "@/components/desktop-guard";
+ export default function ProductsPage() {
+   return (
+     <DesktopGuard module="products">{(c) => (
+-      <ProductsClient canEdit={c.isAdminOrManager} />
++      <ProductsClient canEdit={c.isAdminOrManager} canRemove={c.role === "admin"} />
+     )}</DesktopGuard>
+   );
+ }
+diff --git a/app/(restaurant)/products/page.tsx b/app/(restaurant)/products/page.tsx
+index 4746d5a..92bc3d4 100644
+--- a/app/(restaurant)/products/page.tsx
++++ b/app/(restaurant)/products/page.tsx
+@@ -10,5 +10,5 @@ export default async function ProductsPage() {
+   if (!session) redirect("/login");
+   if (!(await hasModuleAccess(session.restaurantId, session.role, "products"))) redirect("/dashboard");
+ 
+-  return <ProductsClient canEdit={session.role === "admin" || session.role === "manager"} />;
++  return <ProductsClient canEdit={session.role === "admin" || session.role === "manager"} canRemove={session.role === "admin"} />;
+ }
+diff --git a/app/(restaurant)/products/products-client.tsx b/app/(restaurant)/products/products-client.tsx
+index 29893ce..319efd6 100644
+--- a/app/(restaurant)/products/products-client.tsx
++++ b/app/(restaurant)/products/products-client.tsx
+@@ -1,7 +1,9 @@
+ "use client";
+ import { useEffect, useMemo, useState } from "react";
+ import { useRouter } from "next/navigation";
+-import { Pencil, NotebookText, Image as ImageIcon } from "lucide-react";
++import { Pencil, NotebookText, Trash2, Image as ImageIcon } from "lucide-react";
++import { invoke } from "@tauri-apps/api/core";
++import { isTauri } from "@/lib/posData";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
+ import { Switch } from "@/components/ui/switch";
+@@ -34,7 +36,7 @@ type Deal = {
+   deal_items: { id: string; quantity: number; component_product_id: string; component: { id: string; name: string; price: number } | null }[];
+ };
+ 
+-export function ProductsClient({ canEdit }: { canEdit: boolean }) {
++export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolean; canRemove?: boolean }) {
+   const router = useRouter();
+   const [products, setProducts] = useState<Product[]>([]);
+   const [categories, setCategories] = useState<Category[]>([]);
+@@ -54,6 +56,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+   const [galleryOpen, setGalleryOpen] = useState(false);
+   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
+   const [loadError, setLoadError] = useState("");
++  const [removeError, setRemoveError] = useState("");
+ 
+   const [deals, setDeals] = useState<Deal[]>([]);
+   const [dealModalOpen, setDealModalOpen] = useState(false);
+@@ -176,13 +179,25 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+     setDealModalOpen(false);
+     await load();
+   }
+-  async function removeDeal(id: string) {
+-    if (!confirm("Remove this deal? This cannot be undone.")) return;
+-    await fetch("/api/deals", {
+-      method: "POST",
+-      headers: { "content-type": "application/json" },
+-      body: JSON.stringify({ op: "delete", id }),
+-    });
++  /** "Remove" hides the item everywhere (Menu, Products, Deals, POS) but keeps the row so past sales
++   *  and reports stay correct. Admin only; the server enforces it too. */
++  async function removeItem(kind: "product" | "deal", id: string, name: string) {
++    if (
++      !confirm(
++        `Remove "${name}"?\n\nIt will disappear from the menu, the Products page and the POS. Past sales and reports are not affected.`
++      )
++    )
++      return;
++    setRemoveError("");
++    const res =
++      kind === "deal"
++        ? await fetch("/api/deals", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "delete", id }) })
++        : await fetch("/api/products", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "delete", row: { id } }) });
++    if (!res.ok) {
++      setRemoveError((await res.json().catch(() => ({}))).error ?? `Could not remove ${name}`);
++      return;
++    }
++    if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS drops it now
+     await load();
+   }
+ 
+@@ -252,6 +267,9 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+             </button>
+           )}
+         </PanelHead>
++        {removeError && (
++          <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{removeError}</p>
++        )}
+         {loadError && (
+           <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+             Couldn&apos;t load products: {loadError}
+@@ -306,6 +324,11 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+                             <Pencil className="h-3.5 w-3.5" />
+                           </IconBtn>
+                         )}
++                        {canRemove && (
++                          <IconBtn title="Remove product" onClick={() => removeItem("product", p.id, p.name)}>
++                            <Trash2 className="h-3.5 w-3.5" />
++                          </IconBtn>
++                        )}
+                       </div>
+                     </Td>
+                   </tr>
+@@ -364,9 +387,11 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
+                         <IconBtn title="Edit" onClick={() => openEditDeal(d)}>
+                           <Pencil className="h-3.5 w-3.5" />
+                         </IconBtn>
+-                        <IconBtn title="Remove" onClick={() => removeDeal(d.id)}>
+-                          ✕
+-                        </IconBtn>
++                        {canRemove && (
++                          <IconBtn title="Remove deal" onClick={() => removeItem("deal", d.id, d.name)}>
++                            <Trash2 className="h-3.5 w-3.5" />
++                          </IconBtn>
++                        )}
+                       </div>
+                     )}
+                   </Td>
+diff --git a/app/api/deals/route.ts b/app/api/deals/route.ts
+index de63a84..3864e89 100644
+--- a/app/api/deals/route.ts
++++ b/app/api/deals/route.ts
+@@ -24,15 +24,18 @@ export async function GET() {
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+ 
+   const admin = createAdminClient();
+-  const { data, error } = await admin
+-    .from("products")
+-    .select(
+-      "id, name, description, price, image_url, is_available, updated_at, " +
+-        "deal_items!deal_items_deal_product_id_fkey(id, quantity, component_product_id, component:products!deal_items_component_product_id_fkey(id, name, price))"
+-    )
+-    .eq("restaurant_id", session.restaurantId)
+-    .eq("is_deal", true)
+-    .order("name");
++  const list = () =>
++    admin
++      .from("products")
++      .select(
++        "id, name, description, price, image_url, is_available, updated_at, " +
++          "deal_items!deal_items_deal_product_id_fkey(id, quantity, component_product_id, component:products!deal_items_component_product_id_fkey(id, name, price))"
++      )
++      .eq("restaurant_id", session.restaurantId)
++      .eq("is_deal", true)
++      .order("name");
++  let { data, error } = await list().is("deleted_at", null); // removed deals are hidden (see migration 0018)
++  if (error && /deleted_at/.test(error.message)) ({ data, error } = await list());
+   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+   return NextResponse.json({ deals: data });
+ }
+@@ -58,8 +61,18 @@ export async function POST(req: Request) {
+ 
+   if (body.op === "delete") {
+     if (!body.id) return NextResponse.json({ error: "id is required" }, { status: 400 });
+-    const { error } = await admin.from("products").delete().eq("id", body.id).eq("restaurant_id", session.restaurantId).eq("is_deal", true);
+-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
++    // Soft delete (admin only): hidden everywhere, row kept for past sales.
++    if (session.role !== "admin") return NextResponse.json({ error: "Only an admin can remove deals" }, { status: 403 });
++    const { error } = await admin
++      .from("products")
++      .update({ deleted_at: new Date().toISOString(), is_available: false, updated_at: new Date().toISOString() })
++      .eq("id", body.id)
++      .eq("restaurant_id", session.restaurantId)
++      .eq("is_deal", true);
++    if (error) {
++      const missing = /deleted_at/.test(error.message);
++      return NextResponse.json({ error: missing ? "Run migration 0018_soft_delete_products.sql in Supabase first" : error.message }, { status: 500 });
++    }
+     return NextResponse.json({ success: true });
+   }
+ 
+diff --git a/app/api/device/sync/route.ts b/app/api/device/sync/route.ts
+index 988aa0f..f0eb3ae 100644
+--- a/app/api/device/sync/route.ts
++++ b/app/api/device/sync/route.ts
+@@ -22,11 +22,16 @@ export async function GET(req: Request) {
+ 
+   const [restaurant, products, tables, areas, methods, staff, customers, settingsRes] = await Promise.all([
+     admin.from("restaurants").select("name, address, phone, slug").eq("id", rid).single(),
+-    admin
+-      .from("products")
+-      .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
+-      .eq("restaurant_id", rid)
+-      .order("name"),
++    (async () => {
++      const list = () =>
++        admin
++          .from("products")
++          .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
++          .eq("restaurant_id", rid)
++          .order("name");
++      const live = await list().is("deleted_at", null); // removed products are hidden (migration 0018)
++      return live.error && /deleted_at/.test(live.error.message) ? await list() : live;
++    })(),
+     ordered(() => admin.from("tables").select("id, number, seats, is_active").eq("restaurant_id", rid), "number"),
+     ordered(() => admin.from("delivery_areas").select("id, name, delivery_fee, is_active").eq("restaurant_id", rid), "name"),
+     ordered(() => admin.from("payment_methods").select("id, name").eq("restaurant_id", rid), "name"),
+diff --git a/app/api/products/route.ts b/app/api/products/route.ts
+index f53197c..44c9fec 100644
+--- a/app/api/products/route.ts
++++ b/app/api/products/route.ts
+@@ -7,11 +7,16 @@ export async function GET() {
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+ 
+   const admin = createAdminClient();
+-  const { data, error } = await admin
+-    .from("products")
+-    .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
+-    .eq("restaurant_id", session.restaurantId)
+-    .order("name");
++  const list = () =>
++    admin
++      .from("products")
++      .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
++      .eq("restaurant_id", session.restaurantId)
++      .order("name");
++  // removed products (deleted_at set) stay in the database for old sales but are never listed;
++  // before migration 0018 the column doesn't exist yet, so fall back to the plain list
++  let { data, error } = await list().is("deleted_at", null);
++  if (error && /deleted_at/.test(error.message)) ({ data, error } = await list());
+   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+   return NextResponse.json({ products: data });
+ }
+@@ -28,8 +33,17 @@ export async function POST(req: Request) {
+ 
+   const admin = createAdminClient();
+   if (op === "delete") {
+-    const { error } = await admin.from("products").delete().eq("id", row.id).eq("restaurant_id", session.restaurantId);
+-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
++    // Soft delete: hide it everywhere, keep the row so past sales and reports stay intact. Admin only.
++    if (session.role !== "admin") return NextResponse.json({ error: "Only an admin can remove products" }, { status: 403 });
++    const { error } = await admin
++      .from("products")
++      .update({ deleted_at: new Date().toISOString(), is_available: false, updated_at: new Date().toISOString() })
++      .eq("id", row.id)
++      .eq("restaurant_id", session.restaurantId);
++    if (error) {
++      const missing = /deleted_at/.test(error.message);
++      return NextResponse.json({ error: missing ? "Run migration 0018_soft_delete_products.sql in Supabase first" : error.message }, { status: 500 });
++    }
+   } else {
+     const { menu_categories, ...clean } = row; // drop the joined field if it came back around from a GET response
+     const payload = { ...clean, restaurant_id: session.restaurantId, updated_at: new Date().toISOString() };
+diff --git a/supabase/migrations/0018_soft_delete_products.sql b/supabase/migrations/0018_soft_delete_products.sql
+new file mode 100644
+index 0000000..c4988d6
+--- /dev/null
++++ b/supabase/migrations/0018_soft_delete_products.sql
+@@ -0,0 +1,10 @@
++-- =====================================================================
++-- RESTRO PRO - Supabase migration 0018
++-- "Remove" on a product or deal no longer deletes the row (sales history points at it, so the
++-- database refused and the button silently did nothing). It now stamps deleted_at instead; the
++-- row stays for old sales and reports, and is hidden everywhere else (Menu, Products, Deals, POS,
++-- recipes). Deals are products rows with is_deal = true, so one column covers both. Safe to run twice.
++-- =====================================================================
++alter table public.products add column if not exists deleted_at timestamptz;
++create index if not exists ix_products_restaurant_live on public.products (restaurant_id) where deleted_at is null;
++notify pgrst, 'reload schema';

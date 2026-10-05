@@ -22,11 +22,16 @@ export async function GET(req: Request) {
 
   const [restaurant, products, tables, areas, methods, staff, customers, settingsRes] = await Promise.all([
     admin.from("restaurants").select("name, address, phone, slug").eq("id", rid).single(),
-    admin
-      .from("products")
-      .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
-      .eq("restaurant_id", rid)
-      .order("name"),
+    (async () => {
+      const list = () =>
+        admin
+          .from("products")
+          .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
+          .eq("restaurant_id", rid)
+          .order("name");
+      const live = await list().is("deleted_at", null); // removed products are hidden (migration 0018)
+      return live.error && /deleted_at/.test(live.error.message) ? await list() : live;
+    })(),
     ordered(() => admin.from("tables").select("id, number, seats, is_active").eq("restaurant_id", rid), "number"),
     ordered(() => admin.from("delivery_areas").select("id, name, delivery_fee, is_active").eq("restaurant_id", rid), "name"),
     ordered(() => admin.from("payment_methods").select("id, name").eq("restaurant_id", rid), "name"),

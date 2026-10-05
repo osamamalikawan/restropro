@@ -10,5 +10,5 @@ export default async function ProductsPage() {
   if (!session) redirect("/login");
   if (!(await hasModuleAccess(session.restaurantId, session.role, "products"))) redirect("/dashboard");
 
-  return <ProductsClient canEdit={session.role === "admin" || session.role === "manager"} />;
+  return <ProductsClient canEdit={session.role === "admin" || session.role === "manager"} canRemove={session.role === "admin"} />;
 }
