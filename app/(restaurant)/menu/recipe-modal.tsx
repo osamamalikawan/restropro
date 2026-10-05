@@ -20,6 +20,15 @@ export function RecipeModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  // Esc closes this popup only (the Edit menu item popup underneath stays open).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   useEffect(() => {
     (async () => {
       const [invRes, recipeRes] = await Promise.all([
@@ -78,7 +87,7 @@ export function RecipeModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[120]">
       <div className="w-full max-w-md rounded-xl border border-line bg-surface p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-display text-lg font-semibold">Recipe — {productName}</h3>

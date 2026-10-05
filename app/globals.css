@@ -49,3 +49,48 @@ body {
 .emp-card-in {
   animation: emp-card-in .5s cubic-bezier(.19,1,.22,1) both;
 }
+
+
+/* ============================================================
+   THEMED SCROLLBARS — thin, follow the light/dark tokens.
+   Applies everywhere; .rp-scroll (sidebar, POS panels) keeps the
+   track invisible until hover so lists stay clean.
+   ============================================================ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--line)) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--line));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--ink-faint));
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.rp-scroll {
+  scrollbar-color: transparent transparent;
+}
+.rp-scroll:hover {
+  scrollbar-color: rgb(var(--line)) transparent;
+}
+.rp-scroll::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+.rp-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--line));
+}
+.rp-scroll:hover::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--ink-faint));
+}

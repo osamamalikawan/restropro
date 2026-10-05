@@ -23,10 +23,25 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Not permitted" }, { status: 403 });
   }
 
-  const { op, row } = (await req.json().catch(() => ({}))) as { op?: string; row?: any };
-  if (!op || !row) return NextResponse.json({ error: "op and row are required" }, { status: 400 });
-
+  const body = (await req.json().catch(() => ({}))) as { op?: string; row?: any; ids?: string[] };
+  const { op, row } = body;
   const admin = createAdminClient();
+
+  // Rearranging: ids in the new order. The POS shows categories in this order.
+  if (op === "reorder") {
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x) => typeof x === "string") : [];
+    if (ids.length === 0) return NextResponse.json({ error: "ids are required" }, { status: 400 });
+    const results = await Promise.all(
+      ids.map((id, i) =>
+        admin.from("menu_categories").update({ sort_order: i, updated_at: new Date().toISOString() }).eq("id", id).eq("restaurant_id", session.restaurantId)
+      )
+    );
+    const failed = results.find((r) => r.error);
+    if (failed?.error) return NextResponse.json({ error: failed.error.message }, { status: 500 });
+    return NextResponse.json({ success: true });
+  }
+
+  if (!op || !row) return NextResponse.json({ error: "op and row are required" }, { status: 400 });
   if (op === "delete") {
     const { error } = await admin.from("menu_categories").delete().eq("id", row.id).eq("restaurant_id", session.restaurantId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

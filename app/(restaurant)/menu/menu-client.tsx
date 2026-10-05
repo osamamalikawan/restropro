@@ -1,5 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "@/lib/posData";
+import { ReorderableList } from "@/components/ui/reorderable-list";
 import { X, Pencil, Image as ImageIcon } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, addBtnCls } from "@/components/ui/panel";
@@ -26,6 +29,7 @@ export function MenuClient() {
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
   const [newCatName, setNewCatName] = useState("");
   const [catError, setCatError] = useState("");
+  const [filterCat, setFilterCat] = useState<string>("all"); // "all" | category id | "none"
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -65,6 +69,24 @@ export function MenuClient() {
     setNewCatName("");
     loadAll();
   }
+  /** Drag / arrows in "Menu categories": save the new order. POS shows its category tabs in this order. */
+  async function reorderCategories(next: Category[]) {
+    const previous = categories;
+    setCategories(next.map((c, i) => ({ ...c, sort_order: i })));
+    setCatError("");
+    const res = await fetch("/api/menu-categories", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "reorder", ids: next.map((c) => c.id) }),
+    });
+    if (!res.ok) {
+      setCategories(previous);
+      setCatError((await res.json().catch(() => ({}))).error ?? "Could not save the new order");
+      return;
+    }
+    if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
+  }
+
   async function removeCategory(id: string) {
     const inUse = products.some((p) => p.category_id === id);
     if (inUse) {
@@ -146,26 +168,34 @@ export function MenuClient() {
     loadAll();
   }
 
+  const shownProducts = products.filter((p) =>
+    filterCat === "all" ? true : filterCat === "none" ? !p.category_id : p.category_id === filterCat
+  );
+
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
         <Panel loading={loading} loadingLabel="Loading menu…">
-          <PanelHead title="Menu categories" subtitle="Used to group items in POS" />
+          <PanelHead title="Menu categories" subtitle="Drag to set the order shown in POS" />
           <div className="px-5 py-3 space-y-1">
             {catError && <p className="mb-2 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{catError}</p>}
-            {categories.map((c) => {
-              const inUse = products.filter((p) => p.category_id === c.id).length;
-              return (
-                <div key={c.id} className="flex items-center justify-between py-1.5 text-sm">
-                  <span>
-                    {c.name} {inUse > 0 && <span className="text-xs text-ink-mid">({inUse} items)</span>}
-                  </span>
-                  <button onClick={() => removeCategory(c.id)} className="text-ink-faint hover:text-crimson-400" title="Remove category">
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              );
-            })}
+            <ReorderableList
+              items={categories}
+              onChange={reorderCategories}
+              renderRow={(c) => {
+                const inUse = products.filter((p) => p.category_id === c.id).length;
+                return (
+                  <>
+                    <span>
+                      {c.name} {inUse > 0 && <span className="text-xs text-ink-mid">({inUse} items)</span>}
+                    </span>
+                    <button onClick={() => removeCategory(c.id)} className="text-ink-faint hover:text-crimson-400" title="Remove category">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                );
+              }}
+            />
             {categories.length === 0 && <p className="text-xs text-ink-faint py-2">No categories yet — add one below.</p>}
           </div>
           <div className="flex gap-2 px-5 pb-4">
@@ -188,8 +218,26 @@ export function MenuClient() {
               + Add product
             </button>
           </PanelHead>
+          <div className="flex flex-wrap gap-2 px-5 pt-4">
+            {[
+              { id: "all", name: "All", count: products.length },
+              ...categories.map((c) => ({ id: c.id, name: c.name, count: products.filter((p) => p.category_id === c.id).length })),
+              ...(products.some((p) => !p.category_id) ? [{ id: "none", name: "No category", count: products.filter((p) => !p.category_id).length }] : []),
+            ].map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setFilterCat(c.id)}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  filterCat === c.id ? "border-chili-500 bg-chili-500 text-white" : "border-line bg-raised text-ink-mid hover:border-chili-500/60 hover:text-ink-strong"
+                }`}
+              >
+                {c.name} <span className="opacity-70">{c.count}</span>
+              </button>
+            ))}
+          </div>
           <div className="p-5 grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(155px, 1fr))" }}>
-            {products.map((p) => (
+            {shownProducts.map((p) => (
               <div
                 key={p.id}
                 className={`group relative overflow-hidden rounded-lg border border-line transition hover:-translate-y-0.5 hover:border-chili-500 ${
@@ -210,14 +258,21 @@ export function MenuClient() {
                 </button>
               </div>
             ))}
-            {products.length === 0 && <p className="col-span-full py-10 text-center text-sm text-ink-faint">No products yet — add one above.</p>}
+            {shownProducts.length === 0 && (
+              <p className="col-span-full py-10 text-center text-sm text-ink-faint">
+                {products.length === 0 ? "No products yet — add one above." : "No products in this category."}
+              </p>
+            )}
           </div>
         </Panel>
       </div>
 
       <Modal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        // Esc / backdrop click closes only the popup on top: while the recipe popup is open, this one stays.
+        onClose={() => {
+          if (!recipeProduct) setModalOpen(false);
+        }}
         busy={saving}
         title={editingId ? "Edit menu item" : "Add menu item"}
         footer={

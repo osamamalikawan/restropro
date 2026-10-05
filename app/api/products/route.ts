@@ -9,7 +9,7 @@ export async function GET() {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("products")
-    .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name)")
+    .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
     .eq("restaurant_id", session.restaurantId)
     .order("name");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

@@ -24,7 +24,7 @@ export async function GET(req: Request) {
     admin.from("restaurants").select("name, address, phone, slug").eq("id", rid).single(),
     admin
       .from("products")
-      .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name)")
+      .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
       .eq("restaurant_id", rid)
       .order("name"),
     ordered(() => admin.from("tables").select("id, number, seats, is_active").eq("restaurant_id", rid), "number"),

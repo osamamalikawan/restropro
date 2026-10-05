@@ -198,7 +198,7 @@ export function InventoryClient() {
                       <div className="flex items-center gap-1.5">
                         <IconBtn
                           title={i.item_type === "self_made" ? "Log production" : "Restock this item"}
-                          onClick={() => router.push(`/dashboard/restock?itemId=${i.id}`)}
+                          onClick={() => router.push(`/restock?itemId=${i.id}`)}
                         >
                           <RotateCw className="h-3.5 w-3.5" />
                         </IconBtn>

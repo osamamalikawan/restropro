@@ -55,7 +55,7 @@ export function Sidebar({
   return (
     <aside
       className={`bg-surface border-r border-line flex flex-col shrink-0 fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-300 ease-out
-        md:static md:transform-none md:transition-[width,padding,opacity]
+        md:static md:h-full md:transform-none md:transition-[width,padding,opacity]
         ${navToggled ? "translate-x-0 shadow-2xl" : "-translate-x-full"}
         ${navToggled ? "md:w-0 md:opacity-0 md:pointer-events-none md:overflow-hidden md:border-0 md:p-0" : "md:w-64 md:opacity-100"}`}
     >
@@ -69,7 +69,7 @@ export function Sidebar({
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4">
+      <nav className="rp-scroll flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-4">
         {NAV_GROUPS.map((group) => {
           const visibleItems = group.items.filter((i) => canAccess(role, modulePerms, i.perm));
           if (visibleItems.length === 0) return null;

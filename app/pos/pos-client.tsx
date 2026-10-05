@@ -25,7 +25,7 @@ type Product = {
   is_available: boolean;
   image_url?: string | null;
   // joined by /api/products; supabase returns an object for many-to-one, handle an array defensively
-  menu_categories?: { name: string } | { name: string }[] | null;
+  menu_categories?: { name: string; sort_order?: number } | { name: string; sort_order?: number }[] | null;
 };
 type CartLine = { productId: string; name: string; price: number; qty: number; note?: string };
 type Table = { id: string; number: string; seats: number };
@@ -63,6 +63,11 @@ const categoryOf = (p: Product) => {
   const mc = p.menu_categories;
   const name = Array.isArray(mc) ? mc[0]?.name : mc?.name;
   return name || "Other";
+};
+const categoryOrderOf = (p: Product) => {
+  const mc = p.menu_categories;
+  const o = Array.isArray(mc) ? mc[0]?.sort_order : mc?.sort_order;
+  return typeof o === "number" ? o : Number.MAX_SAFE_INTEGER;
 };
 const TYPE_TAG: Record<OrderType, string> = { dine_in: "Dine in", takeaway: "Takeaway", delivery: "Delivery" };
 const LABEL = "block text-[11px] font-bold uppercase tracking-wide text-ink-faint";
@@ -587,8 +592,16 @@ export function PosClient({
 
   const available = useMemo(() => (products ?? []).filter((p) => p.is_available !== false), [products]);
   const categories = useMemo(() => {
-    const names = Array.from(new Set(available.map(categoryOf)));
-    names.sort((a, b) => (a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b)));
+    // Same order as Menu -> Menu categories (falls back to A-Z for a category without an order yet).
+    const order = new Map<string, number>();
+    for (const p of available) {
+      const n = categoryOf(p);
+      order.set(n, Math.min(order.get(n) ?? Number.MAX_SAFE_INTEGER, categoryOrderOf(p)));
+    }
+    const names = Array.from(order.keys());
+    names.sort((a, b) =>
+      a === "Other" ? 1 : b === "Other" ? -1 : (order.get(a)! - order.get(b)!) || a.localeCompare(b)
+    );
     return names;
   }, [available]);
   const q = search.trim().toLowerCase();

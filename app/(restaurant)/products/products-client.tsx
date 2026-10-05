@@ -242,6 +242,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+      <div className="space-y-6">
       <Panel loading={loading}>
         <PanelHead title="Products" subtitle="Cost price is calculated automatically from each item's recipe">
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search product…" className={searchInputCls} />
@@ -297,7 +298,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
                     </Td>
                     <Td>
                       <div className="flex items-center gap-1.5">
-                        <IconBtn title="View recipe" onClick={() => router.push(`/dashboard/recipes-production?productId=${p.id}`)}>
+                        <IconBtn title="View recipe" onClick={() => router.push(`/recipes-production?productId=${p.id}`)}>
                           <NotebookText className="h-3.5 w-3.5" />
                         </IconBtn>
                         {canEdit && (
@@ -376,6 +377,7 @@ export function ProductsClient({ canEdit }: { canEdit: boolean }) {
           </table>
         </TableScroll>
       </Panel>
+      </div>
 
       <Modal
         busy={saving}
