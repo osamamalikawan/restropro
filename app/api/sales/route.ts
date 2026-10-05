@@ -26,7 +26,7 @@ export async function GET(req: Request) {
   const admin = createAdminClient();
   let query = admin
     .from("sales")
-    .select("*, customers(name, phone), tables(number), sale_items(*), sale_payments(*)")
+    .select("*, customers(name, phone, address), tables(number), sale_items(*), sale_payments(*)")
     .eq("restaurant_id", session.restaurantId)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false });

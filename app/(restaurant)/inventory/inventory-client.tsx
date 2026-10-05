@@ -21,7 +21,10 @@ type Item = {
 type Purchase = { inventory_item_id: string; suppliers?: { name: string } | null };
 
 function stockStatus(i: Item) {
-  if (i.current_stock <= 0) return { label: "Out of stock", color: "#B7383F" };
+  // A sale can take more than is on the shelf: the stock then goes negative (the amount still owed
+  // to the kitchen) and the next restock is netted against it.
+  if (i.current_stock < 0) return { label: "Negative stock", color: "#B7383F" };
+  if (i.current_stock === 0) return { label: "Out of stock", color: "#B7383F" };
   if (i.current_stock < i.min_stock) return { label: "Low stock", color: "#C99A3E" };
   return { label: "In stock", color: "#3F6E52" };
 }
@@ -166,7 +169,7 @@ export function InventoryClient() {
             <tbody>
               {pg.visible.map((i) => {
                 const st = stockStatus(i);
-                const pct = Math.min(100, Math.round((i.current_stock / (i.min_stock * 2 || 1)) * 100));
+                const pct = Math.max(0, Math.min(100, Math.round((i.current_stock / (i.min_stock * 2 || 1)) * 100)));
                 return (
                   <tr key={i.id} className="border-b border-line last:border-0">
                     <Td>
@@ -179,7 +182,10 @@ export function InventoryClient() {
                     <Td className="text-ink-mid">{suppliersFor(i.id, i.item_type)}</Td>
                     <Td>
                       <div className="text-sm">
-                        {i.current_stock} {i.unit} <span className="text-ink-mid text-xs">min @ {i.min_stock}</span>
+                        <span className={i.current_stock < 0 ? "font-semibold text-crimson-400" : ""}>
+                          {Math.round(Number(i.current_stock) * 1000) / 1000} {i.unit}
+                        </span>{" "}
+                        <span className="text-ink-mid text-xs">min @ {i.min_stock}</span>
                       </div>
                       <div className="mt-1 h-1.5 w-28 rounded-full bg-raised overflow-hidden">
                         <div className="h-full rounded-full" style={{ width: `${pct}%`, background: st.color }} />
