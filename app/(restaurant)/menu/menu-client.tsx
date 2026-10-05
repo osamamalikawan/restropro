@@ -88,17 +88,32 @@ export function MenuClient() {
   }
 
   async function removeCategory(id: string) {
-    const inUse = products.some((p) => p.category_id === id);
-    if (inUse) {
-      setCatError("Move or remove items in this category first");
+    const cat = categories.find((c) => c.id === id);
+    const count = products.filter((p) => p.category_id === id).length;
+    if (count > 0) {
+      setCatError(
+        `"${cat?.name ?? "This category"}" still has ${count} item${count === 1 ? "" : "s"}. Move them to another category (or remove them) first, then delete it.`
+      );
       return;
     }
     setCatError("");
-    await fetch("/api/menu-categories", {
+    const res = await fetch("/api/menu-categories", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ op: "delete", row: { id } }),
     });
+    if (!res.ok) {
+      const msg = (await res.json().catch(() => ({}))).error as string | undefined;
+      setCatError(
+        msg && /foreign key|violates|referenc/i.test(msg)
+          ? `"${cat?.name ?? "This category"}" is still used by a deal or product, so it can't be deleted yet.`
+          : msg || "Could not remove the category"
+      );
+      return;
+    }
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+    if (filterCat === id) setFilterCat("all");
+    if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {});
     loadAll();
   }
 
@@ -189,7 +204,14 @@ export function MenuClient() {
                     <span>
                       {c.name} {inUse > 0 && <span className="text-xs text-ink-mid">({inUse} items)</span>}
                     </span>
-                    <button onClick={() => removeCategory(c.id)} className="text-ink-faint hover:text-crimson-400" title="Remove category">
+                    <button
+                      type="button"
+                      draggable={false}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={() => removeCategory(c.id)}
+                      className="p-1 text-ink-faint hover:text-crimson-400"
+                      title="Remove category"
+                    >
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </>
