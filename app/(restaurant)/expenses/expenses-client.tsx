@@ -1,10 +1,11 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
-import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, addBtnCls } from "@/components/ui/panel";
+import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, addBtnCls, searchInputCls } from "@/components/ui/panel";
+import { DateRange, rangeToQuery } from "@/components/ui/date-range";
 import { fmtMoney, todayISO } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
-import { LoadMore, useProgressive } from "@/components/ui/load-more";
+import { LoadMore, useDebounced } from "@/components/ui/load-more";
 
 type ExpenseCategory = { id: string; name: string };
 type PaymentMethod = { id: string; name: string };
@@ -19,8 +20,18 @@ type Expense = {
   txn_date: string;
 };
 
+const PAGE = 50;
+
 export function ExpensesClient() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [summary, setSummary] = useState({ total: 0, count: 0 }); // for the whole filtered range
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [search, setSearch] = useState("");
+  const q = useDebounced(search.trim(), 300);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const latest = useRef(0); // ignores a slow answer that a newer search/filter has already replaced
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,26 +48,54 @@ export function ExpensesClient() {
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState("");
 
-  async function load() {
-    setLoading(true);
-    setLoadError("");
-    const [eRes, cRes, mRes] = await Promise.all([
-      fetchJson<{ expenses: Expense[] }>("/api/expenses"),
-      fetchJson<{ categories: ExpenseCategory[] }>("/api/expense-categories"),
-      fetchJson<{ methods: PaymentMethod[] }>("/api/payment-methods"),
-    ]);
+  async function loadPage(offset: number) {
+    const id = latest.current;
+    const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset), ...rangeToQuery(from, to, false) });
+    if (q) params.set("q", q);
+    const eRes = await fetchJson<{ expenses: Expense[]; hasMore: boolean; total?: number; count?: number }>(`/api/expenses?${params}`);
+    if (id !== latest.current) return;
     if (!eRes.ok) {
       setLoadError(eRes.error);
-      setExpenses([]);
-    } else {
-      setExpenses(eRes.data?.expenses ?? []);
+      if (offset === 0) setExpenses([]);
+      return;
     }
-    setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
-    setMethods(mRes.ok ? mRes.data?.methods ?? [] : []);
+    setLoadError("");
+    setHasMore(!!eRes.data?.hasMore);
+    if (eRes.data?.total != null) setSummary({ total: eRes.data.total, count: eRes.data.count ?? 0 });
+    setExpenses((prev) => (offset === 0 ? eRes.data?.expenses ?? [] : [...prev, ...(eRes.data?.expenses ?? [])]));
+  }
+
+  /** Back to the first page (new search / date range / after logging an expense). */
+  async function load() {
+    latest.current += 1;
+    setLoading(true);
+    setHasMore(false);
+    await loadPage(0);
     setLoading(false);
   }
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    await loadPage(expenses.length);
+    setLoadingMore(false);
+  }
+
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, from, to]);
+
+  // the add-expense form's drop-downs don't depend on the filters: load them once
+  useEffect(() => {
+    (async () => {
+      const [cRes, mRes] = await Promise.all([
+        fetchJson<{ categories: ExpenseCategory[] }>("/api/expense-categories"),
+        fetchJson<{ methods: PaymentMethod[] }>("/api/payment-methods"),
+      ]);
+      setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
+      setMethods(mRes.ok ? mRes.data?.methods ?? [] : []);
+    })();
   }, []);
 
   function openAdd() {
@@ -99,16 +138,23 @@ export function ExpensesClient() {
     await load();
   }
 
-  const pg = useProgressive(expenses); // first 50 rows now, the rest as you scroll — keeps big tables fast
-
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <Panel loading={loading}>
-        <PanelHead title="Expenses" subtitle="Regular and recurring restaurant expenses">
+        <PanelHead
+          title="Expenses"
+          subtitle={
+            q || from || to
+              ? `${summary.count} expense${summary.count === 1 ? "" : "s"} found · ${fmtMoney(summary.total)}`
+              : "Regular and recurring restaurant expenses"
+          }
+        >
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search category…" className={searchInputCls} />
           <button onClick={openAdd} className={addBtnCls}>
             + Add expense
           </button>
         </PanelHead>
+        <DateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
         {loadError && (
           <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
             Couldn&apos;t load expenses: {loadError}
@@ -128,7 +174,7 @@ export function ExpensesClient() {
               </tr>
             </thead>
             <tbody>
-              {pg.visible.map((e) => (
+              {expenses.map((e) => (
                 <tr key={e.id} className="border-b border-line last:border-0">
                   <Td className="text-ink-mid">{e.txn_date}</Td>
                   <Td>
@@ -141,11 +187,13 @@ export function ExpensesClient() {
                   <Td className="text-ink-mid">{e.payment_method}</Td>
                 </tr>
               ))}
-              {!loading && !loadError && expenses.length === 0 && <EmptyRow colSpan={7} label="No expenses logged yet." />}
+              {!loading && !loadError && expenses.length === 0 && (
+                <EmptyRow colSpan={7} label={q || from || to ? "No expenses match this search or date range." : "No expenses logged yet."} />
+              )}
             </tbody>
           </table>
         </TableScroll>
-        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+        <LoadMore hasMore={hasMore} loading={loadingMore} onMore={loadMore} />
       </Panel>
 
       <Modal

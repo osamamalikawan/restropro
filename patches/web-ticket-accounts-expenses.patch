@@ -1,0 +1,703 @@
+diff --git a/app/(restaurant)/accounts/accounts-client.tsx b/app/(restaurant)/accounts/accounts-client.tsx
+index b9536c6..c21f0b8 100644
+--- a/app/(restaurant)/accounts/accounts-client.tsx
++++ b/app/(restaurant)/accounts/accounts-client.tsx
+@@ -1,19 +1,29 @@
+ "use client";
+-import { useEffect, useMemo, useState } from "react";
++import { useEffect, useMemo, useRef, useState } from "react";
+ import { ArrowUp, ArrowDown, Equal, Hourglass } from "lucide-react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+-import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, KpiCard, addBtnCls } from "@/components/ui/panel";
+-import { fmtMoney, todayISO } from "@/lib/format";
++import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, KpiCard, addBtnCls, searchInputCls } from "@/components/ui/panel";
++import { DateRange, rangeToQuery } from "@/components/ui/date-range";
++import { fmtMoney, fmtDateTime, todayISO } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
+-import { LoadMore, useProgressive } from "@/components/ui/load-more";
++import { LoadMore, useDebounced } from "@/components/ui/load-more";
+ 
+-type AccountEntry = { id: string; txn_date: string; description: string; category: string; type: "income" | "expense"; amount: number };
++type AccountEntry = { id: string; txn_date: string; created_at?: string; description: string; category: string; type: "income" | "expense"; amount: number };
+ type Supplier = { id: string };
+ type Purchase = { supplier_id: string | null; total_cost: number };
+ type LedgerEntry = { supplier_id: string; amount: number };
++const PAGE = 50;
+ 
+ export function AccountsClient() {
+   const [entries, setEntries] = useState<AccountEntry[]>([]);
++  const [totals, setTotals] = useState({ income: 0, expense: 0, net: 0 });
++  const [hasMore, setHasMore] = useState(false);
++  const [loadingMore, setLoadingMore] = useState(false);
++  const [search, setSearch] = useState("");
++  const q = useDebounced(search.trim(), 300);
++  const [from, setFrom] = useState(""); // local date+time strings from the range boxes
++  const [to, setTo] = useState("");
++  const latest = useRef(0); // ignores a slow answer that a newer search/filter has already replaced
+   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+   const [purchases, setPurchases] = useState<Purchase[]>([]);
+   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
+@@ -29,49 +39,80 @@ export function AccountsClient() {
+   const [saving, setSaving] = useState(false);
+   const [loadError, setLoadError] = useState("");
+ 
+-  async function load() {
+-    setLoading(true);
+-    setLoadError("");
+-    const [aRes, sRes, pRes, lRes] = await Promise.all([
+-      fetchJson<{ accounts: AccountEntry[] }>("/api/accounts"),
+-      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
+-      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
+-      fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger?limit=1000"),
+-    ]);
+-    if (!aRes.ok) {
+-      setLoadError(aRes.error);
+-      setEntries([]);
+-    } else {
+-      setEntries(aRes.data?.accounts ?? []);
++  /** Fetches one page of the ledger for the current search + date range. offset 0 starts over. */
++  async function loadPage(offset: number) {
++    const id = latest.current;
++    const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset), ...rangeToQuery(from, to, true) });
++    if (q) params.set("q", q);
++    const res = await fetchJson<{ accounts: AccountEntry[]; hasMore: boolean; totals?: { income: number; expense: number; net: number } }>(
++      `/api/accounts?${params}`
++    );
++    if (id !== latest.current) return;
++    if (!res.ok) {
++      setLoadError(res.error);
++      if (offset === 0) setEntries([]);
++      return;
+     }
+-    setSuppliers(sRes.ok ? sRes.data?.suppliers ?? [] : []);
+-    setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
+-    setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
++    setLoadError("");
++    setHasMore(!!res.data?.hasMore);
++    if (res.data?.totals) setTotals(res.data.totals);
++    setEntries((prev) => (offset === 0 ? res.data?.accounts ?? [] : [...prev, ...(res.data?.accounts ?? [])]));
++  }
++
++  /** Reload from the first page (new search / range / after saving an entry). */
++  async function reload() {
++    latest.current += 1;
++    setLoading(true);
++    setHasMore(false);
++    await loadPage(0);
+     setLoading(false);
+   }
++
++  async function loadMore() {
++    if (loadingMore || !hasMore) return;
++    setLoadingMore(true);
++    await loadPage(entries.length);
++    setLoadingMore(false);
++  }
++
++  // search / date range changed -> start again from the newest matching entry
++  useEffect(() => {
++    reload();
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [q, from, to]);
++
++  // supplier figures don't depend on the ledger filters: load them once
+   useEffect(() => {
+-    load();
++    (async () => {
++      const [sRes, pRes, lRes] = await Promise.all([
++        fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
++        fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
++        fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger?limit=1000"),
++      ]);
++      setSuppliers(sRes.ok ? sRes.data?.suppliers ?? [] : []);
++      setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
++      setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
++    })();
+   }, []);
+ 
+-  const income = entries.filter((e) => e.type === "income").reduce((s, e) => s + Number(e.amount), 0);
+-  const expense = entries.filter((e) => e.type === "expense").reduce((s, e) => s + Number(e.amount), 0);
++  const { income, expense } = totals;
+   const supplierPayable = suppliers.reduce((sum, s) => {
+     const purchased = purchases.filter((p) => p.supplier_id === s.id).reduce((x, p) => x + Number(p.total_cost), 0);
+     const paid = ledger.filter((l) => l.supplier_id === s.id).reduce((x, l) => x + Number(l.amount), 0);
+     return sum + Math.max(0, purchased - paid);
+   }, 0);
+ 
+-  // Running balance — oldest-first cumulative, then displayed newest-first (matches prototype).
++  // Running balance: the newest row shows the net of the whole selected range, and each older row is
++  // that minus everything booked after it. Works page by page, so loading more never changes what
++  // is already on screen.
+   const withBalance = useMemo(() => {
+-    const sorted = [...entries].sort((a, b) => (a.txn_date < b.txn_date ? -1 : 1));
+-    let running = 0;
+-    const balances = new Map<string, number>();
+-    for (const e of sorted) {
+-      running += e.type === "income" ? Number(e.amount) : -Number(e.amount);
+-      balances.set(e.id, running);
+-    }
+-    return entries.map((e) => ({ ...e, balance: balances.get(e.id) ?? 0 }));
+-  }, [entries]);
++    let bal = totals.net;
++    return entries.map((e) => {
++      const row = { ...e, balance: bal };
++      bal -= e.type === "income" ? Number(e.amount) : -Number(e.amount);
++      return row;
++    });
++  }, [entries, totals.net]);
+ 
+   function openAdd() {
+     setFType("income");
+@@ -101,11 +142,9 @@ export function AccountsClient() {
+       return;
+     }
+     setModalOpen(false);
+-    await load();
++    await reload();
+   }
+ 
+-  const pg = useProgressive(withBalance); // first 50 rows now, the rest as you scroll — keeps big tables fast
+-
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
+@@ -117,10 +156,12 @@ export function AccountsClient() {
+ 
+       <Panel loading={loading}>
+         <PanelHead title="Ledger" subtitle="Income & expense transactions">
++          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search description…" className={searchInputCls} />
+           <button onClick={openAdd} className={addBtnCls}>
+             + Add entry
+           </button>
+         </PanelHead>
++        <DateRange from={from} to={to} withTime onChange={(f, t) => { setFrom(f); setTo(t); }} />
+         {loadError && (
+           <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+             Couldn&apos;t load the ledger: {loadError}
+@@ -139,9 +180,9 @@ export function AccountsClient() {
+               </tr>
+             </thead>
+             <tbody>
+-              {pg.visible.map((e) => (
++              {withBalance.map((e) => (
+                 <tr key={e.id} className="border-b border-line last:border-0">
+-                  <Td className="text-ink-mid">{e.txn_date}</Td>
++                  <Td className="text-ink-mid">{e.created_at ? fmtDateTime(e.created_at) : e.txn_date}</Td>
+                   <Td className="font-medium text-ink-strong">{e.description}</Td>
+                   <Td>
+                     <Badge>{e.category}</Badge>
+@@ -156,11 +197,13 @@ export function AccountsClient() {
+                   <Td className="font-mono text-ink-mid">{fmtMoney(e.balance)}</Td>
+                 </tr>
+               ))}
+-              {!loading && !loadError && withBalance.length === 0 && <EmptyRow colSpan={6} label="No ledger entries yet." />}
++              {!loading && !loadError && withBalance.length === 0 && (
++                <EmptyRow colSpan={6} label={q || from || to ? "No entries match this search or date range." : "No ledger entries yet."} />
++              )}
+             </tbody>
+           </table>
+         </TableScroll>
+-        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
++        <LoadMore hasMore={hasMore} loading={loadingMore} onMore={loadMore} />
+       </Panel>
+ 
+       <Modal
+diff --git a/app/(restaurant)/expenses/expenses-client.tsx b/app/(restaurant)/expenses/expenses-client.tsx
+index 5da1ba8..12179dc 100644
+--- a/app/(restaurant)/expenses/expenses-client.tsx
++++ b/app/(restaurant)/expenses/expenses-client.tsx
+@@ -1,10 +1,11 @@
+ "use client";
+-import { useEffect, useState } from "react";
++import { useEffect, useRef, useState } from "react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+-import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, addBtnCls } from "@/components/ui/panel";
++import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, addBtnCls, searchInputCls } from "@/components/ui/panel";
++import { DateRange, rangeToQuery } from "@/components/ui/date-range";
+ import { fmtMoney, todayISO } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
+-import { LoadMore, useProgressive } from "@/components/ui/load-more";
++import { LoadMore, useDebounced } from "@/components/ui/load-more";
+ 
+ type ExpenseCategory = { id: string; name: string };
+ type PaymentMethod = { id: string; name: string };
+@@ -19,8 +20,18 @@ type Expense = {
+   txn_date: string;
+ };
+ 
++const PAGE = 50;
++
+ export function ExpensesClient() {
+   const [expenses, setExpenses] = useState<Expense[]>([]);
++  const [summary, setSummary] = useState({ total: 0, count: 0 }); // for the whole filtered range
++  const [hasMore, setHasMore] = useState(false);
++  const [loadingMore, setLoadingMore] = useState(false);
++  const [search, setSearch] = useState("");
++  const q = useDebounced(search.trim(), 300);
++  const [from, setFrom] = useState("");
++  const [to, setTo] = useState("");
++  const latest = useRef(0); // ignores a slow answer that a newer search/filter has already replaced
+   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
+   const [methods, setMethods] = useState<PaymentMethod[]>([]);
+   const [loading, setLoading] = useState(true);
+@@ -37,26 +48,54 @@ export function ExpensesClient() {
+   const [saving, setSaving] = useState(false);
+   const [loadError, setLoadError] = useState("");
+ 
+-  async function load() {
+-    setLoading(true);
+-    setLoadError("");
+-    const [eRes, cRes, mRes] = await Promise.all([
+-      fetchJson<{ expenses: Expense[] }>("/api/expenses"),
+-      fetchJson<{ categories: ExpenseCategory[] }>("/api/expense-categories"),
+-      fetchJson<{ methods: PaymentMethod[] }>("/api/payment-methods"),
+-    ]);
++  async function loadPage(offset: number) {
++    const id = latest.current;
++    const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset), ...rangeToQuery(from, to, false) });
++    if (q) params.set("q", q);
++    const eRes = await fetchJson<{ expenses: Expense[]; hasMore: boolean; total?: number; count?: number }>(`/api/expenses?${params}`);
++    if (id !== latest.current) return;
+     if (!eRes.ok) {
+       setLoadError(eRes.error);
+-      setExpenses([]);
+-    } else {
+-      setExpenses(eRes.data?.expenses ?? []);
++      if (offset === 0) setExpenses([]);
++      return;
+     }
+-    setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
+-    setMethods(mRes.ok ? mRes.data?.methods ?? [] : []);
++    setLoadError("");
++    setHasMore(!!eRes.data?.hasMore);
++    if (eRes.data?.total != null) setSummary({ total: eRes.data.total, count: eRes.data.count ?? 0 });
++    setExpenses((prev) => (offset === 0 ? eRes.data?.expenses ?? [] : [...prev, ...(eRes.data?.expenses ?? [])]));
++  }
++
++  /** Back to the first page (new search / date range / after logging an expense). */
++  async function load() {
++    latest.current += 1;
++    setLoading(true);
++    setHasMore(false);
++    await loadPage(0);
+     setLoading(false);
+   }
++
++  async function loadMore() {
++    if (loadingMore || !hasMore) return;
++    setLoadingMore(true);
++    await loadPage(expenses.length);
++    setLoadingMore(false);
++  }
++
+   useEffect(() => {
+     load();
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [q, from, to]);
++
++  // the add-expense form's drop-downs don't depend on the filters: load them once
++  useEffect(() => {
++    (async () => {
++      const [cRes, mRes] = await Promise.all([
++        fetchJson<{ categories: ExpenseCategory[] }>("/api/expense-categories"),
++        fetchJson<{ methods: PaymentMethod[] }>("/api/payment-methods"),
++      ]);
++      setCategories(cRes.ok ? cRes.data?.categories ?? [] : []);
++      setMethods(mRes.ok ? mRes.data?.methods ?? [] : []);
++    })();
+   }, []);
+ 
+   function openAdd() {
+@@ -99,16 +138,23 @@ export function ExpensesClient() {
+     await load();
+   }
+ 
+-  const pg = useProgressive(expenses); // first 50 rows now, the rest as you scroll — keeps big tables fast
+-
+   return (
+     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
+       <Panel loading={loading}>
+-        <PanelHead title="Expenses" subtitle="Regular and recurring restaurant expenses">
++        <PanelHead
++          title="Expenses"
++          subtitle={
++            q || from || to
++              ? `${summary.count} expense${summary.count === 1 ? "" : "s"} found · ${fmtMoney(summary.total)}`
++              : "Regular and recurring restaurant expenses"
++          }
++        >
++          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search category…" className={searchInputCls} />
+           <button onClick={openAdd} className={addBtnCls}>
+             + Add expense
+           </button>
+         </PanelHead>
++        <DateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
+         {loadError && (
+           <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
+             Couldn&apos;t load expenses: {loadError}
+@@ -128,7 +174,7 @@ export function ExpensesClient() {
+               </tr>
+             </thead>
+             <tbody>
+-              {pg.visible.map((e) => (
++              {expenses.map((e) => (
+                 <tr key={e.id} className="border-b border-line last:border-0">
+                   <Td className="text-ink-mid">{e.txn_date}</Td>
+                   <Td>
+@@ -141,11 +187,13 @@ export function ExpensesClient() {
+                   <Td className="text-ink-mid">{e.payment_method}</Td>
+                 </tr>
+               ))}
+-              {!loading && !loadError && expenses.length === 0 && <EmptyRow colSpan={7} label="No expenses logged yet." />}
++              {!loading && !loadError && expenses.length === 0 && (
++                <EmptyRow colSpan={7} label={q || from || to ? "No expenses match this search or date range." : "No expenses logged yet."} />
++              )}
+             </tbody>
+           </table>
+         </TableScroll>
+-        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
++        <LoadMore hasMore={hasMore} loading={loadingMore} onMore={loadMore} />
+       </Panel>
+ 
+       <Modal
+diff --git a/app/(restaurant)/ticket-rail/ticket-rail-client.tsx b/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
+index 50cb701..9903d95 100644
+--- a/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
++++ b/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
+@@ -20,6 +20,7 @@ type Sale = {
+   kitchen_status: Kitchen;
+   delivery_charge: number;
+   created_at: string;
++  kitchen_status_at?: string | null;
+   customers: { name: string; phone?: string | null; address?: string | null } | null;
+   area_id?: string | null;
+   subtotal?: number;
+@@ -42,6 +43,7 @@ type Held = {
+   tableId: string;
+   cart: { productId: string; name: string; price: number; qty: number }[];
+   heldAt: number;
++  kitchenAt?: number; // when it was last moved between columns
+   kitchenStatus?: Kitchen;
+ };
+ 
+@@ -54,6 +56,7 @@ const COLUMNS: { key: Kitchen; label: string; pill: string }[] = [
+ ];
+ const TYPE_LABEL: Record<OrderType, string> = { dine_in: "Dine In", takeaway: "Takeaway", delivery: "Delivery" };
+ const BLINK_MS = 15000;
++const COMPLETED_VISIBLE_MS = 60 * 60 * 1000; // a Completed ticket leaves the board after one hour
+ 
+ const RT_CSS = `
+ .rt-scroll{scrollbar-width:thin;scrollbar-color:rgb(var(--line)) transparent}
+@@ -165,20 +168,29 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, []);
+ 
++  // A ticket sitting in Completed for more than an hour is taken off the board (the sale itself is
++  // untouched: it stays in Sales, reports and the ledger). The board refreshes every 5 seconds, so
++  // this is re-checked continuously.
++  const nowMs = Date.now();
++  const expired = (col: Kitchen, since: number) => col === "Completed" && nowMs - since > COMPLETED_VISIBLE_MS;
+   const cards: Card[] = [
+-    ...sales.map((s): Card => ({ key: `sale:${s.id}`, col: s.kitchen_status, at: new Date(s.created_at).getTime(), sale: s })),
+-    ...held.map((t): Card => ({ key: `held:${t.id}`, col: t.kitchenStatus ?? "New", at: t.heldAt, held: t })),
++    ...sales
++      .filter((s) => !expired(s.kitchen_status, new Date(s.kitchen_status_at ?? s.created_at).getTime()))
++      .map((s): Card => ({ key: `sale:${s.id}`, col: s.kitchen_status, at: new Date(s.created_at).getTime(), sale: s })),
++    ...held
++      .filter((t) => !expired(t.kitchenStatus ?? "New", t.kitchenAt ?? t.heldAt))
++      .map((t): Card => ({ key: `held:${t.id}`, col: t.kitchenStatus ?? "New", at: t.heldAt, held: t })),
+   ];
+ 
+   async function moveCard(card: Card, to: Kitchen) {
+     if (card.col === to) return;
+     if (card.held) {
+-      writeHeld(readHeld().map((t) => (t.id === card.held!.id ? { ...t, kitchenStatus: to } : t)));
++      writeHeld(readHeld().map((t) => (t.id === card.held!.id ? { ...t, kitchenStatus: to, kitchenAt: Date.now() } : t)));
+       return;
+     }
+     const saleId = card.sale!.id;
+     setBusyId(saleId);
+-    setSales((prev) => prev.map((s) => (s.id === saleId ? { ...s, kitchen_status: to } : s)));
++    setSales((prev) => prev.map((s) => (s.id === saleId ? { ...s, kitchen_status: to, kitchen_status_at: new Date().toISOString() } : s)));
+     const res = await fetch("/api/sales/kitchen-status", {
+       method: "POST",
+       headers: { "content-type": "application/json" },
+diff --git a/app/api/accounts/route.ts b/app/api/accounts/route.ts
+index 685518e..1eaeab8 100644
+--- a/app/api/accounts/route.ts
++++ b/app/api/accounts/route.ts
+@@ -2,19 +2,76 @@ import { NextResponse } from "next/server";
+ import { requireStaffSession } from "@/lib/auth/require-staff";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ 
+-export async function GET() {
++const SELECT = "id, txn_date, description, category, type, amount";
++
++/** Ledger list, paged: ?limit (default 50, max 200) &offset, ?q= (description contains),
++ *  ?from= & ?to= (ISO date-times, inclusive; matched against the moment the entry was booked).
++ *  Returns { accounts, hasMore } (one extra row is fetched to know if another page exists).
++ *  On the first page (offset 0) it also returns { totals: { income, expense } } for the WHOLE
++ *  filtered range, so the cards above the table stay right however many rows are loaded. */
++export async function GET(req: Request) {
+   const session = await requireStaffSession();
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+ 
++  const sp = new URL(req.url).searchParams;
++  const limit = Math.min(Math.max(Number(sp.get("limit") ?? 50) || 50, 1), 200);
++  const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
++  const q = (sp.get("q") ?? "").replace(/[,()%*\\]/g, " ").trim();
++  const from = sp.get("from");
++  const to = sp.get("to");
++  const fromOk = from && !Number.isNaN(Date.parse(from)) ? new Date(from).toISOString() : null;
++  const toOk = to && !Number.isNaN(Date.parse(to)) ? new Date(to).toISOString() : null;
++
+   const admin = createAdminClient();
+-  const { data, error } = await admin
+-    .from("accounts")
+-    .select("id, txn_date, description, category, type, amount")
+-    .eq("restaurant_id", session.restaurantId)
+-    .order("txn_date", { ascending: false })
+-    .limit(100);
+-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+-  return NextResponse.json({ accounts: data });
++
++  // created_at carries the time of day; if a database has no such column, fall back to the entry's
++  // date (txn_date), where the time part of the range is simply ignored.
++  const build = (columns: string, useCreatedAt: boolean) => {
++    let query = admin.from("accounts").select(columns).eq("restaurant_id", session.restaurantId);
++    if (q) query = query.ilike("description", `%${q}%`);
++    if (useCreatedAt) {
++      if (fromOk) query = query.gte("created_at", fromOk);
++      if (toOk) query = query.lte("created_at", toOk);
++    } else {
++      if (fromOk) query = query.gte("txn_date", fromOk.slice(0, 10));
++      if (toOk) query = query.lte("txn_date", toOk.slice(0, 10));
++    }
++    return query;
++  };
++  const page = (useCreatedAt: boolean) => {
++    let query = build(useCreatedAt ? `${SELECT}, created_at` : SELECT, useCreatedAt).order("txn_date", { ascending: false });
++    if (useCreatedAt) query = query.order("created_at", { ascending: false });
++    return query.order("id", { ascending: false }).range(offset, offset + limit);
++  };
++
++  let useCreatedAt = true;
++  let res = await page(true);
++  if (res.error && /created_at/.test(res.error.message)) {
++    useCreatedAt = false;
++    res = await page(false);
++  }
++  if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
++  const rows = (res.data ?? []) as unknown as Record<string, unknown>[];
++  const body: Record<string, unknown> = { accounts: rows.slice(0, limit), hasMore: rows.length > limit };
++
++  if (offset === 0) {
++    let income = 0;
++    let expense = 0;
++    // add up the whole range 1000 rows at a time (capped, so a huge range can't hang the request)
++    for (let from1 = 0, i = 0; i < 30; i++, from1 += 1000) {
++      const { data, error } = await build("type, amount", useCreatedAt)
++        .order("id", { ascending: true })
++        .range(from1, from1 + 999);
++      if (error) break;
++      for (const r of (data ?? []) as unknown as { type: string; amount: number }[]) {
++        if (r.type === "income") income += Number(r.amount) || 0;
++        else expense += Number(r.amount) || 0;
++      }
++      if ((data ?? []).length < 1000) break;
++    }
++    body.totals = { income, expense, net: income - expense };
++  }
++  return NextResponse.json(body);
+ }
+ 
+ /** Manual ledger entries (e.g. logging an expense) — Admin/Manager only. Sales entries are
+diff --git a/app/api/expenses/route.ts b/app/api/expenses/route.ts
+index 3b60535..14144b6 100644
+--- a/app/api/expenses/route.ts
++++ b/app/api/expenses/route.ts
+@@ -2,19 +2,54 @@ import { NextResponse } from "next/server";
+ import { requireStaffSession } from "@/lib/auth/require-staff";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ 
+-export async function GET() {
++/** Expense list, paged: ?limit (default 50, max 200) &offset, ?q= (category contains),
++ *  ?from= & ?to= (YYYY-MM-DD, inclusive). Returns { expenses, hasMore }; on the first page
++ *  (offset 0) also { total, count } for the whole filtered range. */
++export async function GET(req: Request) {
+   const session = await requireStaffSession();
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+ 
++  const sp = new URL(req.url).searchParams;
++  const limit = Math.min(Math.max(Number(sp.get("limit") ?? 50) || 50, 1), 200);
++  const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
++  const q = (sp.get("q") ?? "").replace(/[,()%*\\]/g, " ").trim();
++  const isDate = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
++  const from = isDate(sp.get("from"));
++  const to = isDate(sp.get("to"));
++
+   const admin = createAdminClient();
+-  const { data, error } = await admin
+-    .from("expenses")
+-    .select("id, category, expense_type, amount, vendor, description, payment_method, txn_date")
+-    .eq("restaurant_id", session.restaurantId)
++  const build = (columns: string) => {
++    let query = admin.from("expenses").select(columns).eq("restaurant_id", session.restaurantId);
++    if (q) query = query.ilike("category", `%${q}%`);
++    if (from) query = query.gte("txn_date", from);
++    if (to) query = query.lte("txn_date", to);
++    return query;
++  };
++
++  const { data, error } = await build("id, category, expense_type, amount, vendor, description, payment_method, txn_date")
+     .order("txn_date", { ascending: false })
+-    .limit(50);
++    .order("id", { ascending: false })
++    .range(offset, offset + limit);
+   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+-  return NextResponse.json({ expenses: data });
++  const rows = (data ?? []) as unknown as Record<string, unknown>[];
++  const body: Record<string, unknown> = { expenses: rows.slice(0, limit), hasMore: rows.length > limit };
++
++  if (offset === 0) {
++    let total = 0;
++    let count = 0;
++    for (let start = 0, i = 0; i < 30; i++, start += 1000) {
++      const { data: part, error: e2 } = await build("amount").order("id", { ascending: true }).range(start, start + 999);
++      if (e2) break;
++      for (const r of (part ?? []) as unknown as { amount: number }[]) {
++        total += Number(r.amount) || 0;
++        count += 1;
++      }
++      if ((part ?? []).length < 1000) break;
++    }
++    body.total = total;
++    body.count = count;
++  }
++  return NextResponse.json(body);
+ }
+ 
+ /** Logs an expense via the atomic `log_expense` Postgres function — writes the expense row
+diff --git a/components/ui/date-range.tsx b/components/ui/date-range.tsx
+new file mode 100644
+index 0000000..0e3d599
+--- /dev/null
++++ b/components/ui/date-range.tsx
+@@ -0,0 +1,88 @@
++"use client";
++import { inputCls } from "@/components/ui/modal";
++
++/** Local date/time as the strings the browser inputs use ("2026-10-06" / "2026-10-06T14:30"). */
++const p2 = (n: number) => String(n).padStart(2, "0");
++const dStr = (d: Date) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
++const dtStr = (d: Date) => `${dStr(d)}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
++
++/** A "from - to" filter with quick presets. With `withTime` the boxes take a date AND a time
++ *  (Accounts); without it, just dates (Expenses). Values are local-time strings; use
++ *  rangeToQuery() to turn them into what the API expects. */
++export function DateRange({
++  from,
++  to,
++  onChange,
++  withTime = false,
++}: {
++  from: string;
++  to: string;
++  onChange: (from: string, to: string) => void;
++  withTime?: boolean;
++}) {
++  const type = withTime ? "datetime-local" : "date";
++  const fmt = withTime ? dtStr : dStr;
++  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0);
++  const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59);
++
++  function preset(kind: "today" | "yesterday" | "7d" | "month") {
++    const now = new Date();
++    if (kind === "today") onChange(fmt(startOfDay(now)), fmt(endOfDay(now)));
++    else if (kind === "yesterday") {
++      const y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
++      onChange(fmt(startOfDay(y)), fmt(endOfDay(y)));
++    } else if (kind === "7d") {
++      const s = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
++      onChange(fmt(startOfDay(s)), fmt(endOfDay(now)));
++    } else onChange(fmt(new Date(now.getFullYear(), now.getMonth(), 1, 0, 0)), fmt(endOfDay(now)));
++  }
++
++  const chip =
++    "rounded-full border border-line bg-raised px-3 py-1 text-[11px] font-semibold text-ink-mid hover:border-chili-500/60 hover:text-ink-strong";
++  const bad = !!from && !!to && from > to;
++
++  return (
++    <div className="px-5 pt-4">
++      <div className="flex flex-wrap items-end gap-3">
++        <label className="block">
++          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">From</span>
++          <input type={type} value={from} max={to || undefined} onChange={(e) => onChange(e.target.value, to)} className={`${inputCls} w-auto`} />
++        </label>
++        <label className="block">
++          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">To</span>
++          <input type={type} value={to} min={from || undefined} onChange={(e) => onChange(from, e.target.value)} className={`${inputCls} w-auto`} />
++        </label>
++        <div className="flex flex-wrap items-center gap-1.5 pb-1.5">
++          <button type="button" className={chip} onClick={() => preset("today")}>Today</button>
++          <button type="button" className={chip} onClick={() => preset("yesterday")}>Yesterday</button>
++          <button type="button" className={chip} onClick={() => preset("7d")}>Last 7 days</button>
++          <button type="button" className={chip} onClick={() => preset("month")}>This month</button>
++          {(from || to) && (
++            <button type="button" className="px-2 text-[11px] font-semibold text-ink-mid underline hover:text-ink-strong" onClick={() => onChange("", "")}>
++              Clear
++            </button>
++          )}
++        </div>
++      </div>
++      {bad && <p className="mt-2 text-xs text-crimson-400">&quot;From&quot; is after &quot;To&quot;, so nothing can match.</p>}
++    </div>
++  );
++}
++
++/** Turn the local from/to strings into query params. Date+time values become exact UTC instants
++ *  (so the filter matches the clock the user sees); date-only values stay as plain dates. */
++export function rangeToQuery(from: string, to: string, withTime: boolean): Record<string, string> {
++  const out: Record<string, string> = {};
++  if (withTime) {
++    if (from) out.from = new Date(from).toISOString();
++    if (to) {
++      const t = new Date(to);
++      t.setSeconds(59, 999); // "to 14:30" includes everything in 14:30
++      out.to = t.toISOString();
++    }
++  } else {
++    if (from) out.from = from;
++    if (to) out.to = to;
++  }
++  return out;
++}
+diff --git a/supabase/migrations/0020_kitchen_status_at.sql b/supabase/migrations/0020_kitchen_status_at.sql
+new file mode 100644
+index 0000000..c7f8d42
+--- /dev/null
++++ b/supabase/migrations/0020_kitchen_status_at.sql
+@@ -0,0 +1,23 @@
++-- =====================================================================
++-- RESTRO PRO - Supabase migration 0020
++-- Ticket Rail hides a ticket one hour after it was moved to Completed. For that the database must
++-- remember WHEN the kitchen status last changed, so sales.kitchen_status_at is stamped by a trigger
++-- every time kitchen_status changes (from the web app, the Windows app's sync, or anywhere else).
++-- Existing sales start with their creation time. Safe to run twice.
++-- =====================================================================
++alter table public.sales add column if not exists kitchen_status_at timestamptz;
++update public.sales set kitchen_status_at = created_at where kitchen_status_at is null;
++alter table public.sales alter column kitchen_status_at set default now();
++
++create or replace function public.stamp_kitchen_status_at() returns trigger language plpgsql as $$
++begin
++  if new.kitchen_status is distinct from old.kitchen_status then
++    new.kitchen_status_at := now();
++  end if;
++  return new;
++end $$;
++drop trigger if exists trg_stamp_kitchen_status_at on public.sales;
++create trigger trg_stamp_kitchen_status_at before update of kitchen_status on public.sales
++  for each row execute function public.stamp_kitchen_status_at();
++
++notify pgrst, 'reload schema';

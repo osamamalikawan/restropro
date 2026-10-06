@@ -1,19 +1,29 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, ArrowDown, Equal, Hourglass } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
-import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, KpiCard, addBtnCls } from "@/components/ui/panel";
-import { fmtMoney, todayISO } from "@/lib/format";
+import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, KpiCard, addBtnCls, searchInputCls } from "@/components/ui/panel";
+import { DateRange, rangeToQuery } from "@/components/ui/date-range";
+import { fmtMoney, fmtDateTime, todayISO } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
-import { LoadMore, useProgressive } from "@/components/ui/load-more";
+import { LoadMore, useDebounced } from "@/components/ui/load-more";
 
-type AccountEntry = { id: string; txn_date: string; description: string; category: string; type: "income" | "expense"; amount: number };
+type AccountEntry = { id: string; txn_date: string; created_at?: string; description: string; category: string; type: "income" | "expense"; amount: number };
 type Supplier = { id: string };
 type Purchase = { supplier_id: string | null; total_cost: number };
 type LedgerEntry = { supplier_id: string; amount: number };
+const PAGE = 50;
 
 export function AccountsClient() {
   const [entries, setEntries] = useState<AccountEntry[]>([]);
+  const [totals, setTotals] = useState({ income: 0, expense: 0, net: 0 });
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [search, setSearch] = useState("");
+  const q = useDebounced(search.trim(), 300);
+  const [from, setFrom] = useState(""); // local date+time strings from the range boxes
+  const [to, setTo] = useState("");
+  const latest = useRef(0); // ignores a slow answer that a newer search/filter has already replaced
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
@@ -29,49 +39,80 @@ export function AccountsClient() {
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState("");
 
-  async function load() {
-    setLoading(true);
-    setLoadError("");
-    const [aRes, sRes, pRes, lRes] = await Promise.all([
-      fetchJson<{ accounts: AccountEntry[] }>("/api/accounts"),
-      fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
-      fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
-      fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger?limit=1000"),
-    ]);
-    if (!aRes.ok) {
-      setLoadError(aRes.error);
-      setEntries([]);
-    } else {
-      setEntries(aRes.data?.accounts ?? []);
+  /** Fetches one page of the ledger for the current search + date range. offset 0 starts over. */
+  async function loadPage(offset: number) {
+    const id = latest.current;
+    const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset), ...rangeToQuery(from, to, true) });
+    if (q) params.set("q", q);
+    const res = await fetchJson<{ accounts: AccountEntry[]; hasMore: boolean; totals?: { income: number; expense: number; net: number } }>(
+      `/api/accounts?${params}`
+    );
+    if (id !== latest.current) return;
+    if (!res.ok) {
+      setLoadError(res.error);
+      if (offset === 0) setEntries([]);
+      return;
     }
-    setSuppliers(sRes.ok ? sRes.data?.suppliers ?? [] : []);
-    setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
-    setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
+    setLoadError("");
+    setHasMore(!!res.data?.hasMore);
+    if (res.data?.totals) setTotals(res.data.totals);
+    setEntries((prev) => (offset === 0 ? res.data?.accounts ?? [] : [...prev, ...(res.data?.accounts ?? [])]));
+  }
+
+  /** Reload from the first page (new search / range / after saving an entry). */
+  async function reload() {
+    latest.current += 1;
+    setLoading(true);
+    setHasMore(false);
+    await loadPage(0);
     setLoading(false);
   }
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    await loadPage(entries.length);
+    setLoadingMore(false);
+  }
+
+  // search / date range changed -> start again from the newest matching entry
   useEffect(() => {
-    load();
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, from, to]);
+
+  // supplier figures don't depend on the ledger filters: load them once
+  useEffect(() => {
+    (async () => {
+      const [sRes, pRes, lRes] = await Promise.all([
+        fetchJson<{ suppliers: Supplier[] }>("/api/suppliers"),
+        fetchJson<{ purchases: Purchase[] }>("/api/restock?limit=1000"),
+        fetchJson<{ entries: LedgerEntry[] }>("/api/supplier-ledger?limit=1000"),
+      ]);
+      setSuppliers(sRes.ok ? sRes.data?.suppliers ?? [] : []);
+      setPurchases(pRes.ok ? pRes.data?.purchases ?? [] : []);
+      setLedger(lRes.ok ? lRes.data?.entries ?? [] : []);
+    })();
   }, []);
 
-  const income = entries.filter((e) => e.type === "income").reduce((s, e) => s + Number(e.amount), 0);
-  const expense = entries.filter((e) => e.type === "expense").reduce((s, e) => s + Number(e.amount), 0);
+  const { income, expense } = totals;
   const supplierPayable = suppliers.reduce((sum, s) => {
     const purchased = purchases.filter((p) => p.supplier_id === s.id).reduce((x, p) => x + Number(p.total_cost), 0);
     const paid = ledger.filter((l) => l.supplier_id === s.id).reduce((x, l) => x + Number(l.amount), 0);
     return sum + Math.max(0, purchased - paid);
   }, 0);
 
-  // Running balance — oldest-first cumulative, then displayed newest-first (matches prototype).
+  // Running balance: the newest row shows the net of the whole selected range, and each older row is
+  // that minus everything booked after it. Works page by page, so loading more never changes what
+  // is already on screen.
   const withBalance = useMemo(() => {
-    const sorted = [...entries].sort((a, b) => (a.txn_date < b.txn_date ? -1 : 1));
-    let running = 0;
-    const balances = new Map<string, number>();
-    for (const e of sorted) {
-      running += e.type === "income" ? Number(e.amount) : -Number(e.amount);
-      balances.set(e.id, running);
-    }
-    return entries.map((e) => ({ ...e, balance: balances.get(e.id) ?? 0 }));
-  }, [entries]);
+    let bal = totals.net;
+    return entries.map((e) => {
+      const row = { ...e, balance: bal };
+      bal -= e.type === "income" ? Number(e.amount) : -Number(e.amount);
+      return row;
+    });
+  }, [entries, totals.net]);
 
   function openAdd() {
     setFType("income");
@@ -101,10 +142,8 @@ export function AccountsClient() {
       return;
     }
     setModalOpen(false);
-    await load();
+    await reload();
   }
-
-  const pg = useProgressive(withBalance); // first 50 rows now, the rest as you scroll — keeps big tables fast
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
@@ -117,10 +156,12 @@ export function AccountsClient() {
 
       <Panel loading={loading}>
         <PanelHead title="Ledger" subtitle="Income & expense transactions">
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search description…" className={searchInputCls} />
           <button onClick={openAdd} className={addBtnCls}>
             + Add entry
           </button>
         </PanelHead>
+        <DateRange from={from} to={to} withTime onChange={(f, t) => { setFrom(f); setTo(t); }} />
         {loadError && (
           <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
             Couldn&apos;t load the ledger: {loadError}
@@ -139,9 +180,9 @@ export function AccountsClient() {
               </tr>
             </thead>
             <tbody>
-              {pg.visible.map((e) => (
+              {withBalance.map((e) => (
                 <tr key={e.id} className="border-b border-line last:border-0">
-                  <Td className="text-ink-mid">{e.txn_date}</Td>
+                  <Td className="text-ink-mid">{e.created_at ? fmtDateTime(e.created_at) : e.txn_date}</Td>
                   <Td className="font-medium text-ink-strong">{e.description}</Td>
                   <Td>
                     <Badge>{e.category}</Badge>
@@ -156,11 +197,13 @@ export function AccountsClient() {
                   <Td className="font-mono text-ink-mid">{fmtMoney(e.balance)}</Td>
                 </tr>
               ))}
-              {!loading && !loadError && withBalance.length === 0 && <EmptyRow colSpan={6} label="No ledger entries yet." />}
+              {!loading && !loadError && withBalance.length === 0 && (
+                <EmptyRow colSpan={6} label={q || from || to ? "No entries match this search or date range." : "No ledger entries yet."} />
+              )}
             </tbody>
           </table>
         </TableScroll>
-        <LoadMore hasMore={pg.hasMore} loading={false} onMore={pg.showMore} />
+        <LoadMore hasMore={hasMore} loading={loadingMore} onMore={loadMore} />
       </Panel>
 
       <Modal

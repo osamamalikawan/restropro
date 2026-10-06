@@ -2,19 +2,54 @@ import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-export async function GET() {
+/** Expense list, paged: ?limit (default 50, max 200) &offset, ?q= (category contains),
+ *  ?from= & ?to= (YYYY-MM-DD, inclusive). Returns { expenses, hasMore }; on the first page
+ *  (offset 0) also { total, count } for the whole filtered range. */
+export async function GET(req: Request) {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
+  const sp = new URL(req.url).searchParams;
+  const limit = Math.min(Math.max(Number(sp.get("limit") ?? 50) || 50, 1), 200);
+  const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
+  const q = (sp.get("q") ?? "").replace(/[,()%*\\]/g, " ").trim();
+  const isDate = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const from = isDate(sp.get("from"));
+  const to = isDate(sp.get("to"));
+
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("expenses")
-    .select("id, category, expense_type, amount, vendor, description, payment_method, txn_date")
-    .eq("restaurant_id", session.restaurantId)
+  const build = (columns: string) => {
+    let query = admin.from("expenses").select(columns).eq("restaurant_id", session.restaurantId);
+    if (q) query = query.ilike("category", `%${q}%`);
+    if (from) query = query.gte("txn_date", from);
+    if (to) query = query.lte("txn_date", to);
+    return query;
+  };
+
+  const { data, error } = await build("id, category, expense_type, amount, vendor, description, payment_method, txn_date")
     .order("txn_date", { ascending: false })
-    .limit(50);
+    .order("id", { ascending: false })
+    .range(offset, offset + limit);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ expenses: data });
+  const rows = (data ?? []) as unknown as Record<string, unknown>[];
+  const body: Record<string, unknown> = { expenses: rows.slice(0, limit), hasMore: rows.length > limit };
+
+  if (offset === 0) {
+    let total = 0;
+    let count = 0;
+    for (let start = 0, i = 0; i < 30; i++, start += 1000) {
+      const { data: part, error: e2 } = await build("amount").order("id", { ascending: true }).range(start, start + 999);
+      if (e2) break;
+      for (const r of (part ?? []) as unknown as { amount: number }[]) {
+        total += Number(r.amount) || 0;
+        count += 1;
+      }
+      if ((part ?? []).length < 1000) break;
+    }
+    body.total = total;
+    body.count = count;
+  }
+  return NextResponse.json(body);
 }
 
 /** Logs an expense via the atomic `log_expense` Postgres function — writes the expense row

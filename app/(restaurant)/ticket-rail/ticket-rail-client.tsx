@@ -20,6 +20,7 @@ type Sale = {
   kitchen_status: Kitchen;
   delivery_charge: number;
   created_at: string;
+  kitchen_status_at?: string | null;
   customers: { name: string; phone?: string | null; address?: string | null } | null;
   area_id?: string | null;
   subtotal?: number;
@@ -42,6 +43,7 @@ type Held = {
   tableId: string;
   cart: { productId: string; name: string; price: number; qty: number }[];
   heldAt: number;
+  kitchenAt?: number; // when it was last moved between columns
   kitchenStatus?: Kitchen;
 };
 
@@ -54,6 +56,7 @@ const COLUMNS: { key: Kitchen; label: string; pill: string }[] = [
 ];
 const TYPE_LABEL: Record<OrderType, string> = { dine_in: "Dine In", takeaway: "Takeaway", delivery: "Delivery" };
 const BLINK_MS = 15000;
+const COMPLETED_VISIBLE_MS = 60 * 60 * 1000; // a Completed ticket leaves the board after one hour
 
 const RT_CSS = `
 .rt-scroll{scrollbar-width:thin;scrollbar-color:rgb(var(--line)) transparent}
@@ -165,20 +168,29 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A ticket sitting in Completed for more than an hour is taken off the board (the sale itself is
+  // untouched: it stays in Sales, reports and the ledger). The board refreshes every 5 seconds, so
+  // this is re-checked continuously.
+  const nowMs = Date.now();
+  const expired = (col: Kitchen, since: number) => col === "Completed" && nowMs - since > COMPLETED_VISIBLE_MS;
   const cards: Card[] = [
-    ...sales.map((s): Card => ({ key: `sale:${s.id}`, col: s.kitchen_status, at: new Date(s.created_at).getTime(), sale: s })),
-    ...held.map((t): Card => ({ key: `held:${t.id}`, col: t.kitchenStatus ?? "New", at: t.heldAt, held: t })),
+    ...sales
+      .filter((s) => !expired(s.kitchen_status, new Date(s.kitchen_status_at ?? s.created_at).getTime()))
+      .map((s): Card => ({ key: `sale:${s.id}`, col: s.kitchen_status, at: new Date(s.created_at).getTime(), sale: s })),
+    ...held
+      .filter((t) => !expired(t.kitchenStatus ?? "New", t.kitchenAt ?? t.heldAt))
+      .map((t): Card => ({ key: `held:${t.id}`, col: t.kitchenStatus ?? "New", at: t.heldAt, held: t })),
   ];
 
   async function moveCard(card: Card, to: Kitchen) {
     if (card.col === to) return;
     if (card.held) {
-      writeHeld(readHeld().map((t) => (t.id === card.held!.id ? { ...t, kitchenStatus: to } : t)));
+      writeHeld(readHeld().map((t) => (t.id === card.held!.id ? { ...t, kitchenStatus: to, kitchenAt: Date.now() } : t)));
       return;
     }
     const saleId = card.sale!.id;
     setBusyId(saleId);
-    setSales((prev) => prev.map((s) => (s.id === saleId ? { ...s, kitchen_status: to } : s)));
+    setSales((prev) => prev.map((s) => (s.id === saleId ? { ...s, kitchen_status: to, kitchen_status_at: new Date().toISOString() } : s)));
     const res = await fetch("/api/sales/kitchen-status", {
       method: "POST",
       headers: { "content-type": "application/json" },
