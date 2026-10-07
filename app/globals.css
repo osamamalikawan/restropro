@@ -94,3 +94,19 @@ body {
 .rp-scroll:hover::-webkit-scrollbar-thumb:hover {
   background-color: rgb(var(--ink-faint));
 }
+
+/* restropro-mobile-fixes */
+@media (max-width: 768px) {
+  /* tables scroll sideways instead of being clipped */
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+  }
+  /* let flex/grid parents shrink so the table can scroll inside them */
+  main, section, article { min-width: 0; }
+}
+/* end restropro-mobile-fixes */
