@@ -27,6 +27,7 @@ type Settings = {
   fbr_fee: number;
   receipt_template: string;
   show_discount?: boolean;
+  urdu_enabled?: boolean;
   note_presets?: string[];
 };
 
@@ -525,6 +526,7 @@ export function SettingsClient({
                       posShowKitchenPrint: s.pos_show_kitchen_print,
                       posShowPrintInvoice: s.pos_show_print_invoice,
                       showDiscount: s.show_discount !== false,
+                      urduEnabled: s.urdu_enabled === true,
                     },
                     "POS controls saved"
                   )
@@ -548,6 +550,10 @@ export function SettingsClient({
             <ToggleRow label='Show "Kitchen Print" button' on={s.pos_show_kitchen_print} onChange={(v) => set("pos_show_kitchen_print", v)} />
             <ToggleRow label='Show "Print Invoice" button' on={s.pos_show_print_invoice} onChange={(v) => set("pos_show_print_invoice", v)} />
             <ToggleRow label="Allow discounts at checkout" on={s.show_discount !== false} onChange={(v) => set("show_discount", v)} />
+            <ToggleRow label="Show item names in Urdu" on={s.urdu_enabled === true} onChange={(v) => set("urdu_enabled", v)} noMargin />
+            <p className="mt-1.5 text-xs text-ink-faint">
+              When on, the POS, kitchen slip and invoice use each item's Urdu name (add it under Menu or Products). Items without an Urdu name keep their English name.
+            </p>
           </Panel>
         </div>
 

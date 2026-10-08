@@ -1,4 +1,4 @@
-// POS receipt / kitchen-slip builders (plain ASCII ESC/POS) + the glue that sends them to the
+// POS receipt / kitchen-slip builders (ASCII ESC/POS, with Urdu lines drawn as bitmaps) + the glue that sends them to the
 // right printer role. Printer connections themselves are configured in Printer settings and
 // stored per machine — see app/(restaurant)/printer-settings/printers.ts.
 
@@ -75,14 +75,147 @@ const GS = 0x1d;
 const money = (n: number) => n.toLocaleString("en-US");
 const ascii = (s: string) => s.replace(/[^\x20-\x7e]/g, "?"); // thermal code pages choke on Unicode (₨, Urdu…)
 
+/* ------------------------------------------------------------------------------------------
+ * Urdu / Arabic-script support.
+ * Thermal printers have no Urdu code page and cannot join Urdu letters, so any line that contains
+ * Urdu is drawn on a canvas with a real font, converted to a 1-bit bitmap and sent as an ESC/POS
+ * raster image (GS v 0). Lines without Urdu are still plain text, exactly as before.
+ * ---------------------------------------------------------------------------------------- */
+const URDU_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+export const hasUrdu = (s: string) => URDU_RE.test(s);
+
+/** Printable width in dots: 80mm = 576, 58mm = 384. Lower the 576 (e.g. 512) if the right edge gets cut off. */
+const dotsFor = (paper: string) => (/58/.test(paper) ? 384 : 576);
+
+type Align = "left" | "center" | "right";
+
+const URDU_FALLBACK = '"Noto Naskh Arabic", "Segoe UI", Tahoma, sans-serif';
+function urduFontFamily(): string {
+  try {
+    const v = getComputedStyle(document.body).getPropertyValue("--font-urdu").trim(); // set by next/font in app/layout.tsx
+    if (v) return `${v}, ${URDU_FALLBACK}`;
+  } catch {}
+  return URDU_FALLBACK;
+}
+
+/** Makes sure the Urdu font is downloaded before we draw with it (canvas never waits for fonts). */
+async function ensureUrduFont(): Promise<void> {
+  try {
+    const fam = urduFontFamily();
+    await Promise.race([
+      Promise.all([document.fonts.load(`400 26px ${fam}`, "اب"), document.fonts.load(`700 26px ${fam}`, "اب")]),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]);
+  } catch {}
+}
+
+/**
+ * Draws one printable row and returns the ESC/POS raster bytes (null if canvas is unavailable).
+ *  - text: the Urdu (or mixed) text; it is wrapped by pixel width and drawn right-to-left.
+ *  - qty:  optional "2 x" shown at the right edge, before the name (reads first in Urdu).
+ *  - price: optional amount shown at the left edge of the last line.
+ */
+function renderRow(
+  widthDots: number,
+  px: number,
+  bold: boolean,
+  o: { text: string; align: Align; qty?: string; price?: string },
+): number[] | null {
+  try {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true } as any) as CanvasRenderingContext2D | null;
+    if (!ctx) return null;
+    const font = `${bold ? 700 : 400} ${px}px ${urduFontFamily()}`;
+    ctx.font = font;
+    const gap = Math.round(px * 0.5);
+    ctx.direction = "ltr";
+    const qtyW = o.qty ? Math.ceil(ctx.measureText(o.qty).width) + gap : 0;
+    const priceW = o.price ? Math.ceil(ctx.measureText(o.price).width) + gap : 0;
+    const maxW = Math.max(60, widthDots - qtyW - priceW);
+
+    // wrap in logical (reading) order
+    ctx.direction = "rtl";
+    const lines: string[] = [];
+    let cur = "";
+    for (const w of o.text.trim().split(/\s+/)) {
+      const t = cur ? `${cur} ${w}` : w;
+      if (cur && ctx.measureText(t).width > maxW) {
+        lines.push(cur);
+        cur = w;
+      } else cur = t;
+    }
+    if (cur) lines.push(cur);
+
+    const lineH = Math.round(px * 1.7); // Urdu letters have tall marks above and below
+    const H = lineH * lines.length + 6;
+    canvas.width = widthDots; // resizing resets the context, so set everything again
+    canvas.height = H;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, widthDots, H);
+    ctx.fillStyle = "#000";
+    ctx.font = font;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "right";
+
+    lines.forEach((ln, i) => {
+      const y = i * lineH + lineH / 2 + 3;
+      ctx.direction = "rtl";
+      const w = ctx.measureText(ln).width;
+      const right = o.qty || o.price ? widthDots - 4 - qtyW : o.align === "center" ? (widthDots + w) / 2 : widthDots - 4;
+      ctx.fillText(ln, right, y);
+      ctx.direction = "ltr";
+      if (i === 0 && o.qty) ctx.fillText(o.qty, widthDots - 4, y);
+      if (i === lines.length - 1 && o.price) {
+        ctx.textAlign = "left";
+        ctx.fillText(o.price, 4, y);
+        ctx.textAlign = "right";
+      }
+    });
+
+    // 1-bit raster: GS v 0 m xL xH yL yH d...
+    const data = ctx.getImageData(0, 0, widthDots, H).data;
+    const bpr = Math.ceil(widthDots / 8);
+    const out: number[] = [GS, 0x76, 0x30, 0x00, bpr & 0xff, bpr >> 8, H & 0xff, H >> 8];
+    for (let y = 0; y < H; y++) {
+      for (let bx = 0; bx < bpr; bx++) {
+        let byte = 0;
+        for (let bit = 0; bit < 8; bit++) {
+          const x = bx * 8 + bit;
+          if (x >= widthDots) continue;
+          const i = (y * widthDots + x) * 4;
+          const lum = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+          if (lum < 150) byte |= 0x80 >> bit;
+        }
+        out.push(byte);
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 class Buf {
   bytes: number[] = [ESC, 0x40]; // initialise
-  constructor(public cols: number) {}
+  private al: Align = "left";
+  private isBig = false;
+  private isBold = false;
+  constructor(public cols: number, public dots: number) {}
+  private push(more: number[]) {
+    for (let i = 0; i < more.length; i++) this.bytes.push(more[i]);
+  }
   text(s: string) {
     for (const ch of ascii(s)) this.bytes.push(ch.charCodeAt(0));
     return this;
   }
   line(s = "") {
+    if (hasUrdu(s)) {
+      const img = renderRow(this.dots, this.isBig ? 40 : 26, this.isBold || this.isBig, { text: s, align: this.al });
+      if (img) {
+        this.push(img);
+        return this;
+      }
+    }
     return this.text(s).raw(0x0a);
   }
   raw(...b: number[]) {
@@ -90,25 +223,45 @@ class Buf {
     return this;
   }
   align(a: "left" | "center" | "right") {
+    this.al = a;
     return this.raw(ESC, 0x61, a === "left" ? 0 : a === "center" ? 1 : 2);
   }
   bold(on: boolean) {
+    this.isBold = on;
     return this.raw(ESC, 0x45, on ? 1 : 0);
   }
   reverse(on: boolean) {
     return this.raw(GS, 0x42, on ? 1 : 0);
   }
   size(big: boolean) {
+    this.isBig = big;
     return this.raw(GS, 0x21, big ? 0x11 : 0x00);
   }
   rule(ch = "-") {
     return this.line(ch.repeat(this.cols));
   }
-  row(left: string, right: string) {
+  /** Plain-text row: label on the left, amount on the right. */
+  private rowText(left: string, right: string) {
     const l = ascii(left);
     const r = ascii(right);
     const space = Math.max(1, this.cols - l.length - r.length);
     return this.line(l.slice(0, Math.max(0, this.cols - r.length - 1)) + " ".repeat(space) + r);
+  }
+  row(left: string, right: string) {
+    if (hasUrdu(left) || hasUrdu(right)) return this.itemRow("", left, right);
+    return this.rowText(left, right);
+  }
+  /** Item line: "2 x" + name (Urdu drawn as a bitmap) + optional price. Falls back to ASCII text if drawing fails. */
+  itemRow(qty: number | string, name: string, price: string) {
+    const q = qty === "" ? "" : `${qty} x`;
+    if (hasUrdu(name) || hasUrdu(price)) {
+      const img = renderRow(this.dots, this.isBig ? 40 : 26, this.isBold || this.isBig, { text: name, align: "right", qty: q, price });
+      if (img) {
+        this.push(img);
+        return this;
+      }
+    }
+    return this.rowText(`${q} ${name}`.trim(), price);
   }
   cut() {
     return this.raw(0x0a, 0x0a, 0x0a, GS, 0x56, 0x00);
@@ -133,6 +286,7 @@ function printOrderExtras(b: Buf, s: SaleSnapshot, big: boolean) {
 const colsFor = (paper: string) => (/58/.test(paper) ? 32 : 48);
 
 function wrap(s: string, width: number): string[] {
+  if (hasUrdu(s)) return [s]; // wrapped later by pixel width in renderRow
   const out: string[] = [];
   let cur = "";
   for (const word of ascii(s).split(" ")) {
@@ -146,14 +300,15 @@ function wrap(s: string, width: number): string[] {
 }
 
 export function buildKitchenSlip(s: SaleSnapshot, orderNo: string | number): number[] {
-  const b = new Buf(colsFor(s.paper));
+  const b = new Buf(colsFor(s.paper), dotsFor(s.paper));
   b.align("center").bold(true).size(true).line("KITCHEN").size(false).bold(false);
   b.bold(true).size(true).line(`#${orderNo}`).size(false).bold(false);
   b.line(s.orderTypeLabel).line(new Date().toLocaleString());
   b.align("left").rule();
   for (const it of s.items) {
     b.bold(true).size(true);
-    for (const l of wrap(`${it.qty} x ${it.name}`, Math.floor(b.cols / 2))) b.line(l);
+    if (hasUrdu(it.name)) b.itemRow(it.qty, it.name, "");
+    else for (const l of wrap(`${it.qty} x ${it.name}`, Math.floor(b.cols / 2))) b.line(l);
     b.size(false);
     if (it.note) for (const l of wrap(`  >> ${it.note}`, b.cols)) b.line(l);
     b.bold(false);
@@ -171,7 +326,7 @@ export function buildKitchenSlip(s: SaleSnapshot, orderNo: string | number): num
  *  big total). Everything else — items, tax, FBR block, payments — is the same in every design. */
 export function buildInvoice(s: SaleSnapshot, orderNo: string | number): number[] {
   const t = s.template === "modern" || s.template === "minimal" || s.template === "bold" ? s.template : "classic";
-  const b = new Buf(colsFor(s.paper));
+  const b = new Buf(colsFor(s.paper), dotsFor(s.paper));
   const rule = (ch = "-") => (t === "minimal" ? b.line() : t === "modern" ? b.rule(ch === "-" ? "-" : ch) : b.rule(ch));
 
   // ---- header ----
@@ -203,8 +358,11 @@ export function buildInvoice(s: SaleSnapshot, orderNo: string | number): number[
   // ---- items ----
   b.bold(t === "bold");
   for (const it of s.items) {
-    const lines = wrap(`${it.qty} x ${it.name}`, b.cols - 12);
-    lines.forEach((l, i) => (i === lines.length - 1 ? b.row(l, money(it.price * it.qty)) : b.line(l)));
+    if (hasUrdu(it.name)) b.itemRow(it.qty, it.name, money(it.price * it.qty));
+    else {
+      const lines = wrap(`${it.qty} x ${it.name}`, b.cols - 12);
+      lines.forEach((l, i) => (i === lines.length - 1 ? b.row(l, money(it.price * it.qty)) : b.line(l)));
+    }
     if (it.note) for (const l of wrap(`  >> ${it.note}`, b.cols)) b.line(l);
   }
   b.bold(false);
@@ -248,6 +406,7 @@ export function buildInvoice(s: SaleSnapshot, orderNo: string | number): number[
 /** Sends the slip/invoice to the matching printer role. Throws a readable Error when it can't. */
 export async function printSale(action: Exclude<SaveAction, "save">, s: SaleSnapshot, orderNo: string | number) {
   if (!hasTauri()) throw new Error("printing works in the desktop app only");
+  if (hasUrdu(JSON.stringify(s))) await ensureUrduFont(); // canvas needs the font loaded before it draws
   if (action === "kitchen") await printToRole("kitchen", buildKitchenSlip(s, orderNo));
   else await printToRole("receipt", buildInvoice(s, orderNo));
 }

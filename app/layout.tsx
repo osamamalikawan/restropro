@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Fraunces, Public_Sans, IBM_Plex_Mono } from "next/font/google";
+import { Fraunces, Public_Sans, IBM_Plex_Mono, Noto_Naskh_Arabic } from "next/font/google";
 import "./globals.css";
 import { DesktopBridge } from "@/components/desktop-bridge";
 
@@ -18,6 +18,12 @@ const plexMono = IBM_Plex_Mono({
   subsets: ["latin"],
   weight: ["400", "500", "600"],
   variable: "--font-plex-mono",
+});
+// Urdu: used on screen (as the fallback for Urdu letters) and by lib/posPrint.ts when it draws Urdu lines for the thermal printer.
+const naskh = Noto_Naskh_Arabic({
+  subsets: ["arabic"],
+  variable: "--font-urdu",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -49,7 +55,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }}
         />
       </head>
-      <body className={`${fraunces.variable} ${publicSans.variable} ${plexMono.variable} font-body`}>
+      <body className={`${fraunces.variable} ${publicSans.variable} ${plexMono.variable} ${naskh.variable} font-body`}>
         <DesktopBridge />
         {children}
         <script

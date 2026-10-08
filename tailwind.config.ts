@@ -26,9 +26,9 @@ const config: Config = {
         },
       },
       fontFamily: {
-        display: ["var(--font-fraunces)", "serif"],
-        body: ["var(--font-public-sans)", "sans-serif"],
-        mono: ["var(--font-plex-mono)", "monospace"],
+        display: ["var(--font-fraunces)", "var(--font-urdu)", "serif"],
+        body: ["var(--font-public-sans)", "var(--font-urdu)", "sans-serif"],
+        mono: ["var(--font-plex-mono)", "var(--font-urdu)", "monospace"],
       },
     },
   },

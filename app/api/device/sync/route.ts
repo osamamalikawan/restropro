@@ -3,6 +3,7 @@ import { requireDevice } from "@/lib/auth/require-device";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPermissionMatrix } from "@/lib/permissions";
 import { computeStatus } from "@/lib/subscription";
+import { listProducts } from "@/lib/products-query";
 
 /** Owner-defined order (sort_order) first; plain order if migration 0016 isn't applied yet. */
 async function ordered<T extends { order: (col: string) => any }>(build: () => T, fallbackCol: string) {
@@ -22,16 +23,7 @@ export async function GET(req: Request) {
 
   const [restaurant, products, tables, areas, methods, staff, customers, settingsRes] = await Promise.all([
     admin.from("restaurants").select("name, address, phone, slug").eq("id", rid).single(),
-    (async () => {
-      const list = () =>
-        admin
-          .from("products")
-          .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
-          .eq("restaurant_id", rid)
-          .order("name");
-      const live = await list().is("deleted_at", null); // removed products are hidden (migration 0018)
-      return live.error && /deleted_at/.test(live.error.message) ? await list() : live;
-    })(),
+    listProducts(admin, rid), // removed products are hidden (0018); Urdu name + category colour come with 0021
     ordered(() => admin.from("tables").select("id, number, seats, is_active").eq("restaurant_id", rid), "number"),
     ordered(() => admin.from("delivery_areas").select("id, name, delivery_fee, is_active").eq("restaurant_id", rid), "name"),
     ordered(() => admin.from("payment_methods").select("id, name").eq("restaurant_id", rid), "name"),

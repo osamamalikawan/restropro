@@ -1,19 +1,19 @@
 import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isHexColor } from "@/lib/urdu";
 
 export async function GET() {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("menu_categories")
-    .select("id, name, sort_order, is_active")
-    .eq("restaurant_id", session.restaurantId)
-    .order("sort_order");
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ categories: data });
+  const list = (cols: string) =>
+    admin.from("menu_categories").select(cols).eq("restaurant_id", session.restaurantId).order("sort_order");
+  let res: any = await list("id, name, sort_order, is_active, color");
+  if (res.error && /color/.test(res.error.message)) res = await list("id, name, sort_order, is_active"); // before migration 0021
+  if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
+  return NextResponse.json({ categories: res.data });
 }
 
 export async function POST(req: Request) {
@@ -47,8 +47,12 @@ export async function POST(req: Request) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   } else {
     const payload = { ...row, restaurant_id: session.restaurantId, updated_at: new Date().toISOString() };
+    if ("color" in payload) payload.color = isHexColor(payload.color) ? payload.color.toLowerCase() : null; // null = theme colour
     const { error } = await admin.from("menu_categories").upsert(payload);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      const missing = /color/.test(error.message);
+      return NextResponse.json({ error: missing ? "Run migration 0021_urdu_and_category_colors.sql in Supabase first" : error.message }, { status: 500 });
+    }
   }
   return NextResponse.json({ success: true });
 }

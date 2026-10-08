@@ -63,6 +63,7 @@ const SETTINGS_FIELD_MAP: Record<string, string> = {
   receiptTemplate: "receipt_template",
   showDiscount: "show_discount",
   notePresets: "note_presets",
+  urduEnabled: "urdu_enabled",
 };
 
 /**
@@ -107,7 +108,10 @@ export async function POST(req: Request) {
     const { error } = await admin
       .from("restaurant_settings")
       .upsert({ restaurant_id: session.restaurantId, ...settingsPatch, updated_at: new Date().toISOString() });
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      const missing = /urdu_enabled/.test(error.message);
+      return NextResponse.json({ error: missing ? "Run migration 0021_urdu_and_category_colors.sql in Supabase first" : error.message }, { status: 500 });
+    }
   }
 
   return NextResponse.json({ success: true });

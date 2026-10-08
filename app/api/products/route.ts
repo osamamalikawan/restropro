@@ -1,22 +1,14 @@
 import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { listProducts } from "@/lib/products-query";
 
 export async function GET() {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const admin = createAdminClient();
-  const list = () =>
-    admin
-      .from("products")
-      .select("id, restaurant_id, category_id, name, price, image_url, is_available, updated_at, menu_categories(name, sort_order)")
-      .eq("restaurant_id", session.restaurantId)
-      .order("name");
-  // removed products (deleted_at set) stay in the database for old sales but are never listed;
-  // before migration 0018 the column doesn't exist yet, so fall back to the plain list
-  let { data, error } = await list().is("deleted_at", null);
-  if (error && /deleted_at/.test(error.message)) ({ data, error } = await list());
+  const { data, error } = await listProducts(admin, session.restaurantId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ products: data });
 }
@@ -47,8 +39,12 @@ export async function POST(req: Request) {
   } else {
     const { menu_categories, ...clean } = row; // drop the joined field if it came back around from a GET response
     const payload = { ...clean, restaurant_id: session.restaurantId, updated_at: new Date().toISOString() };
+    if ("name_ur" in payload) payload.name_ur = typeof payload.name_ur === "string" && payload.name_ur.trim() ? payload.name_ur.trim() : null;
     const { error } = await admin.from("products").upsert(payload);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      const missing = /name_ur/.test(error.message);
+      return NextResponse.json({ error: missing ? "Run migration 0021_urdu_and_category_colors.sql in Supabase first" : error.message }, { status: 500 });
+    }
   }
   return NextResponse.json({ success: true });
 }

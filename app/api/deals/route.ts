@@ -24,20 +24,28 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const admin = createAdminClient();
-  const list = () =>
-    admin
-      .from("products")
-      .select(
-        "id, name, description, price, image_url, is_available, updated_at, " +
-          "deal_items!deal_items_deal_product_id_fkey(id, quantity, component_product_id, component:products!deal_items_component_product_id_fkey(id, name, price))"
-      )
-      .eq("restaurant_id", session.restaurantId)
-      .eq("is_deal", true)
-      .order("name");
-  let { data, error } = await list().is("deleted_at", null); // removed deals are hidden (see migration 0018)
-  if (error && /deleted_at/.test(error.message)) ({ data, error } = await list());
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ deals: data });
+  const items =
+    "deal_items!deal_items_deal_product_id_fkey(id, quantity, component_product_id, component:products!deal_items_component_product_id_fkey(id, name, name_ur, price))";
+  const itemsOld =
+    "deal_items!deal_items_deal_product_id_fkey(id, quantity, component_product_id, component:products!deal_items_component_product_id_fkey(id, name, price))";
+  const list = (cols: string, live: boolean) => {
+    let q: any = admin.from("products").select(cols).eq("restaurant_id", session.restaurantId).eq("is_deal", true).order("name");
+    if (live) q = q.is("deleted_at", null); // removed deals are hidden (see migration 0018)
+    return q;
+  };
+  // fall back step by step when migration 0018 (deleted_at) or 0021 (name_ur) isn't applied yet
+  let res: any = null;
+  for (const a of [
+    { cols: `id, name, name_ur, description, price, image_url, is_available, updated_at, ${items}`, live: true },
+    { cols: `id, name, description, price, image_url, is_available, updated_at, ${itemsOld}`, live: true },
+    { cols: `id, name, name_ur, description, price, image_url, is_available, updated_at, ${items}`, live: false },
+    { cols: `id, name, description, price, image_url, is_available, updated_at, ${itemsOld}`, live: false },
+  ]) {
+    res = await list(a.cols, a.live);
+    if (!res.error || !/deleted_at|name_ur/.test(res.error.message)) break;
+  }
+  if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
+  return NextResponse.json({ deals: res.data });
 }
 
 export async function POST(req: Request) {
@@ -51,6 +59,7 @@ export async function POST(req: Request) {
     op?: "insert" | "update" | "delete";
     id?: string;
     name?: string;
+    nameUr?: string | null;
     description?: string | null;
     price?: number;
     imageUrl?: string | null;
@@ -93,6 +102,7 @@ export async function POST(req: Request) {
     restaurant_id: session.restaurantId,
     category_id: categoryId,
     name: body.name.trim(),
+    name_ur: body.nameUr?.trim() || null,
     description: body.description?.trim() || null,
     price: Number(body.price) || 0,
     image_url: body.imageUrl?.trim() || null,
@@ -101,7 +111,10 @@ export async function POST(req: Request) {
     updated_at: new Date().toISOString(),
   };
   const { data: saved, error: saveError } = await admin.from("products").upsert(payload).select("id").single();
-  if (saveError) return NextResponse.json({ error: saveError.message }, { status: 500 });
+  if (saveError) {
+    const missing = /name_ur/.test(saveError.message);
+    return NextResponse.json({ error: missing ? "Run migration 0021_urdu_and_category_colors.sql in Supabase first" : saveError.message }, { status: 500 });
+  }
 
   // replace the component list wholesale — simplest to keep correct, and deal composition
   // lists are always short

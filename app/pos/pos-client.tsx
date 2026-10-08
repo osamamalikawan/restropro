@@ -17,16 +17,19 @@ import {
   submitSale,
   isTauri,
 } from "@/lib/posData";
+import { displayName, hexToRgba, isHexColor } from "@/lib/urdu";
 
 type Product = {
   id: string;
   name: string;
+  name_ur?: string | null; // Urdu name, used when Settings -> Show item names in Urdu is on
   price: number;
   is_available: boolean;
   image_url?: string | null;
   // joined by /api/products; supabase returns an object for many-to-one, handle an array defensively
-  menu_categories?: { name: string; sort_order?: number } | { name: string; sort_order?: number }[] | null;
+  menu_categories?: CategoryRef | CategoryRef[] | null;
 };
+type CategoryRef = { name: string; sort_order?: number; color?: string | null };
 type CartLine = { productId: string; name: string; price: number; qty: number; note?: string };
 type Table = { id: string; number: string; seats: number };
 type Area = { id: string; name: string; delivery_fee: number };
@@ -44,6 +47,7 @@ type PosSettings = {
   showPrintInvoice: boolean;
   showDiscount: boolean; // Settings -> POS controls -> Allow discounts at checkout
   notePresets: string[]; // quick-note chips for order items (Settings -> Item note shortcuts)
+  urdu: boolean; // Settings -> Show item names in Urdu
   receiptHeader: string;
   receiptFooter: string;
   paper: string;
@@ -69,6 +73,13 @@ const categoryOrderOf = (p: Product) => {
   const o = Array.isArray(mc) ? mc[0]?.sort_order : mc?.sort_order;
   return typeof o === "number" ? o : Number.MAX_SAFE_INTEGER;
 };
+const categoryColorOf = (p: Product): string | null => {
+  const mc = p.menu_categories;
+  const c = Array.isArray(mc) ? mc[0]?.color : mc?.color;
+  return isHexColor(c) ? c : null; // null = no colour chosen, so the POS keeps the theme colour
+};
+/** POS menu text: centred, never smaller than 1.3rem. Change the number here to resize all item names. */
+const ITEM_NAME_SIZE = "text-[1.3rem]";
 const TYPE_TAG: Record<OrderType, string> = { dine_in: "Dine in", takeaway: "Takeaway", delivery: "Delivery" };
 const LABEL = "block text-[11px] font-bold uppercase tracking-wide text-ink-faint";
 // FIELD_BASE has no width so a caller can pick w-full / w-28 / flex-1 without the two fighting in CSS
@@ -130,6 +141,7 @@ export function PosClient({
     showPrintInvoice: true,
     showDiscount: true,
     notePresets: [],
+    urdu: false,
     receiptHeader: "",
     receiptFooter: "",
     paper: "80",
@@ -221,6 +233,7 @@ export function PosClient({
           showPrintInvoice: st.pos_show_print_invoice !== false,
           showDiscount: st.show_discount !== false,
           notePresets: Array.isArray(st.note_presets) ? st.note_presets.filter((x: unknown) => typeof x === "string") : [],
+          urdu: st.urdu_enabled === true,
           receiptHeader: st.receipt_header ?? "",
           receiptFooter: st.receipt_footer ?? "",
           paper: String(st.paper_width ?? "80"),
@@ -289,7 +302,7 @@ export function PosClient({
     setCart((prev) => {
       const existing = prev.find((l) => l.productId === p.id);
       if (existing) return prev.map((l) => (l.productId === p.id ? { ...l, qty: l.qty + 1 } : l));
-      return [...prev, { productId: p.id, name: p.name, price: p.price, qty: 1 }];
+      return [...prev, { productId: p.id, name: displayName(p, settings.urdu), price: p.price, qty: 1 }];
     });
   }
   function changeQty(productId: string, delta: number) {
@@ -604,9 +617,21 @@ export function PosClient({
     );
     return names;
   }, [available]);
+  const catColors = useMemo(() => {
+    const m = new Map<string, string | null>();
+    for (const p of available) {
+      const n = categoryOf(p);
+      const c = categoryColorOf(p);
+      if (!m.has(n) || (c && !m.get(n))) m.set(n, c);
+    }
+    return m;
+  }, [available]);
+  const activeColor = category === "All" ? null : catColors.get(category) ?? null; // background tint for the whole grid
   const q = search.trim().toLowerCase();
   const visible = available.filter(
-    (p) => (category === "All" || categoryOf(p) === category) && (!q || p.name.toLowerCase().includes(q))
+    (p) =>
+      (category === "All" || categoryOf(p) === category) &&
+      (!q || p.name.toLowerCase().includes(q) || (p.name_ur ?? "").toLowerCase().includes(q))
   );
   const qtyInCart = (id: string) => cart.find((l) => l.productId === id)?.qty ?? 0;
 
@@ -747,19 +772,34 @@ export function PosClient({
         {/* categories */}
         {categories.length > 0 && (
           <div className="mb-4 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
-            {["All", ...categories].map((c) => (
-              <button
-                key={c}
-                onClick={() => setCategory(c)}
-                className={`shrink-0 rounded-full border px-4 py-2 text-xs font-semibold transition-colors ${
-                  category === c
-                    ? "bg-chili-500 border-chili-500 text-white"
-                    : "bg-surface border-line text-ink-mid hover:border-chili-500/60"
-                }`}
-              >
-                {c}
-              </button>
-            ))}
+            {["All", ...categories].map((c) => {
+              const col = c === "All" ? null : catColors.get(c) ?? null;
+              const on = category === c;
+              // a category with a colour wears it; one without keeps the theme (chili) look
+              const style = col
+                ? on
+                  ? { backgroundColor: col, borderColor: col, color: "#fff" }
+                  : { backgroundColor: hexToRgba(col, 0.16), borderColor: hexToRgba(col, 0.6) }
+                : undefined;
+              return (
+                <button
+                  key={c}
+                  onClick={() => setCategory(c)}
+                  style={style}
+                  className={`shrink-0 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
+                    col
+                      ? on
+                        ? ""
+                        : "text-ink-strong hover:brightness-110"
+                      : on
+                        ? "bg-chili-500 border-chili-500 text-white"
+                        : "bg-surface border-line text-ink-mid hover:border-chili-500/60"
+                  }`}
+                >
+                  {c}
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -771,29 +811,39 @@ export function PosClient({
             No products yet — add some from <Link href="/menu" className="underline">Menu</Link>.
           </p>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3">
+          <div
+            className="grid grid-cols-2 md:grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3 transition-colors"
+            // when a coloured category is selected the whole menu area follows its colour
+            style={activeColor ? { backgroundColor: hexToRgba(activeColor, 0.1), padding: 12, borderRadius: 16 } : undefined}
+          >
             {visible.map((p) => {
               const q = qtyInCart(p.id);
               const showImg = p.image_url && !brokenImgs[p.id];
+              const col = categoryColorOf(p);
+              const nm = displayName(p, settings.urdu);
+              const urduShown = nm !== p.name;
               return (
                 <button
                   key={p.id}
                   onClick={() => addToCart(p)}
-                  className="group overflow-hidden rounded-xl border border-line bg-surface text-left transition hover:border-chili-500 active:scale-[0.98]"
+                  style={col ? { backgroundColor: hexToRgba(col, 0.16), borderColor: hexToRgba(col, 0.65) } : undefined}
+                  className={`group overflow-hidden rounded-xl border text-center transition active:scale-[0.98] ${
+                    col ? "hover:brightness-110" : "border-line bg-surface hover:border-chili-500"
+                  }`}
                 >
                   <div className="relative aspect-[16/10] bg-raised overflow-hidden">
                     {showImg ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={p.image_url as string}
-                        alt={p.name}
+                        alt={nm}
                         loading="lazy"
                         onError={() => setBrokenImgs((b) => ({ ...b, [p.id]: true }))}
                         className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                       />
                     ) : (
                       <div className="grid h-full w-full place-items-center bg-gradient-to-br from-raised to-hover font-display text-3xl text-ink-faint">
-                        {p.name.charAt(0).toUpperCase()}
+                        {nm.charAt(0).toUpperCase()}
                       </div>
                     )}
                     {q > 0 && (
@@ -802,9 +852,17 @@ export function PosClient({
                       </span>
                     )}
                   </div>
-                  <div className="p-3">
-                    <div className="text-sm font-semibold leading-snug line-clamp-2 min-h-[2.5rem]">{p.name}</div>
-                    <div className="mt-1 font-mono text-sm text-basil-400">Rs {fmt(p.price)}</div>
+                  <div className="p-3 text-center">
+                    <div className={`flex items-center justify-center ${urduShown ? "min-h-[4.9rem]" : "min-h-[3.6rem]"}`}>
+                      <span
+                        dir={urduShown ? "rtl" : undefined}
+                        lang={urduShown ? "ur" : undefined}
+                        className={`${ITEM_NAME_SIZE} block w-full text-center font-semibold line-clamp-2 ${urduShown ? "leading-[1.9]" : "leading-snug"}`}
+                      >
+                        {nm}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-center font-mono text-base font-semibold text-basil-400">Rs {fmt(p.price)}</div>
                   </div>
                 </button>
               );

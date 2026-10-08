@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "@/lib/posData";
 import { ReorderableList } from "@/components/ui/reorderable-list";
@@ -10,11 +10,13 @@ import { Switch } from "@/components/ui/switch";
 import { GalleryPickerModal } from "@/components/gallery-picker-modal";
 import { fmtMoney } from "@/lib/format";
 import { RecipeModal } from "./recipe-modal";
+import { CATEGORY_SWATCHES } from "@/lib/urdu";
 
-type Category = { id: string; name: string; sort_order: number; is_active: boolean };
+type Category = { id: string; name: string; sort_order: number; is_active: boolean; color?: string | null };
 type Product = {
   id: string;
   name: string;
+  name_ur?: string | null;
   price: number;
   category_id: string | null;
   image_url: string | null;
@@ -34,6 +36,7 @@ export function MenuClient() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [fName, setFName] = useState("");
+  const [fNameUr, setFNameUr] = useState("");
   const [fCategoryId, setFCategoryId] = useState("");
   const [fPrice, setFPrice] = useState("");
   const [fImageUrl, setFImageUrl] = useState("");
@@ -87,6 +90,27 @@ export function MenuClient() {
     if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
   }
 
+  /** Colour picker next to each category. null = back to the theme colour. Saved shortly after the last change. */
+  const colorTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  function setCategoryColor(c: Category, color: string | null) {
+    setCategories((prev) => prev.map((x) => (x.id === c.id ? { ...x, color } : x)));
+    clearTimeout(colorTimers.current[c.id]);
+    colorTimers.current[c.id] = setTimeout(async () => {
+      const res = await fetch("/api/menu-categories", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "update", row: { id: c.id, name: c.name, sort_order: c.sort_order, is_active: c.is_active, color } }),
+      });
+      if (!res.ok) {
+        setCatError((await res.json().catch(() => ({}))).error ?? "Could not save the colour");
+        loadAll();
+        return;
+      }
+      setCatError("");
+      if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
+    }, 500);
+  }
+
   async function removeCategory(id: string) {
     const cat = categories.find((c) => c.id === id);
     const count = products.filter((p) => p.category_id === id).length;
@@ -120,6 +144,7 @@ export function MenuClient() {
   function openAdd() {
     setEditingId(null);
     setFName("");
+    setFNameUr("");
     setFCategoryId(categories[0]?.id ?? "");
     setFPrice("0");
     setFImageUrl("");
@@ -130,6 +155,7 @@ export function MenuClient() {
   function openEdit(p: Product) {
     setEditingId(p.id);
     setFName(p.name);
+    setFNameUr(p.name_ur ?? "");
     setFCategoryId(p.category_id ?? "");
     setFPrice(String(p.price));
     setFImageUrl(p.image_url ?? "");
@@ -157,6 +183,7 @@ export function MenuClient() {
         row: {
           id: editingId ?? undefined,
           name: fName.trim(),
+          name_ur: fNameUr.trim() || null,
           category_id: fCategoryId || null,
           price: Number(fPrice) || 0,
           image_url: fImageUrl.trim() || null,
@@ -181,7 +208,7 @@ export function MenuClient() {
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
         <Panel loading={loading} loadingLabel="Loading menu…">
-          <PanelHead title="Menu categories" subtitle="Drag to set the order shown in POS" />
+          <PanelHead title="Menu categories" subtitle="Drag to set the order shown in POS. Pick a colour to tint that category in POS (no colour = theme colour)" />
           <div className="px-5 py-3 space-y-1">
             {catError && <p className="mb-2 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{catError}</p>}
             <ReorderableList
@@ -191,9 +218,31 @@ export function MenuClient() {
                 const inUse = products.filter((p) => p.category_id === c.id).length;
                 return (
                   <>
-                    <span>
-                      {c.name} {inUse > 0 && <span className="text-xs text-ink-mid">({inUse} items)</span>}
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="h-3 w-3 shrink-0 rounded-full border border-line" style={{ backgroundColor: c.color || "transparent" }} />
+                      <span>
+                        {c.name} {inUse > 0 && <span className="text-xs text-ink-mid">({inUse} items)</span>}
+                      </span>
                     </span>
+                    <span className="flex items-center gap-1.5" draggable={false} onMouseDown={(e) => e.stopPropagation()}>
+                      <label
+                        title="Pick a colour for this category (shown in the POS)"
+                        className="relative h-6 w-6 cursor-pointer overflow-hidden rounded-md border border-line"
+                        style={{ backgroundColor: c.color || undefined }}
+                      >
+                        <input
+                          type="color"
+                          value={c.color || CATEGORY_SWATCHES[0]}
+                          onChange={(e) => setCategoryColor(c, e.target.value)}
+                          className="absolute -inset-2 h-10 w-10 cursor-pointer opacity-0"
+                        />
+                        {!c.color && <span className="pointer-events-none absolute inset-0 grid place-items-center text-[10px] text-ink-faint">🎨</span>}
+                      </label>
+                      {c.color && (
+                        <button type="button" onClick={() => setCategoryColor(c, null)} className="text-[11px] text-ink-faint hover:text-ink-strong" title="Use the theme colour">
+                          ↺
+                        </button>
+                      )}
                     <button
                       type="button"
                       draggable={false}
@@ -204,6 +253,7 @@ export function MenuClient() {
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
+                    </span>
                   </>
                 );
               }}
@@ -232,8 +282,8 @@ export function MenuClient() {
           </PanelHead>
           <div className="flex flex-wrap gap-2 px-5 pt-4">
             {[
-              { id: "all", name: "All", count: products.length },
-              ...categories.map((c) => ({ id: c.id, name: c.name, count: products.filter((p) => p.category_id === c.id).length })),
+              { id: "all", name: "All", count: products.length, color: null as string | null | undefined },
+              ...categories.map((c) => ({ id: c.id, name: c.name, count: products.filter((p) => p.category_id === c.id).length, color: c.color })),
               ...(products.some((p) => !p.category_id) ? [{ id: "none", name: "No category", count: products.filter((p) => !p.category_id).length }] : []),
             ].map((c) => (
               <button
@@ -244,6 +294,7 @@ export function MenuClient() {
                   filterCat === c.id ? "border-chili-500 bg-chili-500 text-white" : "border-line bg-raised text-ink-mid hover:border-chili-500/60 hover:text-ink-strong"
                 }`}
               >
+                {c.color && <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle" style={{ backgroundColor: c.color }} />}
                 {c.name} <span className="opacity-70">{c.count}</span>
               </button>
             ))}
@@ -259,6 +310,11 @@ export function MenuClient() {
                 <div className="h-24 w-full bg-raised bg-cover bg-center" style={p.image_url ? { backgroundImage: `url('${p.image_url}')` } : undefined} />
                 <div className="p-3">
                   <div className="mb-1.5 text-[13px] font-bold leading-tight">{p.name}</div>
+                  {p.name_ur && (
+                    <div dir="rtl" className="mb-1.5 text-base leading-relaxed text-ink-mid">
+                      {p.name_ur}
+                    </div>
+                  )}
                   <div className="font-mono text-[13px] font-bold text-basil-400">{fmtMoney(p.price)}</div>
                 </div>
                 <button
@@ -299,8 +355,19 @@ export function MenuClient() {
         }
       >
         {error && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}
-        <Field label="Item name">
+        <Field label="Item name (English)">
           <input value={fName} onChange={(e) => setFName(e.target.value)} className={inputCls} placeholder="e.g. Spicy Chicken Wrap" />
+        </Field>
+        <Field label="Item name (Urdu)">
+          <input
+            value={fNameUr}
+            onChange={(e) => setFNameUr(e.target.value)}
+            dir="rtl"
+            lang="ur"
+            className={`${inputCls} text-lg leading-relaxed`}
+            placeholder="مثلاً چکن شوارما"
+          />
+          <p className="mt-1 text-[11px] text-ink-faint">Shown in POS, kitchen and invoice when “Show item names in Urdu” is on in Settings.</p>
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Category">

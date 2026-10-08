@@ -18,6 +18,7 @@ type Product = {
   id: string;
   category_id: string | null;
   name: string;
+  name_ur?: string | null;
   description?: string | null;
   price: number;
   image_url: string | null;
@@ -29,6 +30,7 @@ type RecipeItem = { product_id: string; quantity: number; inventory_items: { cos
 type Deal = {
   id: string;
   name: string;
+  name_ur?: string | null;
   description: string | null;
   price: number;
   image_url: string | null;
@@ -47,6 +49,7 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [fName, setFName] = useState("");
+  const [fNameUr, setFNameUr] = useState("");
   const [fCategoryId, setFCategoryId] = useState("");
   const [fPrice, setFPrice] = useState("");
   const [fImageUrl, setFImageUrl] = useState("");
@@ -62,6 +65,7 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
   const [dealModalOpen, setDealModalOpen] = useState(false);
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
   const [dName, setDName] = useState("");
+  const [dNameUr, setDNameUr] = useState("");
   const [dDescription, setDDescription] = useState("");
   const [dPrice, setDPrice] = useState("");
   const [dImageUrl, setDImageUrl] = useState("");
@@ -115,6 +119,7 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
   function openAddDeal() {
     setEditingDealId(null);
     setDName("");
+    setDNameUr("");
     setDDescription("");
     setDPrice("");
     setDImageUrl("");
@@ -126,6 +131,7 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
   function openEditDeal(d: Deal) {
     setEditingDealId(d.id);
     setDName(d.name);
+    setDNameUr(d.name_ur ?? "");
     setDDescription(d.description ?? "");
     setDPrice(String(d.price));
     setDImageUrl(d.image_url ?? "");
@@ -164,6 +170,7 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
         op: editingDealId ? "update" : "insert",
         id: editingDealId ?? undefined,
         name: dName.trim(),
+        nameUr: dNameUr.trim() || null,
         description: dDescription.trim() || null,
         price: Number(dPrice) || 0,
         imageUrl: dImageUrl.trim() || null,
@@ -204,6 +211,7 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
   function openAdd() {
     setEditingId(null);
     setFName("");
+    setFNameUr("");
     setFCategoryId(categories[0]?.id ?? "");
     setFPrice("");
     setFImageUrl("");
@@ -214,6 +222,7 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
   function openEdit(p: Product) {
     setEditingId(p.id);
     setFName(p.name);
+    setFNameUr(p.name_ur ?? "");
     setFCategoryId(p.category_id ?? "");
     setFPrice(String(p.price));
     setFImageUrl(p.image_url ?? "");
@@ -237,6 +246,7 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
         row: {
           id: editingId ?? undefined,
           name: fName.trim(),
+          name_ur: fNameUr.trim() || null,
           category_id: fCategoryId || null,
           price: Number(fPrice),
           image_url: fImageUrl.trim() || null,
@@ -302,7 +312,14 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
                         style={p.image_url ? { backgroundImage: `url('${p.image_url}')` } : undefined}
                       />
                     </Td>
-                    <Td className="font-medium text-ink-strong">{p.name}</Td>
+                    <Td className="font-medium text-ink-strong">
+                      {p.name}
+                      {p.name_ur && (
+                        <div dir="rtl" className="mt-0.5 text-base font-normal leading-relaxed text-ink-mid">
+                          {p.name_ur}
+                        </div>
+                      )}
+                    </Td>
                     <Td>
                       <Badge>{p.menu_categories?.name ?? "—"}</Badge>
                     </Td>
@@ -372,6 +389,11 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
                   </Td>
                   <Td>
                     <div className="font-medium text-ink-strong">{d.name}</div>
+                    {d.name_ur && (
+                      <div dir="rtl" className="text-base leading-relaxed text-ink-mid">
+                        {d.name_ur}
+                      </div>
+                    )}
                     {d.description && <div className="text-xs text-ink-mid mt-0.5">{d.description}</div>}
                   </Td>
                   <Td className="text-ink-mid text-xs">
@@ -421,8 +443,19 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
         }
       >
         {error && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}
-        <Field label="Name">
+        <Field label="Name (English)">
           <input value={fName} onChange={(e) => setFName(e.target.value)} className={inputCls} placeholder="Product name" />
+        </Field>
+        <Field label="Name (Urdu)">
+          <input
+            value={fNameUr}
+            onChange={(e) => setFNameUr(e.target.value)}
+            dir="rtl"
+            lang="ur"
+            className={`${inputCls} text-lg leading-relaxed`}
+            placeholder="اردو نام"
+          />
+          <p className="mt-1 text-[11px] text-ink-faint">Shown in POS, kitchen and invoice when “Show item names in Urdu” is on in Settings.</p>
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Category">
@@ -519,8 +552,18 @@ export function ProductsClient({ canEdit, canRemove = false }: { canEdit: boolea
         }
       >
         {dError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{dError}</p>}
-        <Field label="Deal name">
+        <Field label="Deal name (English)">
           <input value={dName} onChange={(e) => setDName(e.target.value)} className={inputCls} placeholder="e.g. Burger + Fries Combo" />
+        </Field>
+        <Field label="Deal name (Urdu)">
+          <input
+            value={dNameUr}
+            onChange={(e) => setDNameUr(e.target.value)}
+            dir="rtl"
+            lang="ur"
+            className={`${inputCls} text-lg leading-relaxed`}
+            placeholder="اردو نام"
+          />
         </Field>
         <Field label="Description">
           <textarea

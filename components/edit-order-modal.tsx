@@ -8,7 +8,7 @@ export type EditableSaleItem = {
   quantity: number;
 };
 
-type Product = { id: string; name: string; price: number };
+type Product = { id: string; name: string; price: number; lineName?: string };
 
 /** Reopens a fired/completed order for editing — matches the prototype's
  *  orderEditOverlay (openEditOrder/oeAddLine/saveOrderEdit). Add/remove items, quantities
@@ -39,13 +39,17 @@ export function EditOrderModal({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch("/api/products")
-      .then((r) => r.json())
-      .then((d) => {
-        const list: Product[] = (d.products ?? []).map((p: any) => ({ id: p.id, name: p.name, price: p.price }));
-        setProducts(list);
-        if (list[0]) setAddProductId(list[0].id);
-      });
+    Promise.all([fetch("/api/products").then((r) => r.json()), fetch("/api/settings").then((r) => r.json()).catch(() => ({}))]).then(([d, st]) => {
+      const urdu = st?.settings?.urdu_enabled === true; // an item added here is named the same way the POS names it
+      const list: Product[] = (d.products ?? []).map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        price: p.price,
+        lineName: urdu && p.name_ur?.trim() ? p.name_ur.trim() : p.name,
+      }));
+      setProducts(list);
+      if (list[0]) setAddProductId(list[0].id);
+    });
   }, []);
 
   const subtotal = items.reduce((s, it) => s + it.unit_price * it.quantity, 0);
@@ -68,7 +72,7 @@ export function EditOrderModal({
       if (existing) {
         return prev.map((it) => (it.product_id === product.id ? { ...it, quantity: it.quantity + addQty } : it));
       }
-      return [...prev, { product_id: product.id, name: product.name, unit_price: product.price, quantity: addQty }];
+      return [...prev, { product_id: product.id, name: product.lineName ?? product.name, unit_price: product.price, quantity: addQty }];
     });
   }
 
