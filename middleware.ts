@@ -35,5 +35,7 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  // Static files must stay reachable without a session (the login page needs its icon, the browser fetches the
+  // manifest and service worker before anyone signs in) - otherwise they get redirected to /login and the tab shows no icon.
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|manifest.json|sw.js|icons/).*)"],
 };
