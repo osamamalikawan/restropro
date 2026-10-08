@@ -12,7 +12,7 @@ import { fmtMoney } from "@/lib/format";
 import { RecipeModal } from "./recipe-modal";
 import { CATEGORY_SWATCHES } from "@/lib/urdu";
 
-type Category = { id: string; name: string; sort_order: number; is_active: boolean; color?: string | null };
+type Category = { id: string; name: string; name_ur?: string | null; sort_order: number; is_active: boolean; color?: string | null };
 type Product = {
   id: string;
   name: string;
@@ -30,6 +30,7 @@ export function MenuClient() {
   const [loading, setLoading] = useState(true);
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
   const [newCatName, setNewCatName] = useState("");
+  const [newCatNameUr, setNewCatNameUr] = useState("");
   const [catError, setCatError] = useState("");
   const [filterCat, setFilterCat] = useState<string>("all"); // "all" | category id | "none"
 
@@ -63,13 +64,14 @@ export function MenuClient() {
     const res = await fetch("/api/menu-categories", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "insert", row: { name: newCatName.trim(), sort_order: categories.length } }),
+      body: JSON.stringify({ op: "insert", row: { name: newCatName.trim(), name_ur: newCatNameUr.trim() || null, sort_order: categories.length } }),
     });
     if (!res.ok) {
       setCatError((await res.json()).error);
       return;
     }
     setNewCatName("");
+    setNewCatNameUr("");
     loadAll();
   }
   /** Drag / arrows in "Menu categories": save the new order. POS shows its category tabs in this order. */
@@ -88,6 +90,27 @@ export function MenuClient() {
       return;
     }
     if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
+  }
+
+  /** Urdu name under each category. Empty = no Urdu name (the POS keeps the English one). Saved shortly after typing stops. */
+  const nameUrTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  function setCategoryNameUr(c: Category, value: string) {
+    setCategories((prev) => prev.map((x) => (x.id === c.id ? { ...x, name_ur: value } : x)));
+    clearTimeout(nameUrTimers.current[c.id]);
+    nameUrTimers.current[c.id] = setTimeout(async () => {
+      const res = await fetch("/api/menu-categories", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "update", row: { id: c.id, name: c.name, sort_order: c.sort_order, is_active: c.is_active, name_ur: value.trim() || null } }),
+      });
+      if (!res.ok) {
+        setCatError((await res.json().catch(() => ({}))).error ?? "Could not save the Urdu name");
+        loadAll();
+        return;
+      }
+      setCatError("");
+      if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
+    }, 600);
   }
 
   /** Colour picker next to each category. null = back to the theme colour. Saved shortly after the last change. */
@@ -208,7 +231,7 @@ export function MenuClient() {
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
         <Panel loading={loading} loadingLabel="Loading menu…">
-          <PanelHead title="Menu categories" subtitle="Drag to set the order shown in POS. Pick a colour to tint that category in POS (no colour = theme colour)" />
+          <PanelHead title="Menu categories" subtitle="Drag to set the order shown in POS. Add an Urdu name (shown when Urdu is on in Settings). Pick a colour to tint that category in POS (no colour = theme colour)" />
           <div className="px-5 py-3 space-y-1">
             {catError && <p className="mb-2 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{catError}</p>}
             <ReorderableList
@@ -220,8 +243,19 @@ export function MenuClient() {
                   <>
                     <span className="flex min-w-0 items-center gap-2">
                       <span className="h-3 w-3 shrink-0 rounded-full border border-line" style={{ backgroundColor: c.color || "transparent" }} />
-                      <span>
+                      <span className="min-w-0">
                         {c.name} {inUse > 0 && <span className="text-xs text-ink-mid">({inUse} items)</span>}
+                        <input
+                          dir="rtl"
+                          lang="ur"
+                          draggable={false}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          value={c.name_ur ?? ""}
+                          onChange={(e) => setCategoryNameUr(c, e.target.value)}
+                          placeholder="اردو نام"
+                          title="Urdu name (shown in POS when Urdu is on in Settings)"
+                          className="mt-1 block w-full rounded-md border border-line bg-raised px-2 py-1 text-sm leading-relaxed text-ink-strong placeholder:text-ink-faint focus:border-chili-500 focus:outline-none"
+                        />
                       </span>
                     </span>
                     <span className="flex items-center gap-1.5" draggable={false} onMouseDown={(e) => e.stopPropagation()}>
@@ -266,7 +300,16 @@ export function MenuClient() {
               onChange={(e) => setNewCatName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addCategory()}
               placeholder="e.g. Combos"
-              className={`${inputCls} flex-1`}
+              className={`${inputCls} flex-1 min-w-0`}
+            />
+            <input
+              dir="rtl"
+              lang="ur"
+              value={newCatNameUr}
+              onChange={(e) => setNewCatNameUr(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addCategory()}
+              placeholder="اردو نام"
+              className={`${inputCls} w-28 shrink-0`}
             />
             <button onClick={addCategory} className={btnPrimary}>
               Add

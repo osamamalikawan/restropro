@@ -29,7 +29,7 @@ type Product = {
   // joined by /api/products; supabase returns an object for many-to-one, handle an array defensively
   menu_categories?: CategoryRef | CategoryRef[] | null;
 };
-type CategoryRef = { name: string; sort_order?: number; color?: string | null };
+type CategoryRef = { name: string; name_ur?: string | null; sort_order?: number; color?: string | null }; // name_ur: Urdu category name (migration 0022)
 type CartLine = { productId: string; name: string; price: number; qty: number; note?: string };
 type Table = { id: string; number: string; seats: number };
 type Area = { id: string; name: string; delivery_fee: number };
@@ -77,6 +77,11 @@ const categoryColorOf = (p: Product): string | null => {
   const mc = p.menu_categories;
   const c = Array.isArray(mc) ? mc[0]?.color : mc?.color;
   return isHexColor(c) ? c : null; // null = no colour chosen, so the POS keeps the theme colour
+};
+const categoryUrduOf = (p: Product): string => {
+  const mc = p.menu_categories;
+  const u = Array.isArray(mc) ? mc[0]?.name_ur : mc?.name_ur;
+  return typeof u === "string" ? u.trim() : "";
 };
 /** POS menu text: centred, never smaller than 1.3rem. Change the number here to resize all item names. */
 const ITEM_NAME_SIZE = "text-[1.3rem]";
@@ -626,6 +631,15 @@ export function PosClient({
     }
     return m;
   }, [available]);
+  // English category name -> Urdu name (only categories that have one). The English name stays the key for filtering.
+  const catUrdu = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of available) {
+      const u = categoryUrduOf(p);
+      if (u && !m.has(categoryOf(p))) m.set(categoryOf(p), u);
+    }
+    return m;
+  }, [available]);
   const activeColor = category === "All" ? null : catColors.get(category) ?? null; // background tint for the whole grid
   const q = search.trim().toLowerCase();
   const visible = available.filter(
@@ -775,6 +789,7 @@ export function PosClient({
             {["All", ...categories].map((c) => {
               const col = c === "All" ? null : catColors.get(c) ?? null;
               const on = category === c;
+              const ur = settings.urdu && c !== "All" ? catUrdu.get(c) : undefined; // Urdu tab label when Urdu is on and the category has one
               // a category with a colour wears it; one without keeps the theme (chili) look
               const style = col
                 ? on
@@ -796,7 +811,13 @@ export function PosClient({
                         : "bg-surface border-line text-ink-mid hover:border-chili-500/60"
                   }`}
                 >
-                  {c}
+                  {ur ? (
+                    <span dir="rtl" lang="ur" className="block text-base leading-[1.7]">
+                      {ur}
+                    </span>
+                  ) : (
+                    c
+                  )}
                 </button>
               );
             })}
