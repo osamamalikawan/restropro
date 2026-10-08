@@ -1,9 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { PageLoader } from "@/components/ui/loading";
-import Link from "next/link";
-import { DollarSign, TrendingUp, Receipt, Layers, AlertTriangle, Clock, Users, Pencil, X } from "lucide-react";
-import { EditOrderModal } from "@/components/edit-order-modal";
+import { DollarSign, TrendingUp, Receipt, Layers, AlertTriangle, Clock, Users } from "lucide-react";
+import { ColumnChart, LineChart, Legend } from "@/components/dashboard-charts";
 
 type Summary = {
   salesTotal: number;
@@ -18,58 +17,62 @@ type Summary = {
   topProducts: { name: string; qty: number }[];
 };
 
-type Sale = {
-  id: string;
-  order_no: number;
-  display_id?: string | null;
-  order_type: string;
-  total: number;
-  delivery_charge: number;
-  status: string;
-  created_at: string;
-  customers: { name: string } | null;
-  employees: { name: string } | null;
-  sale_items: { product_id: string; name: string; unit_price: number; quantity: number }[];
-  sale_payments: { method: string }[];
+type PeriodSeries = { labels: string[]; current: (number | null)[]; previous: (number | null)[]; currentTotal: number; previousToDate: number; previousTotal: number };
+type Charts = {
+  hourNow: number;
+  today: (number | null)[];
+  yesterday: number[];
+  todayTotal: number;
+  yesterdayTotal: number;
+  yesterdayToNow: number;
+  week: PeriodSeries;
+  month: PeriodSeries & { monthName: string };
 };
 
-const TYPE_LABEL: Record<string, string> = { dine_in: "Dine In", takeaway: "Takeaway", delivery: "Delivery" };
+const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? "a" : "p"}`);
+const money = (n: number) => `Rs ${Math.round(n).toLocaleString("en-US")}`;
+const CHILI = "#D9481F";
+const MUTED = "#8c8072";
 
-/** Matches the prototype's renderDashboard() KPI cards + recent-sales table + top-products
- *  list. Gross Profit and Supplier Payable aren't included — see migration 0011's comment
+/** "▲ 12% vs last week" — green when up, red when down. */
+function Delta({ now, before, label }: { now: number; before: number; label: string }) {
+  if (before <= 0) return <span className="text-xs text-ink-faint">{now > 0 ? `${money(now)} — nothing to compare with ${label} yet` : `No sales yet`}</span>;
+  const pct = Math.round(((now - before) / before) * 100);
+  const up = pct >= 0;
+  return (
+    <span className={`text-xs font-semibold ${up ? "text-basil-400" : "text-crimson-400"}`}>
+      {up ? "▲" : "▼"} {Math.abs(pct)}% <span className="font-normal text-ink-faint">vs {label}</span>
+    </span>
+  );
+}
+
+/** Matches the prototype's renderDashboard() KPI cards + top-products list, plus the sales charts
+ *  (today vs yesterday, weekly / monthly progress). Gross Profit and Supplier Payable aren't included — see migration 0011's comment
  *  for why those two specifically were left for later. */
 export function DashboardHomeClient({ employeeName, role }: { employeeName: string; role: string }) {
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [recent, setRecent] = useState<Sale[]>([]);
-  const [taxRate, setTaxRate] = useState(0.05);
-  const [editingSale, setEditingSale] = useState<Sale | null>(null);
-  const canManage = role === "admin" || role === "manager";
+  const [charts, setCharts] = useState<Charts | null>(null);
+  const [chartsError, setChartsError] = useState(false);
+  const [lineMode, setLineMode] = useState<"hourly" | "running">("hourly");
+  const [period, setPeriod] = useState<"week" | "month">("week");
 
   function reload() {
     fetch("/api/dashboard")
       .then((r) => r.json())
       .then((d) => setSummary(d.summary));
-    fetch("/api/sales?limit=8")
-      .then((r) => r.json())
-      .then((d) => setRecent(d.sales ?? []));
+    // the browser's own clock decides what "today" means (minutes ahead of UTC)
+    fetch(`/api/dashboard/charts?tz=${-new Date().getTimezoneOffset()}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => {
+        setCharts(d);
+        setChartsError(false);
+      })
+      .catch(() => setChartsError(true));
   }
 
   useEffect(() => {
     reload();
-    fetch("/api/settings")
-      .then((r) => r.json())
-      .then((d) => d.settings?.tax_rate != null && setTaxRate(Number(d.settings.tax_rate) / 100));
   }, []);
-
-  async function cancelOrder(sale: Sale) {
-    if (!window.confirm(`Cancel order #${sale.order_no}? This restores stock and removes it from today's income.`)) return;
-    const res = await fetch("/api/sales/cancel", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ saleId: sale.id }),
-    });
-    if (res.ok) reload();
-  }
 
   if (!summary) {
     return (
@@ -81,6 +84,16 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
 
   const avgOrder = summary.salesCount ? summary.salesTotal / summary.salesCount : 0;
   const topMax = summary.topProducts[0]?.qty || 1;
+
+  const running = (vals: (number | null)[]) => {
+    let acc = 0;
+    return vals.map((v) => (v == null ? null : (acc += v)));
+  };
+  const lineToday = charts ? (lineMode === "hourly" ? charts.today : running(charts.today)) : [];
+  const lineYesterday = charts ? (lineMode === "hourly" ? charts.yesterday : running(charts.yesterday)) : [];
+  const per = charts ? (period === "week" ? charts.week : charts.month) : null;
+  const perLabel = period === "week" ? "last week" : "last month";
+  const thisName = period === "week" ? "This week" : charts?.month.monthName ?? "This month";
 
   const kpis = [
     { label: "Today's sales", value: `Rs ${summary.salesTotal.toLocaleString()}`, delta: `${summary.salesCount} orders`, color: "#D9481F", Icon: DollarSign },
@@ -129,61 +142,50 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
       </div>
 
       <div className="grid lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 rounded-xl border border-line bg-surface overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-line-soft">
-            <h3 className="font-display font-semibold text-sm text-ink-strong">Recent orders</h3>
-            <Link href="/sales" className="text-xs text-chili-400 hover:underline">
-              View all →
-            </Link>
-          </div>
-          <table className="w-full text-sm">
-            <tbody>
-              {recent.map((s) => (
-                <tr key={s.id} className="border-t border-line-soft">
-                  <td className="p-3 font-mono text-xs">#{s.display_id ?? s.order_no}</td>
-                  <td className="p-3 text-xs text-ink-mid">{TYPE_LABEL[s.order_type] ?? s.order_type}</td>
-                  <td className="p-3 text-xs text-ink-mid">{s.employees?.name ?? "—"}</td>
-                  <td className="p-3 text-xs text-ink-mid">{s.sale_items.length} item(s)</td>
-                  <td className="p-3 text-xs text-ink-mid">{s.sale_payments.map((p) => p.method).join(", ") || "—"}</td>
-                  <td className={`p-3 text-right font-mono text-xs ${s.status === "cancelled" ? "line-through text-ink-faint" : "font-semibold"}`}>
-                    Rs {s.total.toLocaleString()}
-                  </td>
-                  <td className="p-3 text-right text-xs text-ink-faint">
-                    {new Date(s.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                  </td>
-                  <td className="p-3 text-right">
-                    {s.status === "cancelled" ? (
-                      <span className="text-[10px] uppercase font-bold text-crimson-400">Cancelled</span>
-                    ) : canManage ? (
-                      <div className="flex justify-end gap-1.5">
-                        <button
-                          onClick={() => setEditingSale(s)}
-                          className="w-7 h-7 rounded-lg bg-raised border border-line text-ink-mid flex items-center justify-center"
-                          title="Edit"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        <button
-                          onClick={() => cancelOrder(s)}
-                          className="w-7 h-7 rounded-lg bg-raised border border-line text-ink-mid flex items-center justify-center"
-                          title="Cancel"
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-              {recent.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="p-6 text-center text-ink-faint text-sm">
-                    No sales recorded yet.
-                  </td>
-                </tr>
+        <div className="lg:col-span-2 rounded-xl border border-line bg-surface p-4">
+          <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="font-display font-semibold text-sm text-ink-strong">Today vs yesterday</h3>
+              {charts && (
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                  <span className="font-mono text-sm font-semibold text-ink-strong">{money(charts.todayTotal)}</span>
+                  <Delta now={charts.todayTotal} before={charts.yesterdayToNow} label="yesterday at this time" />
+                </div>
               )}
-            </tbody>
-          </table>
+            </div>
+            <div className="flex rounded-lg border border-line bg-raised p-0.5 text-xs font-semibold">
+              {(["hourly", "running"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setLineMode(m)}
+                  className={`rounded-md px-3 py-1 transition-colors ${lineMode === m ? "bg-chili-500 text-white" : "text-ink-mid hover:text-ink-strong"}`}
+                >
+                  {m === "hourly" ? "Hourly" : "Running total"}
+                </button>
+              ))}
+            </div>
+          </div>
+          {charts ? (
+            <>
+              <div className="mb-1">
+                <Legend
+                  items={[
+                    { name: `Today (${money(charts.todayTotal)})`, color: CHILI },
+                    { name: `Yesterday (${money(charts.yesterdayTotal)})`, color: MUTED, dashed: true },
+                  ]}
+                />
+              </div>
+              <LineChart
+                labels={HOUR_LABELS}
+                series={[
+                  { name: "Yesterday", color: MUTED, values: lineYesterday, dashed: true },
+                  { name: "Today", color: CHILI, values: lineToday },
+                ]}
+              />
+            </>
+          ) : (
+            <p className="py-16 text-center text-sm text-ink-faint">{chartsError ? "Charts need an internet connection — they will appear when you're back online." : "Loading chart…"}</p>
+          )}
         </div>
 
         <div className="rounded-xl border border-line bg-surface p-4">
@@ -208,20 +210,52 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
         </div>
       </div>
 
-      {editingSale && (
-        <EditOrderModal
-          saleId={editingSale.id}
-          orderNo={editingSale.order_no}
-          taxRate={taxRate}
-          deliveryCharge={editingSale.delivery_charge || 0}
-          initialItems={editingSale.sale_items}
-          onClose={() => setEditingSale(null)}
-          onSaved={() => {
-            setEditingSale(null);
-            reload();
-          }}
-        />
-      )}
+      <div className="mt-5 rounded-xl border border-line bg-surface p-4">
+        <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-display font-semibold text-sm text-ink-strong">{period === "week" ? "Weekly progress" : "Monthly progress"}</h3>
+            {per && (
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                <span className="font-mono text-sm font-semibold text-ink-strong">{money(per.currentTotal)}</span>
+                <Delta now={per.currentTotal} before={per.previousToDate} label={`${perLabel} (same days)`} />
+              </div>
+            )}
+          </div>
+          <div className="flex rounded-lg border border-line bg-raised p-0.5 text-xs font-semibold">
+            {(["week", "month"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setPeriod(m)}
+                className={`rounded-md px-3 py-1 transition-colors ${period === m ? "bg-chili-500 text-white" : "text-ink-mid hover:text-ink-strong"}`}
+              >
+                {m === "week" ? "Weekly" : "Monthly"}
+              </button>
+            ))}
+          </div>
+        </div>
+        {per ? (
+          <>
+            <div className="mb-1">
+              <Legend
+                items={[
+                  { name: `${thisName} (${money(per.currentTotal)})`, color: CHILI },
+                  { name: `${period === "week" ? "Last week" : "Last month"} (${money(per.previousTotal)})`, color: MUTED },
+                ]}
+              />
+            </div>
+            <ColumnChart
+              labels={per.labels}
+              tickEvery={period === "week" ? 1 : 2}
+              series={[
+                { name: thisName, color: CHILI, values: per.current },
+                { name: period === "week" ? "Last week" : "Last month", color: MUTED, values: per.previous },
+              ]}
+            />
+          </>
+        ) : (
+          <p className="py-16 text-center text-sm text-ink-faint">{chartsError ? "Charts need an internet connection — they will appear when you're back online." : "Loading chart…"}</p>
+        )}
+      </div>
     </main>
   );
 }

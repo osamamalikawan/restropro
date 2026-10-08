@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, Printer, X } from "lucide-react";
+import { CheckCheck, ChevronLeft, ChevronRight, Printer, X } from "lucide-react";
 import { EditOrderModal } from "@/components/edit-order-modal";
 import { LoadingOverlay, PageLoader } from "@/components/ui/loading";
 import { printSale, type SaleSnapshot } from "@/lib/posPrint";
@@ -85,6 +85,7 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
   const [areaNames, setAreaNames] = useState<Record<string, string>>({});
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [blink, setBlink] = useState<Record<string, true>>({});
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<Kitchen | null>(null);
@@ -182,6 +183,8 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
       .map((t): Card => ({ key: `held:${t.id}`, col: t.kitchenStatus ?? "New", at: t.heldAt, held: t })),
   ];
 
+  const pendingCount = cards.filter((c) => c.sale && (c.col === "New" || c.col === "Preparing")).length;
+
   async function moveCard(card: Card, to: Kitchen) {
     if (card.col === to) return;
     if (card.held) {
@@ -201,6 +204,33 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
       await load();
     }
     setBusyId(null);
+  }
+
+  /** "Complete all": every real order sitting in Active or Preparing goes to Completed in one go.
+   *  Held tickets (carts still open for more items, not fired yet) are left alone. */
+  async function completeAll() {
+    const todo = cards.filter((c) => c.sale && (c.col === "New" || c.col === "Preparing")).map((c) => c.sale!);
+    if (todo.length === 0) return;
+    if (!confirm(`Mark ${todo.length} order${todo.length === 1 ? "" : "s"} in Active and Preparing as Completed?`)) return;
+    setError("");
+    setBulkBusy(true);
+    const ids = new Set(todo.map((s) => s.id));
+    const stamp = new Date().toISOString();
+    setSales((prev) => prev.map((s) => (ids.has(s.id) ? { ...s, kitchen_status: "Completed", kitchen_status_at: stamp } : s)));
+    const results = await Promise.allSettled(
+      todo.map(async (s) => {
+        const res = await fetch("/api/sales/kitchen-status", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ saleId: s.id, kitchenStatus: "Completed" }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "failed");
+      })
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) setError(`${failed} of ${todo.length} orders couldn't be marked Completed — they are back in their old column. Try again.`);
+    await load(); // brings back the real state, including any that failed
+    setBulkBusy(false);
   }
 
   async function cancelTicket(card: Card) {
@@ -282,10 +312,21 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
   return (
     <main className="p-4 sm:p-6">
       <style>{RT_CSS}</style>
-      <p className="mb-4 text-xs text-ink-faint">
-        Drag a ticket to a new column, or use the ‹ › buttons. Held dine-in tickets (still open for more items) show up
-        right alongside fired orders — new tickets blink for 15 seconds.
-      </p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <p className="min-w-0 flex-1 basis-64 text-xs text-ink-faint">
+          Drag a ticket to a new column, or use the ‹ › buttons. Held dine-in tickets (still open for more items) show up
+          right alongside fired orders — new tickets blink for 15 seconds.
+        </p>
+        <button
+          onClick={completeAll}
+          disabled={bulkBusy || loading || pendingCount === 0}
+          title="Move every order in Active and Preparing to Completed"
+          className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-basil-500/50 bg-basil-500/15 px-4 text-sm font-bold text-basil-400 transition hover:bg-basil-500/25 disabled:opacity-40 disabled:hover:bg-basil-500/15"
+        >
+          <CheckCheck size={16} />
+          {bulkBusy ? "Completing…" : `Complete all${pendingCount > 0 ? ` (${pendingCount})` : ""}`}
+        </button>
+      </div>
 
       {error && (
         <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-crimson-500/40 bg-crimson-500/10 px-3 py-2 text-sm text-crimson-400">
