@@ -22,6 +22,7 @@ import {
   Bell,
   type LucideIcon,
   Printer,
+  Timer,
 } from "lucide-react";
 
 export type Role = string;
@@ -59,6 +60,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/employees", label: "Employees", icon: User, perm: "employees" },
       // { href: "/users", label: "Users", icon: KeyRound, perm: "employees" },
       { href: "/employee-ledger", label: "Employee Ledger", icon: FileText, perm: "employeeLedger" },
+      { href: "/shift-records", label: "Shift Records", icon: Timer, perm: "employees" },
       { href: "/accounts", label: "Accounts", icon: DollarSign, perm: "accounts" },
       { href: "/expenses", label: "Expenses", icon: CreditCard, perm: "expenses" },
     ],
@@ -112,6 +114,7 @@ export const VIEW_META: Record<string, { title: string; subtitle: string }> = {
   "/employees": { title: "Employees", subtitle: "Staff directory, roles & shift assignment" },
   // "/users": { title: "Users", subtitle: "Grant or revoke login access for employees, linked one-to-one" },
   "/employee-ledger": { title: "Employee Ledger", subtitle: "Salary, advance & bonus payments" },
+  "/shift-records": { title: "Shift Records", subtitle: "Clock-in and clock-out history with each shift's sales" },
   "/accounts": { title: "Accounts", subtitle: "Income & expense ledger" },
   "/expenses": { title: "Expenses", subtitle: "Regular and recurring restaurant expenses" },
   "/tables-delivery": { title: "Tables & Delivery", subtitle: "Dine-in tables and delivery coverage areas" },

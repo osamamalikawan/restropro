@@ -7,6 +7,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
 import { printSale, type SaleSnapshot, type SaveAction } from "@/lib/posPrint";
 import { invoke } from "@tauri-apps/api/core";
+import { ClockOutDialog } from "@/components/clock-out-dialog";
 import {
   getProducts,
   getTables,
@@ -151,6 +152,7 @@ export function PosClient({
     receiptFooter: "",
     paper: "80",
   }); // replaced with the tenant's real values once Settings loads
+  const [clockOutOpen, setClockOutOpen] = useState(false); // desktop POS: "Clock out & switch cashier" popup
   const [profile, setProfile] = useState({ address: "", phone: "" });
   const [cart, setCart] = useState<CartLine[]>([]);
   const [orderType, setOrderType] = useState<OrderType>("takeaway");
@@ -668,15 +670,8 @@ export function PosClient({
               <button
                 type="button"
                 aria-label="Switch cashier"
-                title="Switch cashier"
-                onClick={async () => {
-                  try {
-                    await invoke("staff_logout");
-                  } catch {
-                    /* still go back to the PIN screen */
-                  }
-                  window.location.href = "/login/staff";
-                }}
+                title="Clock out & switch cashier"
+                onClick={() => setClockOutOpen(true)}
                 className="shrink-0 grid place-items-center w-9 h-9 rounded-lg border border-line bg-surface text-ink-mid hover:text-ink-strong hover:border-chili-500 transition-colors"
               >
                 <ArrowLeft size={16} />
@@ -1440,6 +1435,20 @@ export function PosClient({
             <LoadingOverlay show={submitting} />
           </div>
         </div>
+      )}
+      {isTauri() && (
+        <ClockOutDialog
+          open={clockOutOpen}
+          onClose={() => setClockOutOpen(false)}
+          onConfirmed={async () => {
+            try {
+              await invoke("staff_logout");
+            } catch {
+              /* still go back to the PIN screen */
+            }
+            window.location.href = "/login/staff";
+          }}
+        />
       )}
     </main>
   );

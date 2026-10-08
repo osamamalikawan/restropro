@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyPin } from "@/lib/auth/pin";
 import { createStaffSessionToken, STAFF_SESSION_COOKIE } from "@/lib/auth/staff-session";
 import { computeStatus, isUsable } from "@/lib/subscription";
+import { ensureOpenShift } from "@/lib/shifts";
 
 /**
  * Staff PIN login. Body: { restaurantSlug: string, employeeId: string, pin: string }.
@@ -64,6 +65,8 @@ export async function POST(req: Request) {
     role: emp.role,
     sessionVersion: emp.session_version,
   });
+  // Clock in: open this employee's shift (or keep the one already open). Never blocks the sign-in.
+  await ensureOpenShift(admin, restaurant.id, emp.id).catch(() => {});
   const res = NextResponse.json({ success: true });
   res.cookies.set(STAFF_SESSION_COOKIE, token, {
     httpOnly: true,

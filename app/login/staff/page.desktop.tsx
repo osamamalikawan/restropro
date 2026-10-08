@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { initials, colorForId } from '@/lib/avatar';
 import { desktopHome } from '@/lib/desktop/context';
+import { rememberClockIn } from '@/lib/clock-in-hint';
 import { PinModal } from './pin-modal';
 import { PageLoader } from '@/components/ui/loading';
 
@@ -42,6 +43,9 @@ export default function StaffPickerPage() {
     setPinError('');
     try {
       await invoke('verify_staff_pin', { employeeId: selected.id, pin });
+      // Clock in: remember the time on this device and tell the server (skipped silently when offline).
+      const clockIn = rememberClockIn(selected.id);
+      fetch('/api/staff/clock-in', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ clockIn }) }).catch(() => {});
       router.push(await desktopHome());
     } catch (err) {
       setPinError(typeof err === 'string' ? err : 'Incorrect PIN — try again');

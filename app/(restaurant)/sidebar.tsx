@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "@/lib/platform";
 import { usePathname, useRouter } from "next/navigation";
 import { NAV_GROUPS, canAccess, type Role } from "./nav-config";
+import { ClockOutDialog } from "@/components/clock-out-dialog";
 
 /**
  * Matches the prototype's #sidebar 1:1: a "RP" brand mark + restaurant name/"Ops Console"
@@ -34,6 +35,7 @@ export function Sidebar({
   const pathname = usePathname();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
+  const [clockOutOpen, setClockOutOpen] = useState(false);
 
   async function logout() {
     setLoggingOut(true);
@@ -110,13 +112,14 @@ export function Sidebar({
           </div>
         )}
         <button
-          onClick={logout}
+          onClick={() => setClockOutOpen(true)}
           disabled={loggingOut}
           className="w-full text-center text-xs font-semibold text-ink-faint hover:text-crimson-400 border border-line rounded-lg py-2.5 transition-colors disabled:opacity-50"
         >
           {loggingOut ? "Signing out…" : "Clock out & switch user"}
         </button>
       </div>
+      <ClockOutDialog open={clockOutOpen} onClose={() => setClockOutOpen(false)} onConfirmed={logout} />
     </aside>
   );
 }
