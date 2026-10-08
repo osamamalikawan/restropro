@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "@/lib/posData";
 import { ReorderableList } from "@/components/ui/reorderable-list";
@@ -29,8 +29,14 @@ export function MenuClient() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null);
-  const [newCatName, setNewCatName] = useState("");
-  const [newCatNameUr, setNewCatNameUr] = useState("");
+  // Add / edit category popup
+  const [catModalOpen, setCatModalOpen] = useState(false);
+  const [editingCatId, setEditingCatId] = useState<string | null>(null);
+  const [cName, setCName] = useState("");
+  const [cNameUr, setCNameUr] = useState("");
+  const [cColor, setCColor] = useState<string | null>(null); // null = theme colour
+  const [catSaving, setCatSaving] = useState(false);
+  const [catModalError, setCatModalError] = useState("");
   const [catError, setCatError] = useState("");
   const [filterCat, setFilterCat] = useState<string>("all"); // "all" | category id | "none"
 
@@ -58,21 +64,48 @@ export function MenuClient() {
     loadAll();
   }, []);
 
-  async function addCategory() {
-    if (!newCatName.trim()) return;
-    setCatError("");
+  function openAddCategory() {
+    setEditingCatId(null);
+    setCName("");
+    setCNameUr("");
+    setCColor(null);
+    setCatModalError("");
+    setCatModalOpen(true);
+  }
+  function openEditCategory(c: Category) {
+    setEditingCatId(c.id);
+    setCName(c.name);
+    setCNameUr(c.name_ur ?? "");
+    setCColor(c.color ?? null);
+    setCatModalError("");
+    setCatModalOpen(true);
+  }
+  /** Save from the popup: a new category (added at the end) or the edited one. */
+  async function saveCategory() {
+    if (!cName.trim()) {
+      setCatModalError("Enter the category name");
+      return;
+    }
+    setCatSaving(true);
+    setCatModalError("");
+    const existing = editingCatId ? categories.find((c) => c.id === editingCatId) : null;
+    const row = existing
+      ? { id: existing.id, name: cName.trim(), name_ur: cNameUr.trim() || null, color: cColor, sort_order: existing.sort_order, is_active: existing.is_active }
+      : { name: cName.trim(), name_ur: cNameUr.trim() || null, color: cColor, sort_order: categories.length };
     const res = await fetch("/api/menu-categories", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "insert", row: { name: newCatName.trim(), name_ur: newCatNameUr.trim() || null, sort_order: categories.length } }),
+      body: JSON.stringify({ op: existing ? "update" : "insert", row }),
     });
+    setCatSaving(false);
     if (!res.ok) {
-      setCatError((await res.json()).error);
+      setCatModalError((await res.json().catch(() => ({}))).error ?? "Could not save the category");
       return;
     }
-    setNewCatName("");
-    setNewCatNameUr("");
-    loadAll();
+    setCatModalOpen(false);
+    setCatError("");
+    await loadAll();
+    if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
   }
   /** Drag / arrows in "Menu categories": save the new order. POS shows its category tabs in this order. */
   async function reorderCategories(next: Category[]) {
@@ -90,48 +123,6 @@ export function MenuClient() {
       return;
     }
     if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
-  }
-
-  /** Urdu name under each category. Empty = no Urdu name (the POS keeps the English one). Saved shortly after typing stops. */
-  const nameUrTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  function setCategoryNameUr(c: Category, value: string) {
-    setCategories((prev) => prev.map((x) => (x.id === c.id ? { ...x, name_ur: value } : x)));
-    clearTimeout(nameUrTimers.current[c.id]);
-    nameUrTimers.current[c.id] = setTimeout(async () => {
-      const res = await fetch("/api/menu-categories", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ op: "update", row: { id: c.id, name: c.name, sort_order: c.sort_order, is_active: c.is_active, name_ur: value.trim() || null } }),
-      });
-      if (!res.ok) {
-        setCatError((await res.json().catch(() => ({}))).error ?? "Could not save the Urdu name");
-        loadAll();
-        return;
-      }
-      setCatError("");
-      if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
-    }, 600);
-  }
-
-  /** Colour picker next to each category. null = back to the theme colour. Saved shortly after the last change. */
-  const colorTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  function setCategoryColor(c: Category, color: string | null) {
-    setCategories((prev) => prev.map((x) => (x.id === c.id ? { ...x, color } : x)));
-    clearTimeout(colorTimers.current[c.id]);
-    colorTimers.current[c.id] = setTimeout(async () => {
-      const res = await fetch("/api/menu-categories", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ op: "update", row: { id: c.id, name: c.name, sort_order: c.sort_order, is_active: c.is_active, color } }),
-      });
-      if (!res.ok) {
-        setCatError((await res.json().catch(() => ({}))).error ?? "Could not save the colour");
-        loadAll();
-        return;
-      }
-      setCatError("");
-      if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
-    }, 500);
   }
 
   async function removeCategory(id: string) {
@@ -229,10 +220,14 @@ export function MenuClient() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink-strong p-6 md:p-8">
-      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-5 items-start">
         <Panel loading={loading} loadingLabel="Loading menu…">
-          <PanelHead title="Menu categories" subtitle="Drag to set the order shown in POS. Add an Urdu name (shown when Urdu is on in Settings). Pick a colour to tint that category in POS (no colour = theme colour)" />
-          <div className="px-5 py-3 space-y-1">
+          <PanelHead title="Menu categories" subtitle="Drag to set the order shown in POS. Tap ✎ to edit the name, Urdu name and colour.">
+            <button onClick={openAddCategory} className={addBtnCls}>
+              + Add category
+            </button>
+          </PanelHead>
+          <div className="px-5 py-4 space-y-1">
             {catError && <p className="mb-2 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{catError}</p>}
             <ReorderableList
               items={categories}
@@ -241,79 +236,47 @@ export function MenuClient() {
                 const inUse = products.filter((p) => p.category_id === c.id).length;
                 return (
                   <>
-                    <span className="flex min-w-0 items-center gap-2">
+                    <span className="flex min-w-0 flex-1 items-center gap-2.5">
                       <span className="h-3 w-3 shrink-0 rounded-full border border-line" style={{ backgroundColor: c.color || "transparent" }} />
-                      <span className="min-w-0">
-                        {c.name} {inUse > 0 && <span className="text-xs text-ink-mid">({inUse} items)</span>}
-                        <input
-                          dir="rtl"
-                          lang="ur"
-                          draggable={false}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          value={c.name_ur ?? ""}
-                          onChange={(e) => setCategoryNameUr(c, e.target.value)}
-                          placeholder="اردو نام"
-                          title="Urdu name (shown in POS when Urdu is on in Settings)"
-                          className="mt-1 block w-full rounded-md border border-line bg-raised px-2 py-1 text-sm leading-relaxed text-ink-strong placeholder:text-ink-faint focus:border-chili-500 focus:outline-none"
-                        />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline justify-between gap-2">
+                          <span className="truncate font-medium text-ink-strong">{c.name}</span>
+                          {c.name_ur && (
+                            <span dir="rtl" lang="ur" className="shrink-0 text-base leading-snug text-ink-mid">
+                              {c.name_ur}
+                            </span>
+                          )}
+                        </span>
+                        <span className="block text-[11px] text-ink-faint">
+                          {inUse} item{inUse === 1 ? "" : "s"}
+                        </span>
                       </span>
                     </span>
-                    <span className="flex items-center gap-1.5" draggable={false} onMouseDown={(e) => e.stopPropagation()}>
-                      <label
-                        title="Pick a colour for this category (shown in the POS)"
-                        className="relative h-6 w-6 cursor-pointer overflow-hidden rounded-md border border-line"
-                        style={{ backgroundColor: c.color || undefined }}
+                    <span className="flex shrink-0 items-center gap-0.5" draggable={false} onMouseDown={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        draggable={false}
+                        onClick={() => openEditCategory(c)}
+                        className="grid h-7 w-7 place-items-center rounded-md text-ink-faint hover:bg-hover hover:text-ink-strong"
+                        title="Edit category"
                       >
-                        <input
-                          type="color"
-                          value={c.color || CATEGORY_SWATCHES[0]}
-                          onChange={(e) => setCategoryColor(c, e.target.value)}
-                          className="absolute -inset-2 h-10 w-10 cursor-pointer opacity-0"
-                        />
-                        {!c.color && <span className="pointer-events-none absolute inset-0 grid place-items-center text-[10px] text-ink-faint">🎨</span>}
-                      </label>
-                      {c.color && (
-                        <button type="button" onClick={() => setCategoryColor(c, null)} className="text-[11px] text-ink-faint hover:text-ink-strong" title="Use the theme colour">
-                          ↺
-                        </button>
-                      )}
-                    <button
-                      type="button"
-                      draggable={false}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={() => removeCategory(c.id)}
-                      className="p-1 text-ink-faint hover:text-crimson-400"
-                      title="Remove category"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        draggable={false}
+                        onClick={() => removeCategory(c.id)}
+                        className="grid h-7 w-7 place-items-center rounded-md text-ink-faint hover:bg-hover hover:text-crimson-400"
+                        title="Remove category"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
                     </span>
                   </>
                 );
               }}
             />
-            {categories.length === 0 && <p className="text-xs text-ink-faint py-2">No categories yet — add one below.</p>}
-          </div>
-          <div className="flex gap-2 px-5 pb-4">
-            <input
-              value={newCatName}
-              onChange={(e) => setNewCatName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addCategory()}
-              placeholder="e.g. Combos"
-              className={`${inputCls} flex-1 min-w-0`}
-            />
-            <input
-              dir="rtl"
-              lang="ur"
-              value={newCatNameUr}
-              onChange={(e) => setNewCatNameUr(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addCategory()}
-              placeholder="اردو نام"
-              className={`${inputCls} w-28 shrink-0`}
-            />
-            <button onClick={addCategory} className={btnPrimary}>
-              Add
-            </button>
+            {categories.length === 0 && <p className="text-xs text-ink-faint py-2">No categories yet — tap “+ Add category”.</p>}
           </div>
         </Panel>
 
@@ -377,6 +340,85 @@ export function MenuClient() {
           </div>
         </Panel>
       </div>
+
+      <Modal
+        open={catModalOpen}
+        onClose={() => setCatModalOpen(false)}
+        busy={catSaving}
+        title={editingCatId ? "Edit category" : "Add category"}
+        width="max-w-sm"
+        footer={
+          <>
+            <button onClick={() => setCatModalOpen(false)} className={btnGhost}>
+              Cancel
+            </button>
+            <button onClick={saveCategory} disabled={catSaving} className={btnPrimary}>
+              {catSaving ? "Saving…" : "Save"}
+            </button>
+          </>
+        }
+      >
+        {catModalError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{catModalError}</p>}
+        <Field label="Category name (English)">
+          <input
+            value={cName}
+            onChange={(e) => setCName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && saveCategory()}
+            className={inputCls}
+            placeholder="e.g. Combos"
+            autoFocus
+          />
+        </Field>
+        <Field label="Category name (Urdu)">
+          <input
+            value={cNameUr}
+            onChange={(e) => setCNameUr(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && saveCategory()}
+            dir="rtl"
+            lang="ur"
+            className={`${inputCls} text-lg leading-relaxed`}
+            placeholder="مثلاً کومبوز"
+          />
+          <p className="mt-1 text-[11px] text-ink-faint">Shown on the POS category tabs when “Show item & category names in Urdu” is on in Settings.</p>
+        </Field>
+        <div>
+          <span className="mb-1.5 block text-xs font-medium text-ink-mid">Colour in POS</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {CATEGORY_SWATCHES.map((col) => (
+              <button
+                key={col}
+                type="button"
+                onClick={() => setCColor(col)}
+                aria-label={`Use ${col}`}
+                className={`h-7 w-7 rounded-full border-2 transition ${cColor?.toLowerCase() === col.toLowerCase() ? "border-ink-strong scale-110" : "border-transparent hover:scale-105"}`}
+                style={{ backgroundColor: col }}
+              />
+            ))}
+            <label title="Pick any colour" className="relative grid h-7 w-7 cursor-pointer place-items-center overflow-hidden rounded-full border border-line bg-raised text-xs text-ink-mid">
+              🎨
+              <input
+                type="color"
+                value={cColor || CATEGORY_SWATCHES[0]}
+                onChange={(e) => setCColor(e.target.value)}
+                className="absolute -inset-2 h-10 w-10 cursor-pointer opacity-0"
+              />
+            </label>
+          </div>
+          <div className="mt-2 flex items-center gap-2 text-[11px] text-ink-faint">
+            <span className="h-3 w-3 rounded-full border border-line" style={{ backgroundColor: cColor || "transparent" }} />
+            {cColor ? (
+              <>
+                <span className="font-mono">{cColor}</span>
+                <button type="button" onClick={() => setCColor(null)} className="text-chili-500 hover:underline">
+                  Use theme colour
+                </button>
+              </>
+            ) : (
+              <span>Theme colour (no tint)</span>
+            )}
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={modalOpen}
