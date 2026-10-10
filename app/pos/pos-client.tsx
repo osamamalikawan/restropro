@@ -188,6 +188,11 @@ export function PosClient({
   const [held, setHeld] = useState<HeldTicket[]>([]);
   const [heldLoaded, setHeldLoaded] = useState(false);
   const [isResumed, setIsResumed] = useState(false);
+  // Editing a saved order (opened from Ticket Rail -> Edit, /pos?edit=<saleId>): the order's own data is loaded into
+  // the cart and "Save changes" updates that order instead of creating a new one.
+  const [editSale, setEditSale] = useState<{ id: string; label: string } | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const urlHandled = useRef(false);
   const [brokenImgs, setBrokenImgs] = useState<Record<string, true>>({});
 
   useEffect(() => {
@@ -484,6 +489,112 @@ export function PosClient({
   function heldTotal(t: HeldTicket) {
     const sub = t.cart.reduce((s, l) => s + l.price * l.qty, 0);
     return sub + (t.orderType === "delivery" ? t.deliveryCharge : 0); // before tax — tax depends on how it gets paid
+  }
+
+  /** /pos?resume=<held id> (Ticket Rail -> "Add items / Charge") and /pos?edit=<sale id> (Ticket Rail -> Edit). */
+  useEffect(() => {
+    if (urlHandled.current || !heldLoaded) return;
+    urlHandled.current = true;
+    const sp = new URLSearchParams(window.location.search);
+    const resume = sp.get("resume");
+    const edit = sp.get("edit");
+    if (!resume && !edit) return;
+    window.history.replaceState(null, "", window.location.pathname); // a refresh must not load it twice
+    if (resume) {
+      const t = held.find((x) => x.id === resume);
+      if (t) resumeHeld(t);
+      else setError("That held ticket is no longer on this device.");
+    } else if (edit) {
+      loadSaleForEdit(edit);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heldLoaded]);
+
+  async function loadSaleForEdit(id: string) {
+    setEditLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/sales?id=${encodeURIComponent(id)}`);
+      const d = await res.json().catch(() => ({}));
+      const sale = d.sales?.[0];
+      if (!res.ok || !sale) {
+        setError(d.error || "Couldn't load that order for editing.");
+        return;
+      }
+      if (sale.status === "cancelled") {
+        setError("A cancelled order can't be edited.");
+        return;
+      }
+      const notes = (Array.isArray(sale.item_notes) ? sale.item_notes : []) as { productId: string; note: string }[];
+      setCart(
+        (sale.sale_items ?? []).map((i: { product_id: string; name: string; unit_price: number; quantity: number }) => ({
+          productId: i.product_id,
+          name: i.name,
+          price: Number(i.unit_price),
+          qty: Number(i.quantity),
+          note: notes.find((n) => n.productId === i.product_id)?.note || undefined,
+        }))
+      );
+      setOrderType(sale.order_type);
+      setTableId(sale.table_id ?? "");
+      setAreaId(sale.area_id ?? "");
+      setDeliveryCharge(Number(sale.delivery_charge) || 0);
+      setOrderNote(sale.order_note ?? "");
+      setDiscountMode("amount");
+      setDiscountInput(Number(sale.discount_amount) > 0 ? String(Number(sale.discount_amount)) : "");
+      setEditSale({ id: sale.id, label: String(sale.display_id ?? sale.order_no) });
+      setIsResumed(false);
+      setLastReceipt(null);
+      setSheetOpen(true); // on a phone the order panel is a sheet: show it
+    } catch {
+      setError("Couldn't reach the server to load that order.");
+    } finally {
+      setEditLoading(false);
+    }
+  }
+
+  function leaveEdit() {
+    window.location.href = "/ticket-rail";
+  }
+
+  async function saveEdit() {
+    if (!editSale) return;
+    if (cart.length === 0) return setError("An order needs at least one item.");
+    if (orderType === "dine_in" && !tableId) return setError("Select a table first");
+    if (orderType === "delivery" && !areaId) return setError("Select a delivery area first");
+    setSubmitting(true);
+    setError("");
+    try {
+      const res = await fetch("/api/sales/edit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          saleId: editSale.id,
+          items: cart.map((l) => ({ productId: l.productId, name: l.name, price: l.price, qty: l.qty })),
+          deliveryCharge: delivery,
+          pos: {
+            orderType,
+            tableId: tableId || null,
+            areaId: areaId || null,
+            serviceCharge,
+            fbrFee: fee,
+            discount,
+            orderNote: orderNote.trim(),
+            itemNotes: cart.filter((l) => l.note).map((l) => ({ productId: l.productId, name: l.name, note: l.note })),
+          },
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(d.error || "Couldn't save the changes.");
+        setSubmitting(false);
+        return;
+      }
+      leaveEdit(); // back to the Ticket Rail, which now shows the updated order
+    } catch {
+      setError("Couldn't reach the server - your changes were not saved.");
+      setSubmitting(false);
+    }
   }
 
   async function completeSale(action: SaveAction) {
@@ -953,6 +1064,40 @@ export function PosClient({
           </SelectField>
         )}
 
+        {orderType === "delivery" && editSale && (
+          <SelectField value={areaId} onChange={(e) => onAreaChange(e.target.value)} className="mb-3">
+            <option value="">Select delivery area…</option>
+            {areas.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} (Rs {fmt(a.delivery_fee)})
+              </option>
+            ))}
+          </SelectField>
+        )}
+
+        {editLoading && <p className="mb-3 rounded-lg border border-line bg-raised px-3 py-2 text-xs text-ink-mid">Loading the order…</p>}
+        {editSale && (
+          <div className="mb-3 space-y-2 rounded-xl border border-chili-500/40 bg-chili-500/10 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-bold text-chili-400">Editing order #{editSale.label}</span>
+              <button onClick={leaveEdit} disabled={submitting} className="text-xs font-semibold text-ink-mid underline hover:text-ink-strong">
+                Discard changes
+              </button>
+            </div>
+            <input value={orderNote} onChange={(e) => setOrderNote(e.target.value)} placeholder="Order note (optional)" className={FIELD} />
+            {settings.showDiscount && (
+              <input
+                inputMode="decimal"
+                value={discountInput}
+                onChange={(e) => setDiscountInput(e.target.value.replace(/[^\d.]/g, ""))}
+                placeholder="Discount (Rs)"
+                className={FIELD}
+              />
+            )}
+            {error && <p className="text-xs text-crimson-400">{error}</p>}
+          </div>
+        )}
+
         <div className="rp-scroll flex-1 min-h-[80px] overflow-y-auto">
           {cart.length === 0 ? (
             <p className="py-4 text-sm text-ink-faint">Tap a product to start an order.</p>
@@ -1013,10 +1158,32 @@ export function PosClient({
             <span className="font-mono text-lg font-bold">Rs {fmt(subtotal + delivery + serviceCharge)}</span>
           </div>
           <p className="text-[11px] text-ink-faint">
-            {orderType === "delivery" ? "Delivery area, tax and customer info are set at checkout." : "Tax and customer info are set at checkout."}
+            {editSale
+              ? "Tax is recalculated when you save the changes."
+              : orderType === "delivery"
+                ? "Delivery area, tax and customer info are set at checkout."
+                : "Tax and customer info are set at checkout."}
           </p>
         </div>
 
+        {editSale ? (
+          <div className="mt-4 flex gap-2">
+            <button
+              onClick={leaveEdit}
+              disabled={submitting}
+              className="rounded-xl border border-line bg-raised hover:bg-hover px-4 py-3 text-sm font-semibold disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={saveEdit}
+              disabled={cart.length === 0 || submitting}
+              className="flex-1 rounded-xl bg-basil-500 hover:bg-basil-600 disabled:opacity-40 text-white font-semibold py-3"
+            >
+              {submitting ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+        ) : (
         <div className="mt-4 flex gap-2">
           <button
             onClick={clearTicket}
@@ -1046,6 +1213,7 @@ export function PosClient({
             Checkout
           </button>
         </div>
+        )}
       </aside>
 
       {/* ================= item note popup ================= */}

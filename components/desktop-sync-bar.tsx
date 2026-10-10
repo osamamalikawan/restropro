@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "@/lib/posData";
 import { useOnline } from "@/lib/desktop/connectivity";
 import { Spinner } from "@/components/ui/loading";
+import { ShellUpdateCheck } from "@/components/shell-update-check";
 
 type SyncStatus = {
   last_sync_at: string | null;
@@ -155,6 +156,9 @@ export function DesktopSyncBar() {
               {busy && <Spinner size={12} />}
               {busy ? "Syncing…" : "Sync now"}
             </button>
+            <div className="mt-3 border-t border-line pt-3 text-ink-mid">
+              <ShellUpdateCheck />
+            </div>
           </div>
         )}
       </div>

@@ -23,6 +23,7 @@ export default function StaffPickerPage() {
   const [selected, setSelected] = useState<Employee | null>(null);
   const [pinLoading, setPinLoading] = useState(false);
   const [pinError, setPinError] = useState('');
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     invoke<{ restaurant_name: string } | null>('get_device_info')
@@ -51,6 +52,18 @@ export default function StaffPickerPage() {
       setPinError(typeof err === 'string' ? err : 'Incorrect PIN — try again');
     } finally {
       setPinLoading(false);
+    }
+  }
+
+  async function switchRestaurant() {
+    if (!confirm('This signs this till out completely. The owner will need to log in again to reactivate it. Continue?')) return;
+    setResetting(true);
+    try {
+      await invoke('deactivate_device');
+      router.push('/login');
+    } catch (err) {
+      setLoadError(typeof err === 'string' ? err : 'Could not reset this device');
+      setResetting(false);
     }
   }
 
@@ -118,6 +131,14 @@ export default function StaffPickerPage() {
           ))}
         </div>
       )}
+
+      <button
+        onClick={switchRestaurant}
+        disabled={resetting}
+        className="relative z-10 text-xs text-ink-faint hover:text-ink-strong underline mt-8 disabled:opacity-50"
+      >
+        {resetting ? 'Resetting…' : 'Restaurant login'}
+      </button>
 
       {selected && (
         <PinModal

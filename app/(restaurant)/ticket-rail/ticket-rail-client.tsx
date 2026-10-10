@@ -2,7 +2,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCheck, ChevronLeft, ChevronRight, Printer, X } from "lucide-react";
-import { EditOrderModal } from "@/components/edit-order-modal";
 import { LoadingOverlay, PageLoader } from "@/components/ui/loading";
 import { printSale, type SaleSnapshot } from "@/lib/posPrint";
 
@@ -41,7 +40,7 @@ type Held = {
   id: string;
   orderType: OrderType;
   tableId: string;
-  cart: { productId: string; name: string; price: number; qty: number }[];
+  cart: { productId: string; name: string; price: number; qty: number; note?: string }[];
   heldAt: number;
   kitchenAt?: number; // when it was last moved between columns
   kitchenStatus?: Kitchen;
@@ -78,12 +77,10 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
   const [tables, setTables] = useState<{ id: string; number: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [taxRate, setTaxRate] = useState(0.05);
   const [paper, setPaper] = useState("80");
   // receipt details for printing an invoice from here (same source the POS uses)
   const [receipt, setReceipt] = useState({ name: "", address: "", phone: "", header: "", footer: "", template: "classic", fbr: null as SaleSnapshot["fbr"] });
   const [areaNames, setAreaNames] = useState<Record<string, string>>({});
-  const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [blink, setBlink] = useState<Record<string, true>>({});
@@ -141,7 +138,6 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
     fetch("/api/settings")
       .then((r) => r.json())
       .then((d) => {
-        if (d.settings?.tax_rate != null) setTaxRate(Number(d.settings.tax_rate) / 100);
         if (d.settings?.paper_width) setPaper(String(d.settings.paper_width));
         const st = d.settings ?? {};
         setReceipt({
@@ -298,6 +294,41 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
       await printSale(invoice ? "invoice" : "kitchen", snap, s.display_id ?? s.order_no);
     } catch (e) {
       setError(`${invoice ? "Invoice" : "Kitchen slip"} didn't print: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** Held ticket in Active -> kitchen slip, so the kitchen can start while the guest keeps ordering. A held ticket
+   *  has no order number yet, so the slip is headed with its table / order type instead. */
+  async function printHeld(t: Held) {
+    setError("");
+    const label = heldTitle(t);
+    const snap: SaleSnapshot = {
+      restaurantName: "",
+      address: "",
+      phone: "",
+      header: "",
+      footer: "",
+      paper,
+      cashier: "",
+      orderTypeLabel: t.orderType === "dine_in" ? `Dine in - ${label}` : TYPE_LABEL[t.orderType],
+      customerName: "",
+      customerPhone: "",
+      items: t.cart.map((i) => ({ name: i.name, qty: i.qty, price: i.price, note: i.note })),
+      orderNote: "",
+      subtotal: t.cart.reduce((sum, i) => sum + i.price * i.qty, 0),
+      delivery: 0,
+      taxLabel: "Tax",
+      tax: 0,
+      fee: 0,
+      total: 0,
+      payments: [],
+      template: receipt.template,
+      fbr: null,
+    };
+    try {
+      await printSale("kitchen", snap, "HELD", label);
+    } catch (e) {
+      setError(`Kitchen slip didn't print: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -464,17 +495,29 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
 
                         <div className="mt-3 flex gap-2">
                           {t ? (
-                            <button
-                              onClick={() => router.push(`/pos?resume=${encodeURIComponent(t.id)}`)}
-                              className="h-10 flex-1 rounded-lg border border-line bg-canvas text-sm font-bold hover:border-chili-500"
-                            >
-                              Add items / Charge
-                            </button>
+                            <>
+                              <button
+                                onClick={() => router.push(`/pos?resume=${encodeURIComponent(t.id)}`)}
+                                className="h-10 flex-1 rounded-lg border border-line bg-canvas text-sm font-bold hover:border-chili-500"
+                              >
+                                Add items / Charge
+                              </button>
+                              {col.key === "New" && (
+                                <button
+                                  onClick={() => printHeld(t)}
+                                  className={iconBtn}
+                                  title="Kitchen print"
+                                  aria-label="Kitchen print"
+                                >
+                                  <Printer size={15} />
+                                </button>
+                              )}
+                            </>
                           ) : (
                             <>
                               {canCancel && (
                                 <button
-                                  onClick={() => setEditingSale(s!)}
+                                  onClick={() => router.push(`/pos?edit=${encodeURIComponent(s!.id)}`)}
                                   disabled={busyId === s!.id}
                                   className="h-10 flex-1 rounded-lg border border-line bg-canvas text-sm font-bold hover:border-chili-500 disabled:opacity-40"
                                 >
@@ -514,20 +557,6 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
         </div>
       )}
 
-      {editingSale && (
-        <EditOrderModal
-          saleId={editingSale.id}
-          orderNo={editingSale.order_no}
-          taxRate={taxRate}
-          deliveryCharge={editingSale.delivery_charge || 0}
-          initialItems={editingSale.sale_items}
-          onClose={() => setEditingSale(null)}
-          onSaved={() => {
-            setEditingSale(null);
-            load();
-          }}
-        />
-      )}
     </main>
   );
 }

@@ -299,10 +299,11 @@ function wrap(s: string, width: number): string[] {
   return out.length ? out : [""];
 }
 
-export function buildKitchenSlip(s: SaleSnapshot, orderNo: string | number): number[] {
+/** `label` replaces the "#order no" line (a held ticket has no order number yet: "Table 5", "Takeaway"). */
+export function buildKitchenSlip(s: SaleSnapshot, orderNo: string | number, label?: string): number[] {
   const b = new Buf(colsFor(s.paper), dotsFor(s.paper));
   b.align("center").bold(true).size(true).line("KITCHEN").size(false).bold(false);
-  b.bold(true).size(true).line(`#${orderNo}`).size(false).bold(false);
+  b.bold(true).size(true).line(label || `#${orderNo}`).size(false).bold(false);
   b.line(s.orderTypeLabel).line(new Date().toLocaleString());
   b.align("left").rule();
   for (const it of s.items) {
@@ -404,9 +405,9 @@ export function buildInvoice(s: SaleSnapshot, orderNo: string | number): number[
 }
 
 /** Sends the slip/invoice to the matching printer role. Throws a readable Error when it can't. */
-export async function printSale(action: Exclude<SaveAction, "save">, s: SaleSnapshot, orderNo: string | number) {
+export async function printSale(action: Exclude<SaveAction, "save">, s: SaleSnapshot, orderNo: string | number, label?: string) {
   if (!hasTauri()) throw new Error("printing works in the desktop app only");
   if (hasUrdu(JSON.stringify(s))) await ensureUrduFont(); // canvas needs the font loaded before it draws
-  if (action === "kitchen") await printToRole("kitchen", buildKitchenSlip(s, orderNo));
+  if (action === "kitchen") await printToRole("kitchen", buildKitchenSlip(s, orderNo, label));
   else await printToRole("receipt", buildInvoice(s, orderNo));
 }

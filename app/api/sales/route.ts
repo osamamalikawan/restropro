@@ -21,6 +21,7 @@ export async function GET(req: Request) {
   const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
   const status = sp.get("status");
   const customerId = sp.get("customerId");
+  const saleId = sp.get("id"); // one order (the POS loads it here to edit it)
   const q = (sp.get("q") ?? "").replace(/[,()%*\\]/g, " ").trim();
 
   const admin = createAdminClient();
@@ -33,6 +34,10 @@ export async function GET(req: Request) {
 
   if (status && ["completed", "unpaid", "cancelled"].includes(status)) query = query.eq("status", status);
   if (customerId) query = query.eq("customer_id", customerId);
+  if (saleId) {
+    if (!/^[0-9a-f-]{32,36}$/i.test(saleId)) return NextResponse.json({ sales: [], hasMore: false });
+    query = query.eq("id", saleId);
+  }
 
   if (q) {
     const { data: cust } = await admin
