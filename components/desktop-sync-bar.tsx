@@ -1,10 +1,12 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@/lib/posData";
 import { useOnline } from "@/lib/desktop/connectivity";
 import { Spinner } from "@/components/ui/loading";
 import { ShellUpdateCheck } from "@/components/shell-update-check";
+import { WEB_BUILD, WEB_VERSION } from "@/lib/app-version";
 
 type SyncStatus = {
   last_sync_at: string | null;
@@ -36,6 +38,7 @@ export function DesktopSyncBar() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [open, setOpen] = useState(false);
+  const [desktopVersion, setDesktopVersion] = useState<string | null>(null); // the installed Tauri shell
   const { online, recheck } = useOnline();
   const box = useRef<HTMLDivElement>(null);
 
@@ -49,6 +52,10 @@ export function DesktopSyncBar() {
     const t = setInterval(refresh, 30_000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  useEffect(() => {
+    if (isTauri()) getVersion().then(setDesktopVersion).catch(() => setDesktopVersion("unknown"));
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -157,6 +164,19 @@ export function DesktopSyncBar() {
               {busy ? "Syncing…" : "Sync now"}
             </button>
             <div className="mt-3 border-t border-line pt-3 text-ink-mid">
+              <dl className="mb-2.5 space-y-1.5 text-xs">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-ink-faint">Desktop version</dt>
+                  <dd className="font-mono text-ink-strong">{desktopVersion ? (desktopVersion === "unknown" ? "unknown" : `v${desktopVersion}`) : "…"}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-ink-faint">Web version</dt>
+                  <dd className="font-mono text-ink-strong">
+                    {WEB_VERSION === "unknown" ? "unknown" : `v${WEB_VERSION}`}
+                    {WEB_BUILD && <span className="text-ink-faint"> ({WEB_BUILD})</span>}
+                  </dd>
+                </div>
+              </dl>
               <ShellUpdateCheck />
             </div>
           </div>

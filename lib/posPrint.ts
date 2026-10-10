@@ -411,3 +411,59 @@ export async function printSale(action: Exclude<SaveAction, "save">, s: SaleSnap
   if (action === "kitchen") await printToRole("kitchen", buildKitchenSlip(s, orderNo, label));
   else await printToRole("receipt", buildInvoice(s, orderNo));
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Clock-out slip: the same figures as the "Clock out" popup, on the receipt printer.
+
+export type ShiftSlip = {
+  restaurantName: string;
+  paper: string;
+  employeeName: string;
+  clockInAt: string; // ISO
+  clockOutAt: string; // ISO
+  durationText: string; // "8h 05m"
+  orders: number;
+  salesAmount: number;
+  cash: number;
+  otherTotal: number;
+  other: { method: string; amount: number }[];
+  unpaid: number;
+  expenses: number;
+};
+
+const slipMoney = (n: number) => `Rs ${Number(n || 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+const slipTime = (iso: string) => new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+
+export function buildShiftSlip(s: ShiftSlip): number[] {
+  const b = new Buf(colsFor(s.paper), dotsFor(s.paper));
+  b.align("center");
+  if (s.restaurantName) {
+    b.bold(true);
+    for (const l of wrap(s.restaurantName, b.cols)) b.line(l);
+    b.bold(false);
+  }
+  b.bold(true).size(true).line("CLOCK OUT").size(false).bold(false);
+  b.line(s.employeeName || "");
+  b.align("left").rule();
+  b.row("Clock in", slipTime(s.clockInAt));
+  b.row("Clock out", slipTime(s.clockOutAt));
+  b.bold(true).row("Duration", s.durationText).bold(false);
+  b.rule();
+  b.row("Total sales", `${s.orders} order${s.orders === 1 ? "" : "s"}`);
+  b.bold(true).row("Total sale amount", slipMoney(s.salesAmount)).bold(false);
+  b.row("Cash", slipMoney(s.cash));
+  b.row("Other accounts", slipMoney(s.otherTotal));
+  for (const o of s.other) b.row(`  ${o.method}`, slipMoney(o.amount));
+  if (s.unpaid > 0) b.row("Still unpaid", slipMoney(s.unpaid));
+  b.row("Expenses", slipMoney(s.expenses));
+  b.rule();
+  b.align("center").line(`Printed ${new Date().toLocaleString()}`);
+  b.align("left").line().line("Signature: ______________________");
+  return b.cut().bytes;
+}
+
+/** Prints the clock-out summary on the receipt printer. Throws a readable Error when it can't. */
+export async function printShiftSlip(s: ShiftSlip) {
+  if (!hasTauri()) throw new Error("printing works in the desktop app only");
+  await printToRole("receipt", buildShiftSlip(s));
+}

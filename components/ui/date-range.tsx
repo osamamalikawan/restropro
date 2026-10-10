@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import { inputCls } from "@/components/ui/modal";
 
 /** Local date/time as the strings the browser inputs use ("2026-10-06" / "2026-10-06T14:30"). */
@@ -8,24 +9,58 @@ const dtStr = (d: Date) => `${dStr(d)}T${p2(d.getHours())}:${p2(d.getMinutes())}
 
 /** A "from - to" filter with quick presets. With `withTime` the boxes take a date AND a time
  *  (Accounts); without it, just dates (Expenses). Values are local-time strings; use
- *  rangeToQuery() to turn them into what the API expects. */
+ *  rangeToQuery() to turn them into what the API expects.
+ *  With `shiftPreset` (Accounts) the "Today" chip becomes "Current shift": the time since the shift in progress
+ *  started, or - when nobody is clocked in - the shift that ended last. */
 export function DateRange({
   from,
   to,
   onChange,
   withTime = false,
+  shiftPreset = false,
 }: {
   from: string;
   to: string;
   onChange: (from: string, to: string) => void;
   withTime?: boolean;
+  shiftPreset?: boolean;
 }) {
+  const [note, setNote] = useState(""); // which shift "Current shift" picked, shown under the boxes
+  const [loadingShift, setLoadingShift] = useState(false);
   const type = withTime ? "datetime-local" : "date";
   const fmt = withTime ? dtStr : dStr;
   const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0);
   const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59);
 
+  async function currentShift() {
+    setLoadingShift(true);
+    setNote("");
+    let w: { kind: string; from: string | null; to: string | null } | null = null;
+    try {
+      const r = await fetch("/api/shifts/current");
+      if (r.ok) w = await r.json();
+    } catch {
+      /* fall back to the calendar day below */
+    }
+    setLoadingShift(false);
+    if (w?.from && (w.kind === "current" || w.kind === "previous")) {
+      const nice = (iso: string) => new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+      if (w.kind === "current") {
+        onChange(fmt(new Date(w.from)), ""); // still running: no end, so entries made from now on show up too
+        setNote(`Current shift - since ${nice(w.from)}`);
+      } else {
+        onChange(fmt(new Date(w.from)), fmt(new Date(w.to!)));
+        setNote(`No shift is running - showing the previous shift (${nice(w.from)} to ${nice(w.to!)})`);
+      }
+      return;
+    }
+    const now = new Date();
+    onChange(fmt(startOfDay(now)), fmt(endOfDay(now)));
+    setNote("No shift records yet - showing today (midnight to midnight)");
+  }
+
   function preset(kind: "today" | "yesterday" | "7d" | "month") {
+    setNote("");
     const now = new Date();
     if (kind === "today") onChange(fmt(startOfDay(now)), fmt(endOfDay(now)));
     else if (kind === "yesterday") {
@@ -46,24 +81,31 @@ export function DateRange({
       <div className="flex flex-wrap items-end gap-3">
         <label className="block">
           <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">From</span>
-          <input type={type} value={from} max={to || undefined} onChange={(e) => onChange(e.target.value, to)} className={`${inputCls} w-auto`} />
+          <input type={type} value={from} max={to || undefined} onChange={(e) => { setNote(""); onChange(e.target.value, to); }} className={`${inputCls} w-auto`} />
         </label>
         <label className="block">
           <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">To</span>
-          <input type={type} value={to} min={from || undefined} onChange={(e) => onChange(from, e.target.value)} className={`${inputCls} w-auto`} />
+          <input type={type} value={to} min={from || undefined} onChange={(e) => { setNote(""); onChange(from, e.target.value); }} className={`${inputCls} w-auto`} />
         </label>
         <div className="flex flex-wrap items-center gap-1.5 pb-1.5">
-          <button type="button" className={chip} onClick={() => preset("today")}>Today</button>
+          {shiftPreset ? (
+            <button type="button" className={chip} onClick={currentShift} disabled={loadingShift}>
+              {loadingShift ? "Finding shift…" : "Current shift"}
+            </button>
+          ) : (
+            <button type="button" className={chip} onClick={() => preset("today")}>Today</button>
+          )}
           <button type="button" className={chip} onClick={() => preset("yesterday")}>Yesterday</button>
           <button type="button" className={chip} onClick={() => preset("7d")}>Last 7 days</button>
           <button type="button" className={chip} onClick={() => preset("month")}>This month</button>
           {(from || to) && (
-            <button type="button" className="px-2 text-[11px] font-semibold text-ink-mid underline hover:text-ink-strong" onClick={() => onChange("", "")}>
+            <button type="button" className="px-2 text-[11px] font-semibold text-ink-mid underline hover:text-ink-strong" onClick={() => { setNote(""); onChange("", ""); }}>
               Clear
             </button>
           )}
         </div>
       </div>
+      {note && <p className="mt-2 text-xs text-ink-mid">{note}</p>}
       {bad && <p className="mt-2 text-xs text-crimson-400">&quot;From&quot; is after &quot;To&quot;, so nothing can match.</p>}
     </div>
   );

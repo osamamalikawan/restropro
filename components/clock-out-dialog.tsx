@@ -5,6 +5,7 @@ import { Spinner } from "@/components/ui/loading";
 import { fmtMoney, fmtDateTime } from "@/lib/format";
 import { isTauri } from "@/lib/platform";
 import { forgetClockIn, getClockInHint } from "@/lib/clock-in-hint";
+import { printShiftSlip } from "@/lib/posPrint";
 
 export type ShiftReport = {
   employeeName: string | null;
@@ -49,6 +50,8 @@ export function ClockOutDialog({ open, onClose, onConfirmed }: { open: boolean; 
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const [printMsg, setPrintMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const hintParam = () => {
     const h = isTauri() ? getClockInHint() : null;
@@ -60,6 +63,7 @@ export function ClockOutDialog({ open, onClose, onConfirmed }: { open: boolean; 
     let alive = true;
     setReport(null);
     setLoadError("");
+    setPrintMsg(null);
     setLoading(true);
     fetch(`/api/staff/shift-summary${hintParam()}`)
       .then(async (r) => {
@@ -73,6 +77,45 @@ export function ClockOutDialog({ open, onClose, onConfirmed }: { open: boolean; 
       alive = false;
     };
   }, [open]);
+
+  /** Same figures as the popup, on the receipt printer (desktop app). */
+  async function printSlip() {
+    if (!report) return;
+    setPrinting(true);
+    setPrintMsg(null);
+    try {
+      let restaurantName = "";
+      let paper = "80";
+      try {
+        const d = await (await fetch("/api/settings")).json();
+        restaurantName = d.restaurant?.name ?? "";
+        if (d.settings?.paper_width) paper = String(d.settings.paper_width);
+      } catch {
+        /* print without the restaurant name rather than not at all */
+      }
+      const s = report.summary;
+      await printShiftSlip({
+        restaurantName,
+        paper,
+        employeeName: report.employeeName ?? "",
+        clockInAt: report.clockInAt,
+        clockOutAt: report.clockOutAt,
+        durationText: fmtDuration(report.durationMinutes),
+        orders: s.orders,
+        salesAmount: s.salesAmount,
+        cash: s.cash,
+        otherTotal: s.otherTotal,
+        other: s.other,
+        unpaid: s.unpaid,
+        expenses: s.expenses,
+      });
+      setPrintMsg({ ok: true, text: "Sent to the receipt printer." });
+    } catch (e) {
+      setPrintMsg({ ok: false, text: `Couldn't print: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setPrinting(false);
+    }
+  }
 
   async function confirm() {
     setBusy(true);
@@ -101,6 +144,11 @@ export function ClockOutDialog({ open, onClose, onConfirmed }: { open: boolean; 
       width="max-w-lg"
       footer={
         <>
+          {report && isTauri() && (
+            <button onClick={printSlip} disabled={busy || printing} className={`${btnGhost} mr-auto`} title="Print this summary on the receipt printer">
+              {printing ? "Printing…" : "Print"}
+            </button>
+          )}
           <button onClick={onClose} disabled={busy} className={btnGhost}>
             Cancel
           </button>
@@ -142,6 +190,7 @@ export function ClockOutDialog({ open, onClose, onConfirmed }: { open: boolean; 
             </div>
           </div>
           {report.warning && <p className="text-[11px] text-turmeric-400">{report.warning}</p>}
+          {printMsg && <p className={`text-xs ${printMsg.ok ? "text-basil-400" : "text-crimson-400"}`}>{printMsg.text}</p>}
         </>
       )}
       <p className="text-xs text-ink-faint">Confirming clocks you out and returns to the sign-in screen.</p>
