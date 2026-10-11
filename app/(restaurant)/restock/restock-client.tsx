@@ -18,6 +18,7 @@ type Purchase = {
   purchased_at: string;
   inventory_items?: { name: string; unit: string } | null;
   suppliers?: { name: string } | null;
+  logged_by_name?: string | null; // who logged the purchase (migration 0026)
 };
 type Production = {
   id: string;
@@ -116,7 +117,7 @@ export function RestockClient() {
       qty: p.quantity,
       cost: p.unit_cost,
       total: p.total_cost,
-      by: null as string | null,
+      by: p.logged_by_name ?? null,
     }));
     const b = productions.map((p) => ({
       id: `pr-${p.id}`,

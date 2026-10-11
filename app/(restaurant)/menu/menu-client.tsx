@@ -493,17 +493,6 @@ export function MenuClient() {
           <span className="text-sm font-medium text-ink-strong">Available in POS</span>
           <Switch checked={fAvailable} onChange={setFAvailable} />
         </label>
-        {editingId && (
-          <button
-            onClick={() => {
-              const p = products.find((x) => x.id === editingId);
-              if (p) setRecipeProduct(p);
-            }}
-            className="text-xs font-medium text-chili-500 hover:underline"
-          >
-            Edit recipe & cost →
-          </button>
-        )}
       </Modal>
 
       {galleryOpen && (

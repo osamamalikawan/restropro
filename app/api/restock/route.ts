@@ -8,12 +8,11 @@ export async function GET(req: Request) {
 
   const limit = Number(new URL(req.url).searchParams.get("limit") ?? 30);
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("stock_purchases")
-    .select("id, inventory_item_id, quantity, unit_cost, total_cost, purchased_at, inventory_items(name, unit), suppliers(name)")
-    .eq("restaurant_id", session.restaurantId)
-    .order("purchased_at", { ascending: false })
-    .limit(limit);
+  const list = (cols: string) =>
+    admin.from("stock_purchases").select(cols).eq("restaurant_id", session.restaurantId).order("purchased_at", { ascending: false }).limit(limit);
+  const base = "id, inventory_item_id, quantity, unit_cost, total_cost, purchased_at, inventory_items(name, unit), suppliers(name)";
+  let { data, error } = await list(`${base}, logged_by_name`);
+  if (error && /logged_by_name/.test(error.message)) ({ data, error } = await list(base)); // migration 0026 not run yet
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ purchases: data });
 }
@@ -47,5 +46,24 @@ export async function POST(req: Request) {
     p_unit_cost: unitCost,
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // log_restock() does not know who called it: stamp the purchase it just created with the logged-in person's name
+  // (the newest matching purchase that has no name yet). Never blocks the restock itself.
+  try {
+    const { data: me } = await admin.from("employees").select("name").eq("id", session.employeeId).maybeSingle();
+    const { data: row } = await admin
+      .from("stock_purchases")
+      .select("id")
+      .eq("restaurant_id", session.restaurantId)
+      .eq("inventory_item_id", inventoryItemId)
+      .is("logged_by_name", null)
+      .order("purchased_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (row && me?.name) await admin.from("stock_purchases").update({ logged_by_name: me.name }).eq("id", row.id);
+  } catch {
+    /* column missing (migration 0026) - the purchase itself is saved */
+  }
   return NextResponse.json({ success: true });
 }

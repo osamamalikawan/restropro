@@ -114,7 +114,7 @@ export function DashboardHomeClient({ employeeName, role }: { employeeName: stri
       color: "#B7383F",
       Icon: Clock,
     },
-    { label: "On shift now", value: String(summary.activeEmployees), delta: "staff active", color: "#E86B3E", Icon: Users },
+    { label: "On shift now", value: String(summary.activeEmployees), delta: "clocked in", color: "#E86B3E", Icon: Users },
   ];
 
   return (

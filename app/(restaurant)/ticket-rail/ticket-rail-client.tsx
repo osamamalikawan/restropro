@@ -7,6 +7,7 @@ import { printSale, type SaleSnapshot } from "@/lib/posPrint";
 import { isOrderSoundOn, playOrderChime, primeOrderSound, setOrderSoundOn } from "@/lib/order-alert";
 import { Modal, btnGhost, btnPrimary } from "@/components/ui/modal";
 import { fmtMoney } from "@/lib/format";
+import { CancelOrderDialog, stageOf } from "@/components/cancel-order-dialog";
 
 type Kitchen = "New" | "Preparing" | "Completed";
 type OrderType = "dine_in" | "takeaway" | "delivery";
@@ -89,6 +90,9 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
+  // cancel popup (a note is required for a Completed order)
+  const [cancelling, setCancelling] = useState<Sale | null>(null);
+  const [cancelError, setCancelError] = useState("");
   // assign rider popup
   const [riders, setRiders] = useState<{ id: string; name: string; pending_orders: number }[]>([]);
   const [assigning, setAssigning] = useState<Sale | null>(null);
@@ -333,19 +337,26 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
       if (confirm("Discard this held ticket?")) writeHeld(readHeld().filter((t) => t.id !== card.held!.id));
       return;
     }
-    const s = card.sale!;
-    if (!confirm(`Cancel order #${s.order_no}? This restores its inventory and removes it from today's income.`)) return;
+    setCancelError("");
+    setCancelling(card.sale!); // the dialog asks for the reason (required once the order is Completed)
+  }
+
+  async function confirmCancel(note: string) {
+    const s = cancelling;
+    if (!s) return;
     setBusyId(s.id);
+    setCancelError("");
     const res = await fetch("/api/sales/cancel", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ saleId: s.id }),
+      body: JSON.stringify({ saleId: s.id, note }),
     });
     if (!res.ok) {
-      setError((await res.json().catch(() => ({}))).error || "Couldn't cancel the order");
+      setCancelError((await res.json().catch(() => ({}))).error || "Couldn't cancel the order");
       setBusyId(null);
       return;
     }
+    setCancelling(null);
     await load();
     setBusyId(null);
   }
@@ -686,6 +697,16 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
           })}
         </div>
       )}
+
+      <CancelOrderDialog
+        open={!!cancelling}
+        orderLabel={String(cancelling?.display_id ?? cancelling?.order_no ?? "")}
+        stage={stageOf(cancelling?.kitchen_status)}
+        busy={!!cancelling && busyId === cancelling.id}
+        error={cancelError}
+        onClose={() => setCancelling(null)}
+        onConfirm={confirmCancel}
+      />
 
       <Modal
         open={!!assigning}

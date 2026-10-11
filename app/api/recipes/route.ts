@@ -46,18 +46,51 @@ export async function POST(req: Request) {
     productId?: string;
     items?: { inventoryItemId: string; quantity: number }[];
   };
-  if (!productId || !items) return NextResponse.json({ error: "productId and items are required" }, { status: 400 });
+  if (!productId || !Array.isArray(items)) return NextResponse.json({ error: "productId and items are required" }, { status: 400 });
 
   const admin = createAdminClient();
-  const { data: product } = await admin.from("products").select("id").eq("id", productId).eq("restaurant_id", session.restaurantId).single();
+  const { data: product } = await admin
+    .from("products")
+    .select("id, is_deal")
+    .eq("id", productId)
+    .eq("restaurant_id", session.restaurantId)
+    .single();
   if (!product) return NextResponse.json({ error: "Product not found" }, { status: 404 });
-
-  await admin.from("recipe_items").delete().eq("product_id", productId);
-  if (items.length > 0) {
-    const { error } = await admin.from("recipe_items").insert(
-      items.map((i) => ({ product_id: productId, inventory_item_id: i.inventoryItemId, quantity: i.quantity }))
-    );
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (product.is_deal) {
+    // a deal's recipe is built automatically from the products inside it (see app/api/deals/route.ts)
+    return NextResponse.json({ error: "A deal's recipe comes from the products inside the deal - edit those products' recipes instead" }, { status: 400 });
   }
-  return NextResponse.json({ success: true });
+
+  // clean the list: positive quantities, one line per ingredient, and only this restaurant's inventory items
+  const merged = new Map<string, number>();
+  for (const i of items) {
+    const q = Number(i.quantity);
+    if (!i.inventoryItemId || !Number.isFinite(q) || q <= 0) continue;
+    merged.set(i.inventoryItemId, Math.round(q * 1_000_000) / 1_000_000);
+  }
+  if (merged.size > 0) {
+    const { data: owned } = await admin
+      .from("inventory_items")
+      .select("id")
+      .eq("restaurant_id", session.restaurantId)
+      .in("id", [...merged.keys()]);
+    if ((owned ?? []).length !== merged.size) return NextResponse.json({ error: "One of the ingredients no longer exists - reload the page and try again" }, { status: 400 });
+  }
+
+  // Replace the recipe, but never lose the old one: remember it, and put it back if anything fails half way.
+  const { data: old, error: readErr } = await admin.from("recipe_items").select("product_id, inventory_item_id, quantity").eq("product_id", productId);
+  if (readErr) return NextResponse.json({ error: readErr.message }, { status: 500 });
+
+  const del = await admin.from("recipe_items").delete().eq("product_id", productId);
+  if (del.error) return NextResponse.json({ error: `Could not replace the old recipe: ${del.error.message}` }, { status: 500 });
+
+  if (merged.size > 0) {
+    const rows = [...merged].map(([inventory_item_id, quantity]) => ({ product_id: productId, inventory_item_id, quantity }));
+    const ins = await admin.from("recipe_items").insert(rows);
+    if (ins.error) {
+      if (old?.length) await admin.from("recipe_items").insert(old); // restore what was there
+      return NextResponse.json({ error: `Recipe was not saved: ${ins.error.message}` }, { status: 500 });
+    }
+  }
+  return NextResponse.json({ success: true, lines: merged.size });
 }
