@@ -25,3 +25,10 @@ export function fmtDate(iso: string): string {
 export function fmtDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
+
+/** 485 -> "8h 05m", 42 -> "42m" (worked time, attendance and shifts). */
+export function fmtMinutes(mins: number | null | undefined): string {
+  const m = Math.max(0, Math.round(Number(mins) || 0));
+  const h = Math.floor(m / 60);
+  return h > 0 ? `${h}h ${String(m % 60).padStart(2, "0")}m` : `${m}m`;
+}

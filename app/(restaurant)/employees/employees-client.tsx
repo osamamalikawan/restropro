@@ -5,6 +5,7 @@ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/mo
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Avatar, Badge, IconBtn, KpiCard, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
+import { EmployeeAttendancePanel } from "@/components/employee-attendance-panel";
 
 type Employee = {
   id: string;
@@ -18,6 +19,7 @@ type Employee = {
   salary_amount: number | null;
   left_date: string | null;
   is_user: boolean;
+  is_rider?: boolean; // delivery rider: delivery orders can be assigned to them (Ticket Rail -> Assign rider)
 };
 type RoleOption = { id: string; name: string; is_system: boolean };
 type LedgerEntry = { id: string; employee_id: string; type: string; amount: number; note: string | null; txn_date: string };
@@ -52,6 +54,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
   const [fJoiningDate, setFJoiningDate] = useState("");
   const [fSalary, setFSalary] = useState("");
   const [fPin, setFPin] = useState("");
+  const [fRider, setFRider] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -137,6 +140,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
     setFJoiningDate(new Date().toISOString().slice(0, 10));
     setFSalary("");
     setFPin("");
+    setFRider(false);
     setError("");
     setModalOpen(true);
   }
@@ -150,6 +154,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
     setFJoiningDate(e.joining_date ?? "");
     setFSalary(e.salary_amount != null ? String(e.salary_amount) : "");
     setFPin("");
+    setFRider(!!e.is_rider);
     setError("");
     setModalOpen(true);
   }
@@ -179,6 +184,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
           joining_date: fJoiningDate || null,
           salary_amount: fSalary ? Number(fSalary) : null,
           pin: fPin || undefined,
+          is_rider: fRider,
         },
       }),
     });
@@ -246,6 +252,7 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
                 <Badge tone="basil">Active</Badge>
               )}
               <Badge tone={profile.is_user ? "basil" : "steel"}>{profile.is_user ? "User" : "Employee only"}</Badge>
+              {profile.is_rider && <Badge tone="turmeric">Delivery rider</Badge>}
             </div>
           </div>
           {canManage && (
@@ -315,6 +322,8 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
           </TableScroll>
         </Panel>
 
+        <EmployeeAttendancePanel employeeId={profile.id} />
+
         {renderModal()}
       </main>
     );
@@ -359,6 +368,13 @@ export function EmployeesClient({ canManage }: { canManage: boolean }) {
             <input value={fSalary} onChange={(e) => setFSalary(e.target.value)} type="number" min="0" step="0.01" className={inputCls} placeholder="0.00" />
           </Field>
         </div>
+        <label className="flex items-center gap-2.5 rounded-lg border border-line bg-raised px-3 py-2.5 text-sm">
+          <input type="checkbox" checked={fRider} onChange={(e) => setFRider(e.target.checked)} className="h-4 w-4 accent-chili-500" />
+          <span>
+            <span className="font-semibold text-ink-strong">Delivery rider</span>
+            <span className="block text-xs text-ink-faint">Delivery orders can be assigned to this person from the Ticket Rail.</span>
+          </span>
+        </label>
         <Field label="Role">
           <div className="flex gap-2 items-center">
             <select value={fRole} onChange={(e) => setFRole(e.target.value)} className={inputCls}>

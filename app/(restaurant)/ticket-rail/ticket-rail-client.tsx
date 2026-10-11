@@ -1,9 +1,12 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCheck, ChevronLeft, ChevronRight, Printer, X } from "lucide-react";
+import { Bell, BellOff, Bike, CheckCheck, ChevronLeft, ChevronRight, Printer, Wallet, X } from "lucide-react";
 import { LoadingOverlay, PageLoader } from "@/components/ui/loading";
 import { printSale, type SaleSnapshot } from "@/lib/posPrint";
+import { isOrderSoundOn, playOrderChime, primeOrderSound, setOrderSoundOn } from "@/lib/order-alert";
+import { Modal, btnGhost, btnPrimary } from "@/components/ui/modal";
+import { fmtMoney } from "@/lib/format";
 
 type Kitchen = "New" | "Preparing" | "Completed";
 type OrderType = "dine_in" | "takeaway" | "delivery";
@@ -20,6 +23,8 @@ type Sale = {
   delivery_charge: number;
   created_at: string;
   kitchen_status_at?: string | null;
+  rider_employee_id?: string | null; // delivery orders: the rider they are assigned to (migration 0025)
+  rider_settlement_id?: string | null; // set once the rider handed in the money for it
   customers: { name: string; phone?: string | null; address?: string | null } | null;
   area_id?: string | null;
   subtotal?: number;
@@ -83,6 +88,19 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
   const [areaNames, setAreaNames] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [soundOn, setSoundOn] = useState(true);
+  // assign rider popup
+  const [riders, setRiders] = useState<{ id: string; name: string; pending_orders: number }[]>([]);
+  const [assigning, setAssigning] = useState<Sale | null>(null);
+  const [pickRider, setPickRider] = useState("");
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignError, setAssignError] = useState("");
+  // collect payment (split) popup
+  const [collecting, setCollecting] = useState<Sale | null>(null);
+  const [methods, setMethods] = useState<string[]>(["Cash"]);
+  const [split, setSplit] = useState<Record<string, string>>({});
+  const [collectBusy, setCollectBusy] = useState(false);
+  const [collectError, setCollectError] = useState("");
   const [blink, setBlink] = useState<Record<string, true>>({});
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<Kitchen | null>(null);
@@ -111,8 +129,76 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
     const fresh = keys.filter((k) => !seen.current!.has(k));
     fresh.forEach((k) => seen.current!.add(k));
     if (fresh.length === 0) return;
+    if (fresh.some((k) => k.startsWith("sale:")) && isOrderSoundOn()) playOrderChime(); // a new order: chime as well as blink
     setBlink((b) => ({ ...b, ...Object.fromEntries(fresh.map((k) => [k, true as const])) }));
     setTimeout(() => setBlink((b) => Object.fromEntries(Object.entries(b).filter(([k]) => !fresh.includes(k))) as Record<string, true>), BLINK_MS);
+  }
+
+  function loadRiders() {
+    fetch("/api/riders")
+      .then((r) => (r.ok ? r.json() : { riders: [] }))
+      .then((d) => setRiders(d.riders ?? []))
+      .catch(() => {});
+  }
+
+  function toggleSound() {
+    const next = !soundOn;
+    setSoundOn(next);
+    setOrderSoundOn(next);
+    if (next) {
+      primeOrderSound();
+      playOrderChime(); // so you can hear what it sounds like
+    }
+  }
+
+  function openAssign(s: Sale) {
+    setAssigning(s);
+    setPickRider(s.rider_employee_id ?? "");
+    setAssignError("");
+    loadRiders();
+  }
+  async function saveAssign() {
+    if (!assigning) return;
+    setAssignBusy(true);
+    setAssignError("");
+    const res = await fetch("/api/sales/assign-rider", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ saleId: assigning.id, riderId: pickRider || null }),
+    });
+    setAssignBusy(false);
+    if (!res.ok) return setAssignError((await res.json().catch(() => ({}))).error ?? "Could not assign the rider");
+    setAssigning(null);
+    await load();
+    loadRiders();
+  }
+
+  const balanceOf = (s: Sale) => Math.max((Number(s.total) || 0) - (s.sale_payments ?? []).reduce((t, p) => t + Number(p.amount), 0), 0);
+  function openCollect(s: Sale) {
+    setCollecting(s);
+    setSplit({});
+    setCollectError("");
+  }
+  const splitTotal = Object.values(split).reduce((t, v) => t + (Number(v) || 0), 0);
+  async function saveCollect() {
+    if (!collecting) return;
+    const bal = balanceOf(collecting);
+    const payments = Object.entries(split)
+      .map(([method, v]) => ({ method, amount: Math.round((Number(v) || 0) * 100) / 100 }))
+      .filter((p) => p.amount > 0);
+    if (payments.length === 0) return setCollectError("Enter an amount for at least one payment method");
+    if (splitTotal > bal + 0.005) return setCollectError(`That is more than the balance (${fmtMoney(bal)})`);
+    setCollectBusy(true);
+    setCollectError("");
+    const res = await fetch("/api/sales/collect-payment", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ saleId: collecting.id, payments }),
+    });
+    setCollectBusy(false);
+    if (!res.ok) return setCollectError((await res.json().catch(() => ({}))).error ?? "Could not record the payment");
+    setCollecting(null);
+    await load();
   }
 
   async function load() {
@@ -133,6 +219,19 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
   }
 
   useEffect(() => {
+    setSoundOn(isOrderSoundOn());
+    // browsers only allow sound after the person has touched the page once: unlock it on the first click / key press
+    const unlock = () => primeOrderSound();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    loadRiders();
+    fetch("/api/payment-methods")
+      .then((r) => r.json())
+      .then((d) => {
+        const names = (d.methods ?? []).map((m: { name: string }) => m.name);
+        if (names.length) setMethods(names);
+      })
+      .catch(() => {});
     load();
     fetch("/api/tables").then((r) => r.json()).then((d) => setTables(d.tables ?? [])).catch(() => {});
     fetch("/api/settings")
@@ -349,6 +448,14 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
           right alongside fired orders — new tickets blink for 15 seconds.
         </p>
         <button
+          onClick={toggleSound}
+          title={soundOn ? "New-order sound is on - click to mute" : "New-order sound is off - click to turn on"}
+          className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border px-4 text-sm font-bold transition ${soundOn ? "border-chili-500/50 bg-chili-500/10 text-chili-400 hover:bg-chili-500/20" : "border-line bg-raised text-ink-mid hover:text-ink-strong"}`}
+        >
+          {soundOn ? <Bell size={16} /> : <BellOff size={16} />}
+          Sound {soundOn ? "on" : "off"}
+        </button>
+        <button
           onClick={completeAll}
           disabled={bulkBusy || loading || pendingCount === 0}
           title="Move every order in Active and Preparing to Completed"
@@ -546,6 +653,29 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
                             </button>
                           )}
                         </div>
+                        {s && (s.status === "unpaid" || (col.key === "Completed" && s.order_type === "delivery")) && (
+                          <div className="mt-2 flex gap-2">
+                            {s.status === "unpaid" && (
+                              <button
+                                onClick={() => openCollect(s)}
+                                className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg border border-turmeric-500/40 bg-turmeric-500/10 text-xs font-bold text-turmeric-400 hover:bg-turmeric-500/20"
+                              >
+                                <Wallet size={14} /> Collect payment · {fmtMoney(balanceOf(s))}
+                              </button>
+                            )}
+                            {col.key === "Completed" && s.order_type === "delivery" && (
+                              <button
+                                onClick={() => openAssign(s)}
+                                disabled={!!s.rider_settlement_id}
+                                title={s.rider_settlement_id ? "The rider already handed in the money for this order" : "Assign a delivery rider"}
+                                className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg border border-line bg-canvas text-xs font-bold hover:border-chili-500 disabled:opacity-60"
+                              >
+                                <Bike size={14} />
+                                {s.rider_employee_id ? `Rider: ${riders.find((r) => r.id === s.rider_employee_id)?.name ?? "assigned"}` : "Assign rider"}
+                              </button>
+                            )}
+                          </div>
+                        )}
                         {s && <LoadingOverlay show={busyId === s.id} />}
                       </article>
                     );
@@ -556,6 +686,103 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
           })}
         </div>
       )}
+
+      <Modal
+        open={!!assigning}
+        onClose={() => setAssigning(null)}
+        busy={assignBusy}
+        title={`Assign rider - order #${assigning?.display_id ?? assigning?.order_no ?? ""}`}
+        width="max-w-sm"
+        footer={
+          <>
+            <button onClick={() => setAssigning(null)} disabled={assignBusy} className={btnGhost}>Cancel</button>
+            <button onClick={saveAssign} disabled={assignBusy || (!pickRider && !assigning?.rider_employee_id)} className={btnPrimary}>
+              {assignBusy ? "Saving…" : pickRider ? "Assign" : "Remove rider"}
+            </button>
+          </>
+        }
+      >
+        {assignError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{assignError}</p>}
+        {riders.length === 0 ? (
+          <p className="text-sm text-ink-mid">No delivery riders yet. Open an employee under Employees and tick “Delivery rider”.</p>
+        ) : (
+          <div className="space-y-2">
+            {riders.map((r) => (
+              <label key={r.id} className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-sm ${pickRider === r.id ? "border-chili-500 bg-chili-500/10" : "border-line bg-raised"}`}>
+                <span className="flex items-center gap-2.5">
+                  <input type="radio" name="rider" checked={pickRider === r.id} onChange={() => setPickRider(r.id)} className="accent-chili-500" />
+                  <span className="font-semibold">{r.name}</span>
+                </span>
+                <span className="text-xs text-ink-faint">{r.pending_orders} waiting</span>
+              </label>
+            ))}
+            {pickRider && (
+              <button onClick={() => setPickRider("")} className="text-xs font-semibold text-ink-mid underline hover:text-ink-strong">
+                No rider (take the rider off this order)
+              </button>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!collecting}
+        onClose={() => setCollecting(null)}
+        busy={collectBusy}
+        title={`Collect payment - order #${collecting?.display_id ?? collecting?.order_no ?? ""}`}
+        width="max-w-md"
+        footer={
+          <>
+            <button onClick={() => setCollecting(null)} disabled={collectBusy} className={btnGhost}>Cancel</button>
+            <button onClick={saveCollect} disabled={collectBusy || splitTotal <= 0} className={btnPrimary}>
+              {collectBusy ? "Saving…" : `Collect ${fmtMoney(splitTotal)}`}
+            </button>
+          </>
+        }
+      >
+        {collecting && (
+          <>
+            {collectError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{collectError}</p>}
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg border border-line bg-raised p-2.5"><div className="text-[11px] text-ink-faint">Order total</div><div className="font-mono font-semibold">{fmtMoney(collecting.total)}</div></div>
+              <div className="rounded-lg border border-line bg-raised p-2.5"><div className="text-[11px] text-ink-faint">Already paid</div><div className="font-mono font-semibold">{fmtMoney((Number(collecting.total) || 0) - balanceOf(collecting))}</div></div>
+              <div className="rounded-lg border border-turmeric-500/40 bg-turmeric-500/10 p-2.5"><div className="text-[11px] text-ink-faint">Balance due</div><div className="font-mono font-semibold">{fmtMoney(balanceOf(collecting))}</div></div>
+            </div>
+            <p className="text-xs text-ink-mid">Split the payment across as many methods as you need - fill in the amount for each one the customer used.</p>
+            <div className="space-y-2">
+              {methods.map((m) => {
+                const left = Math.max(balanceOf(collecting) - (splitTotal - (Number(split[m]) || 0)), 0);
+                return (
+                  <div key={m} className="flex items-center gap-2">
+                    <span className="w-28 shrink-0 text-sm font-semibold">{m}</span>
+                    <input
+                      inputMode="decimal"
+                      value={split[m] ?? ""}
+                      onChange={(e) => setSplit((p) => ({ ...p, [m]: e.target.value.replace(/[^\d.]/g, "") }))}
+                      placeholder="0"
+                      className="h-10 min-w-0 flex-1 rounded-lg border border-line bg-raised px-3 text-sm font-mono outline-none focus:border-chili-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setSplit((p) => ({ ...p, [m]: left > 0 ? String(Math.round(left * 100) / 100) : "" }))}
+                      className="h-10 shrink-0 rounded-lg border border-line px-2.5 text-[11px] font-bold text-ink-mid hover:border-chili-500 hover:text-ink-strong"
+                      title="Put the rest of the balance on this method"
+                    >
+                      Rest
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className={`flex items-center justify-between rounded-lg border px-3 py-2 text-sm ${splitTotal > balanceOf(collecting) + 0.005 ? "border-crimson-500/40 text-crimson-400" : "border-line text-ink-mid"}`}>
+              <span>Entered {fmtMoney(splitTotal)}</span>
+              <span className="font-semibold">
+                {splitTotal > balanceOf(collecting) + 0.005 ? "More than the balance" : balanceOf(collecting) - splitTotal <= 0.005 ? "Settles the order" : `${fmtMoney(balanceOf(collecting) - splitTotal)} will remain unpaid`}
+              </span>
+            </div>
+          </>
+        )}
+      </Modal>
 
     </main>
   );

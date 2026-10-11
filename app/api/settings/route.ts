@@ -43,6 +43,7 @@ const SETTINGS_FIELD_MAP: Record<string, string> = {
   serviceChargeRate: "service_charge_rate",
   shiftStart: "shift_start",
   shiftEnd: "shift_end",
+  utcOffsetMinutes: "utc_offset_minutes",
   cashTaxRate: "cash_tax_rate",
   cardTaxRate: "card_tax_rate",
   posShowKitchenPrint: "pos_show_kitchen_print",
@@ -108,6 +109,13 @@ export async function POST(req: Request) {
     const { error } = await admin
       .from("restaurant_settings")
       .upsert({ restaurant_id: session.restaurantId, ...settingsPatch, updated_at: new Date().toISOString() });
+    if (error && /utc_offset_minutes/.test(error.message) && "utc_offset_minutes" in settingsPatch) {
+      // migration 0025 not run yet: still save everything else (the shift times) and say what is missing
+      const { utc_offset_minutes: _skip, ...rest } = settingsPatch;
+      const retry = await admin.from("restaurant_settings").upsert({ restaurant_id: session.restaurantId, ...rest, updated_at: new Date().toISOString() });
+      if (retry.error) return NextResponse.json({ error: retry.error.message }, { status: 500 });
+      return NextResponse.json({ success: true, warning: "Shift timings saved, but the time zone needs migration 0025_riders_attendance.sql" });
+    }
     if (error) {
       const missing = /urdu_enabled/.test(error.message);
       return NextResponse.json({ error: missing ? "Run migration 0021_urdu_and_category_colors.sql in Supabase first" : error.message }, { status: 500 });

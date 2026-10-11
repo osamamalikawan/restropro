@@ -17,15 +17,13 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("employees")
-    .select(
-      "id, restaurant_id, name, role, status, father_name, cnic_number, address, joining_date, salary_amount, left_date, pin_hash, updated_at"
-    )
-    .eq("restaurant_id", session.restaurantId);
+  const cols = "id, restaurant_id, name, role, status, father_name, cnic_number, address, joining_date, salary_amount, left_date, pin_hash, updated_at";
+  const list = (c: string) => admin.from("employees").select(c).eq("restaurant_id", session.restaurantId);
+  let { data, error } = await list(`${cols}, is_rider`);
+  if (error && /is_rider/.test(error.message)) ({ data, error } = await list(cols)); // migration 0025 not run yet
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const employees = (data ?? []).map(({ pin_hash, ...rest }) => ({ ...rest, is_user: pin_hash != null }));
+  const employees = ((data ?? []) as unknown as Record<string, unknown>[]).map(({ pin_hash, ...rest }) => ({ ...rest, is_user: pin_hash != null }));
   return NextResponse.json({ employees });
 }
 
@@ -112,7 +110,12 @@ export async function POST(req: Request) {
   // (can't sign in) until someone grants access with a PIN, either now or later, from Users &
   // Permissions.
 
-  const { error } = await admin.from("employees").upsert(payload);
+  let { error } = await admin.from("employees").upsert(payload);
+  if (error && /is_rider/.test(error.message)) {
+    // migration 0025 not run yet: save everything else rather than failing the whole employee form
+    const { is_rider: _skip, ...rest } = payload;
+    ({ error } = await admin.from("employees").upsert(rest));
+  }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ success: true });
 }

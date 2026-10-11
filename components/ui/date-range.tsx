@@ -10,8 +10,8 @@ const dtStr = (d: Date) => `${dStr(d)}T${p2(d.getHours())}:${p2(d.getMinutes())}
 /** A "from - to" filter with quick presets. With `withTime` the boxes take a date AND a time
  *  (Accounts); without it, just dates (Expenses). Values are local-time strings; use
  *  rangeToQuery() to turn them into what the API expects.
- *  With `shiftPreset` (Accounts) the "Today" chip becomes "Current shift": the time since the shift in progress
- *  started, or - when nobody is clocked in - the shift that ended last. */
+ *  With `shiftPreset` (Accounts) the "Today" chip becomes "Current shift", following the shift timings set under
+ *  Permissions -> "Default shift timings": the shift in progress, or - between two shifts - the one that just ended. */
 export function DateRange({
   from,
   to,
@@ -35,9 +35,9 @@ export function DateRange({
   async function currentShift() {
     setLoadingShift(true);
     setNote("");
-    let w: { kind: string; from: string | null; to: string | null } | null = null;
+    let w: { kind: string; from: string | null; to: string | null; start?: string; end?: string } | null = null;
     try {
-      const r = await fetch("/api/shifts/current");
+      const r = await fetch(`/api/shifts/current?tz=${-new Date().getTimezoneOffset()}`);
       if (r.ok) w = await r.json();
     } catch {
       /* fall back to the calendar day below */
@@ -45,18 +45,19 @@ export function DateRange({
     setLoadingShift(false);
     if (w?.from && (w.kind === "current" || w.kind === "previous")) {
       const nice = (iso: string) => new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+      const timings = w.start && w.end ? ` (${w.start} - ${w.end})` : "";
       if (w.kind === "current") {
         onChange(fmt(new Date(w.from)), ""); // still running: no end, so entries made from now on show up too
-        setNote(`Current shift - since ${nice(w.from)}`);
+        setNote(`Current shift${timings} - since ${nice(w.from)}`);
       } else {
         onChange(fmt(new Date(w.from)), fmt(new Date(w.to!)));
-        setNote(`No shift is running - showing the previous shift (${nice(w.from)} to ${nice(w.to!)})`);
+        setNote(`No shift is running now - showing the previous shift${timings}: ${nice(w.from)} to ${nice(w.to!)}`);
       }
       return;
     }
     const now = new Date();
     onChange(fmt(startOfDay(now)), fmt(endOfDay(now)));
-    setNote("No shift records yet - showing today (midnight to midnight)");
+    setNote("Could not read the shift timings - showing today (midnight to midnight)");
   }
 
   function preset(kind: "today" | "yesterday" | "7d" | "month") {

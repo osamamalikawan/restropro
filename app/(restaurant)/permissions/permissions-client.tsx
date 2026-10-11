@@ -173,6 +173,7 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
 
   const [shiftStart, setShiftStart] = useState("14:00");
   const [shiftEnd, setShiftEnd] = useState("02:00");
+  const [utcOffset, setUtcOffset] = useState("300"); // minutes ahead of UTC the shift times are in
   const [shiftMsg, setShiftMsg] = useState("");
 
   const [categories, setCategories] = useState<Category[]>([]);
@@ -198,6 +199,7 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
       if (settingsRes.ok && settingsData.settings) {
         setShiftStart(settingsData.settings.shift_start?.slice(0, 5) ?? "14:00");
         setShiftEnd(settingsData.settings.shift_end?.slice(0, 5) ?? "02:00");
+        if (settingsData.settings.utc_offset_minutes != null) setUtcOffset(String(settingsData.settings.utc_offset_minutes));
       }
       const catData = await catRes.json();
       if (catRes.ok) setCategories(catData.categories ?? []);
@@ -229,14 +231,15 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
     const res = await fetch("/api/settings", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ shiftStart, shiftEnd }),
+      body: JSON.stringify({ shiftStart, shiftEnd, utcOffsetMinutes: Number(utcOffset) }),
     });
     setSavingShift(false);
+    const saved = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setShiftMsg((await res.json()).error || "Could not save");
+      setShiftMsg(saved.error || "Could not save");
       return;
     }
-    setShiftMsg("Default shift timing saved");
+    setShiftMsg(saved.warning || "Default shift timing saved");
     setTimeout(() => setShiftMsg(""), 2500);
   }
 
@@ -436,9 +439,35 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
               />
             </label>
           </div>
+          <label className="block mb-2">
+            <span className="text-xs font-semibold text-ink-mid">Time zone these times are in</span>
+            <select
+              value={utcOffset}
+              onChange={(e) => setUtcOffset(e.target.value)}
+              className="w-full rounded-lg bg-raised border border-line px-3 py-2 text-sm mt-1"
+            >
+              {[
+                [300, "UTC+05:00 - Pakistan"],
+                [330, "UTC+05:30 - India"],
+                [240, "UTC+04:00 - UAE / Oman"],
+                [180, "UTC+03:00 - Saudi Arabia / Qatar"],
+                [360, "UTC+06:00 - Bangladesh"],
+                [0, "UTC+00:00 - UK (winter)"],
+                [60, "UTC+01:00 - UK (summer) / Central Europe"],
+                [-300, "UTC-05:00 - US Eastern (winter)"],
+                [-360, "UTC-06:00 - US Central (winter)"],
+                [-480, "UTC-08:00 - US Pacific (winter)"],
+              ].map(([v, label]) => (
+                <option key={v} value={String(v)}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
           <p className="text-xs text-ink-faint mb-3.5">
             Overnight shifts are supported — end time may fall on the next day. Restock dates default to the current
-            shift&apos;s start date.
+            shift&apos;s start date. The Accounts &quot;Current shift&quot; filter and the automatic attendance clock-out
+            at the end of the shift follow these timings.
           </p>
           {shiftMsg && <p className="text-xs text-basil-400 mb-2">{shiftMsg}</p>}
           <button

@@ -1,4 +1,5 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
+import { clockInEmployee } from "@/lib/attendance";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -76,6 +77,8 @@ export async function ensureOpenShift(
     .select("id, clock_in_at, employee_name")
     .single();
   if (insErr) return { shift: null, warning: isMissingShiftTable(insErr) ? MIGRATION_WARNING : insErr.message };
+  // Signing in also counts as clocking in on the Attendance page (a no-op if they were already marked in by a manager).
+  await clockInEmployee(admin, { restaurantId, employeeId, at: startAt ?? null, source: "app" }).catch(() => {});
   return { shift: created as ShiftRow };
 }
 
