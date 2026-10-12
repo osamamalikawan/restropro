@@ -9,8 +9,17 @@ export async function GET(req: Request) {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const productId = new URL(req.url).searchParams.get("productId");
+  const sp = new URL(req.url).searchParams;
+  const productId = sp.get("productId");
   const admin = createAdminClient();
+
+  // ?deals=1 - just the ids of this restaurant's deals, so the Recipes page can leave them out of its product list
+  // (a deal has no recipe of its own: it is built from the products inside it)
+  if (sp.get("deals")) {
+    const { data, error } = await admin.from("products").select("id").eq("restaurant_id", session.restaurantId).eq("is_deal", true);
+    if (error) return NextResponse.json({ dealIds: [] });
+    return NextResponse.json({ dealIds: (data ?? []).map((r) => r.id as string) });
+  }
 
   if (!productId) {
     // Bulk mode — every recipe line for this tenant's products, used to compute cost/margin

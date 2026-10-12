@@ -32,8 +32,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "A note is required to cancel a completed order - say why it is being cancelled" }, { status: 400 });
   }
 
-  const { error } = await admin.rpc("cancel_sale", { p_sale_id: saleId, p_restaurant_id: session.restaurantId });
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  // A Completed order was already made and served: cancel it but do NOT put its ingredients back in stock.
+  // (Active / Preparing orders restore their inventory as before.)
+  const fn = stage === "completed" ? "cancel_sale_keep_stock" : "cancel_sale";
+  const { error } = await admin.rpc(fn, { p_sale_id: saleId, p_restaurant_id: session.restaurantId });
+  if (error) {
+    const missingFn = stage === "completed" && /cancel_sale_keep_stock/.test(error.message);
+    return NextResponse.json(
+      { error: missingFn ? "Run migration 0027_cancel_completed_keep_stock.sql in Supabase to cancel completed orders" : error.message },
+      { status: missingFn ? 500 : 400 }
+    );
+  }
 
   // keep the stage, the reason and who cancelled it (columns come from migration 0026)
   const { data: me } = await admin.from("employees").select("name").eq("id", session.employeeId).maybeSingle();

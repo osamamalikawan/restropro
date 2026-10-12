@@ -259,7 +259,13 @@ export function InventoryClient() {
         </p>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Unit">
-            <input value={fUnit} onChange={(e) => setFUnit(e.target.value)} className={inputCls} placeholder="kg, pcs, ltr…" />
+            <select value={fUnit} onChange={(e) => setFUnit(e.target.value)} className={inputCls}>
+              <option value="pcs">pcs</option>
+              <option value="g">g</option>
+              <option value="ml">ml</option>
+              {/* an item created earlier with another unit (kg, ltr…) keeps it until you change it */}
+              {!["pcs", "g", "ml"].includes(fUnit) && <option value={fUnit}>{fUnit}</option>}
+            </select>
           </Field>
           <Field label="Min stock">
             <input value={fMinStock} onChange={(e) => setFMinStock(e.target.value)} type="number" min="0" className={inputCls} />

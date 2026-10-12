@@ -35,6 +35,7 @@ export function RecipesProductionClient() {
   const [products, setProducts] = useState<Product[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [productions, setProductions] = useState<Production[]>([]);
+  const [dealIds, setDealIds] = useState<string[]>([]); // deals are not shown in Product Recipes
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
@@ -45,8 +46,10 @@ export function RecipesProductionClient() {
       fetchJson<{ products: Product[] }>("/api/products"),
       fetchJson<{ inventoryItems: InventoryItem[] }>("/api/inventory"),
       fetchJson<{ productions: Production[] }>("/api/productions"),
-    ]).then(([p, i, pr]) => {
-      const failed = [p, i, pr].find((r) => !r.ok);
+      fetchJson<{ dealIds: string[] }>("/api/recipes?deals=1"),
+    ]).then(([p, i, pr, dl]) => {
+      setDealIds(dl.ok ? dl.data?.dealIds ?? [] : []);
+      const failed = [p, i, pr].find((r) => !r.ok); // (the deals list is optional)
       setLoadError(failed ? failed.error : "");
       setProducts(p.ok ? p.data?.products ?? [] : []);
       setInventoryItems(i.ok ? i.data?.inventoryItems ?? [] : []);
@@ -92,7 +95,7 @@ export function RecipesProductionClient() {
         ))}
       </div>
 
-      {tab === "product" && <ProductRecipesTab products={products.filter((p) => !p.is_deal)} rawItems={rawItems} initialProductId={searchParams.get("productId")} />}
+      {tab === "product" && <ProductRecipesTab products={products.filter((p) => !p.is_deal && !dealIds.includes(p.id))} rawItems={rawItems} initialProductId={searchParams.get("productId")} />}
       {tab === "selfmade" && <SelfMadeRecipesTab selfMadeItems={selfMadeItems} rawItems={rawItems} />}
       {tab === "history" && <HistoryTab productions={productions} />}
     </main>

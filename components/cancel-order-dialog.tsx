@@ -38,7 +38,7 @@ export function CancelOrderDialog({
     }
   }, [open]);
 
-  const required = stage === "completed";
+  const required = stage === "completed"; // note required, and stock is not restored
   const missing = required && note.trim().length < 3;
   return (
     <Modal
@@ -64,8 +64,11 @@ export function CancelOrderDialog({
     >
       {error && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{error}</p>}
       <p className="text-sm text-ink-mid">
-        This order is <span className="font-semibold text-ink-strong">{STAGE_LABEL[stage]}</span>. Cancelling restores its inventory and removes it from income; it will show as{" "}
-        <span className="font-semibold text-ink-strong">&quot;{cancelledLabel(stage)}&quot;</span> in Sales.
+        This order is <span className="font-semibold text-ink-strong">{STAGE_LABEL[stage]}</span>.{" "}
+        {required
+          ? "Cancelling removes it from income, but its inventory is NOT restored - the food was already made."
+          : "Cancelling restores its inventory and removes it from income."}{" "}
+        It will show as <span className="font-semibold text-ink-strong">&quot;{cancelledLabel(stage)}&quot;</span> in Sales.
       </p>
       <Field label={required ? "Why is this completed order being cancelled? (required)" : "Reason (optional)"}>
         <textarea
