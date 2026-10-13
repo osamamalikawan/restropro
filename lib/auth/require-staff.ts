@@ -4,6 +4,7 @@ import { verifyStaffSessionToken, STAFF_SESSION_COOKIE, type StaffSessionPayload
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeStatus, isUsable } from "@/lib/subscription";
 import { getModuleAccess, type Role } from "@/lib/permissions";
+import { getSessionPolicy } from "@/lib/auth/session-policy";
 
 /** A single .single() lookup, retried once on a transient error. Without this, a momentary
  *  network/DB hiccup (more likely to surface on pages that fire several parallel requests at
@@ -31,13 +32,47 @@ export async function requireStaffSession(): Promise<StaffSessionPayload | null>
   if (!session) return requireDeviceStaffSession();
 
   const admin = createAdminClient();
-  const employee = await queryWithRetry<{ status: string; session_version: number }>(() =>
-    admin.from("employees").select("status, session_version").eq("id", session.employeeId).single()
-  );
+  const employee = await lookupEmployee(admin, session.employeeId);
   if (!employee || employee.status !== "active" || employee.session_version !== session.sessionVersion) {
     return null;
   }
+
+  // Session tracking (migration 0028): who is signed in where, and whether anyone is still there.
+  if (employee.tracked) {
+    const policy = await getSessionPolicy(admin, session.restaurantId);
+    const now = Date.now();
+    const seen = employee.last_seen_at ? Date.parse(employee.last_seen_at) : null;
+    // signed in on another device since: this cookie is no longer the live session
+    if (policy.singleDevice && employee.active_sid && session.sid !== employee.active_sid) return null;
+    // closed tab / device switched off / no connection for too long: signed out automatically
+    if (seen !== null && now - seen > policy.idleMs) return null;
+    // a request is proof of life too (written at most every 20 s)
+    if (seen === null || now - seen > 20_000) {
+      await admin.from("employees").update({ last_seen_at: new Date(now).toISOString() }).eq("id", session.employeeId);
+    }
+  }
   return session;
+}
+
+type EmployeeCheck = { status: string; session_version: number; active_sid: string | null; last_seen_at: string | null; tracked: boolean };
+
+/** employees.status + session_version (+ the session-tracking columns when migration 0028 has been run), retried
+ *  once on a transient error. Before the migration the tracking columns don't exist: fall back to the old query
+ *  instead of treating that as "no such employee" and signing everybody out. */
+async function lookupEmployee(admin: ReturnType<typeof createAdminClient>, id: string): Promise<EmployeeCheck | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await admin.from("employees").select("status, session_version, active_sid, last_seen_at").eq("id", id).single();
+    if (!r.error) return { ...(r.data as Omit<EmployeeCheck, "tracked">), tracked: true };
+    if (/active_sid|last_seen_at/.test(r.error.message)) {
+      const o = await admin.from("employees").select("status, session_version").eq("id", id).single();
+      return o.error ? null : { ...(o.data as { status: string; session_version: number }), active_sid: null, last_seen_at: null, tracked: false };
+    }
+    if (attempt === 1) {
+      console.error("requireStaffSession: DB lookup failed after retry", r.error);
+      return null;
+    }
+  }
+  return null;
 }
 
 /** Full page-level context: session + employee name/role + restaurant + subscription status.

@@ -1,4 +1,5 @@
 "use client";
+import { SessionHeartbeat } from "@/components/session-heartbeat";
 import { useState } from "react";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
@@ -34,6 +35,7 @@ export function DashboardShell({
 
   return (
     <div className="h-dvh overflow-hidden bg-canvas text-ink-strong flex">
+      <SessionHeartbeat />
       <Sidebar
         role={role}
         restaurantName={restaurantName}

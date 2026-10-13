@@ -8,6 +8,7 @@ import { readFast, pullAndCache, startBackgroundSync } from "@/lib/sync";
 import { printSale, type SaleSnapshot, type SaveAction } from "@/lib/posPrint";
 import { invoke } from "@tauri-apps/api/core";
 import { ClockOutDialog } from "@/components/clock-out-dialog";
+import { SessionHeartbeat } from "@/components/session-heartbeat";
 import {
   getProducts,
   getTables,
@@ -1604,6 +1605,7 @@ export function PosClient({
           </div>
         </div>
       )}
+      <SessionHeartbeat />
       {isTauri() && (
         <ClockOutDialog
           open={clockOutOpen}

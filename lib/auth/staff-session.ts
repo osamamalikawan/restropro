@@ -12,6 +12,8 @@ export interface StaffSessionPayload {
    *  role_permissions rows at each permission check; it isn't validated against a fixed set here. */
   role: string;
   sessionVersion: number;
+  /** id of this particular sign-in (employees.active_sid). Absent on cookies issued before migration 0028. */
+  sid?: string;
   issuedAt: number;
   expiresAt: number;
 }

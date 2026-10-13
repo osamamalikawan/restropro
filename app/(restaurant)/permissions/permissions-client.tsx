@@ -175,6 +175,11 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
   const [shiftEnd, setShiftEnd] = useState("02:00");
   const [utcOffset, setUtcOffset] = useState("300"); // minutes ahead of UTC the shift times are in
   const [shiftMsg, setShiftMsg] = useState("");
+  // sign-in security: one device per user + automatic sign-out of closed sessions (migration 0028)
+  const [singleDevice, setSingleDevice] = useState(true);
+  const [idleMinutes, setIdleMinutes] = useState("5");
+  const [secMsg, setSecMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [savingSec, setSavingSec] = useState(false);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [newCat, setNewCat] = useState("");
@@ -200,6 +205,8 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
         setShiftStart(settingsData.settings.shift_start?.slice(0, 5) ?? "14:00");
         setShiftEnd(settingsData.settings.shift_end?.slice(0, 5) ?? "02:00");
         if (settingsData.settings.utc_offset_minutes != null) setUtcOffset(String(settingsData.settings.utc_offset_minutes));
+        if (settingsData.settings.single_device_login != null) setSingleDevice(settingsData.settings.single_device_login !== false);
+        if (settingsData.settings.idle_logout_minutes != null) setIdleMinutes(String(settingsData.settings.idle_logout_minutes));
       }
       const catData = await catRes.json();
       if (catRes.ok) setCategories(catData.categories ?? []);
@@ -223,6 +230,20 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
     }
     setPermMsg(`Permission updated for ${roleMeta(role).label}`);
     setTimeout(() => setPermMsg(""), 2000);
+  }
+
+  async function saveSecurity() {
+    setSecMsg(null);
+    setSavingSec(true);
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ singleDeviceLogin: singleDevice, idleLogoutMinutes: Number(idleMinutes) }),
+    });
+    setSavingSec(false);
+    const saved = await res.json().catch(() => ({}));
+    setSecMsg(res.ok ? { ok: true, text: "Sign-in rules saved" } : { ok: false, text: saved.error || "Could not save" });
+    if (res.ok) setTimeout(() => setSecMsg(null), 2500);
   }
 
   async function saveShift() {
@@ -410,6 +431,48 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
             </table>
           </div>
         )}
+      </div>
+
+      {/* ---- Sign-in security ---- */}
+      <div className="relative rounded-xl border border-line bg-surface p-6 mb-5">
+        <div className="mb-4">
+          <h3 className="font-display font-semibold text-ink-strong text-[15px]">Sign-in security</h3>
+          <div className="text-xs text-ink-faint mt-0.5">Applies to staff signing in with a PIN in the browser</div>
+        </div>
+        <label className="flex items-start gap-3 mb-4 cursor-pointer">
+          <input type="checkbox" checked={singleDevice} onChange={(e) => setSingleDevice(e.target.checked)} className="mt-1 h-4 w-4 accent-chili-500" />
+          <span>
+            <span className="text-sm font-semibold text-ink-strong">One device per user</span>
+            <span className="block text-xs text-ink-faint mt-0.5">
+              A user who is already signed in can&apos;t sign in on a second device. They can sign in again on the same device, and once they sign out
+              (or their session ends) another device is free to sign in.
+            </span>
+          </span>
+        </label>
+        <label className="block max-w-xs mb-4">
+          <span className="text-xs font-semibold text-ink-mid">Sign out automatically when the app has been closed for (minutes)</span>
+          <input
+            type="number"
+            min={2}
+            max={60}
+            value={idleMinutes}
+            onChange={(e) => setIdleMinutes(e.target.value)}
+            className="w-full rounded-lg bg-raised border border-line px-3 py-2 text-sm mt-1"
+          />
+          <span className="block text-[11px] text-ink-faint mt-1">
+            Closing the tab signs the user out within about a minute. A switched-off device or lost connection is signed out after this many minutes (2 to 60).
+          </span>
+        </label>
+        {secMsg && <p className={`text-xs mb-2 ${secMsg.ok ? "text-basil-400" : "text-crimson-400"}`}>{secMsg.text}</p>}
+        <button
+          onClick={saveSecurity}
+          disabled={savingSec}
+          className="inline-flex items-center gap-1.5 rounded-md bg-chili-500 hover:bg-chili-600 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 transition-colors"
+        >
+          {savingSec && <Spinner size={14} />}
+          Save sign-in rules
+        </button>
+        <LoadingOverlay show={savingSec} />
       </div>
 
       {/* ---- Shift timings + expense categories ---- */}

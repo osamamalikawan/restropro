@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireStaffSession } from "@/lib/auth/require-staff";
+import { clearSessionPolicyCache } from "@/lib/auth/session-policy";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hasModuleAccess } from "@/lib/permissions";
 
@@ -44,6 +45,8 @@ const SETTINGS_FIELD_MAP: Record<string, string> = {
   shiftStart: "shift_start",
   shiftEnd: "shift_end",
   utcOffsetMinutes: "utc_offset_minutes",
+  singleDeviceLogin: "single_device_login",
+  idleLogoutMinutes: "idle_logout_minutes",
   cashTaxRate: "cash_tax_rate",
   cardTaxRate: "card_tax_rate",
   posShowKitchenPrint: "pos_show_kitchen_print",
@@ -96,6 +99,12 @@ export async function POST(req: Request) {
   for (const [bodyKey, column] of Object.entries(SETTINGS_FIELD_MAP)) {
     if (body[bodyKey] !== undefined) settingsPatch[column] = body[bodyKey];
   }
+  if (settingsPatch.idle_logout_minutes !== undefined) {
+    const m = Math.round(Number(settingsPatch.idle_logout_minutes));
+    if (!Number.isFinite(m) || m < 2 || m > 60) return NextResponse.json({ error: "Sign-out time must be between 2 and 60 minutes" }, { status: 400 });
+    settingsPatch.idle_logout_minutes = m;
+  }
+  if (settingsPatch.single_device_login !== undefined) settingsPatch.single_device_login = settingsPatch.single_device_login === true;
   if (settingsPatch.note_presets !== undefined) {
     // keep a clean, short list of unique non-empty strings
     const raw = Array.isArray(settingsPatch.note_presets) ? settingsPatch.note_presets : [];
@@ -116,6 +125,10 @@ export async function POST(req: Request) {
       if (retry.error) return NextResponse.json({ error: retry.error.message }, { status: 500 });
       return NextResponse.json({ success: true, warning: "Shift timings saved, but the time zone needs migration 0025_riders_attendance.sql" });
     }
+    if (error && /single_device_login|idle_logout_minutes/.test(error.message)) {
+      return NextResponse.json({ error: "Run migration 0028_session_tracking.sql in Supabase first" }, { status: 500 });
+    }
+    if (!error) clearSessionPolicyCache(session.restaurantId); // new rules apply straight away on this server
     if (error) {
       const missing = /urdu_enabled/.test(error.message);
       return NextResponse.json({ error: missing ? "Run migration 0021_urdu_and_category_colors.sql in Supabase first" : error.message }, { status: 500 });
