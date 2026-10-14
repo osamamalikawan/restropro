@@ -19,6 +19,7 @@ type Item = {
   cost: number;
 };
 type Purchase = { inventory_item_id: string; suppliers?: { name: string } | null };
+type Ingredient = { id: string; name: string; category: string; item_type: "ready_made" | "self_made"; unit: string; alreadyAdded: boolean };
 
 function stockStatus(i: Item) {
   // A sale can take more than is on the shelf: the stock then goes negative (the amount still owed
@@ -48,6 +49,17 @@ export function InventoryClient() {
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState("");
 
+  // "Import ingredients" — pick from the platform's master ingredient list
+  const [importOpen, setImportOpen] = useState(false);
+  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+  const [ingLoading, setIngLoading] = useState(false);
+  const [ingError, setIngError] = useState("");
+  const [ingQ, setIngQ] = useState("");
+  const [ingCat, setIngCat] = useState("all");
+  const [ingSel, setIngSel] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState("");
+
   async function load() {
     setLoading(true);
     setLoadError("");
@@ -67,6 +79,68 @@ export function InventoryClient() {
   useEffect(() => {
     load();
   }, []);
+
+  async function openImport() {
+    setImportOpen(true);
+    setIngError("");
+    setImportMsg("");
+    setIngSel(new Set());
+    setIngQ("");
+    setIngCat("all");
+    setIngLoading(true);
+    const res = await fetchJson<{ ingredients: Ingredient[] }>("/api/ingredients");
+    setIngLoading(false);
+    if (!res.ok) {
+      setIngError(res.error);
+      setIngredients([]);
+      return;
+    }
+    setIngredients(res.data?.ingredients ?? []);
+  }
+
+  const ingCategories = useMemo(() => Array.from(new Set(ingredients.map((i) => i.category))).sort(), [ingredients]);
+  const ingVisible = useMemo(() => {
+    const query = ingQ.toLowerCase();
+    return ingredients.filter((i) => (ingCat === "all" || i.category === ingCat) && (!query || i.name.toLowerCase().includes(query)));
+  }, [ingredients, ingQ, ingCat]);
+  const ingSelectable = ingVisible.filter((i) => !i.alreadyAdded);
+  const newCount = ingredients.filter((i) => !i.alreadyAdded).length;
+
+  function toggleIng(id: string) {
+    setIngSel((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleAllVisible() {
+    setIngSel((cur) => {
+      const allOn = ingSelectable.length > 0 && ingSelectable.every((i) => cur.has(i.id));
+      const next = new Set(cur);
+      ingSelectable.forEach((i) => (allOn ? next.delete(i.id) : next.add(i.id)));
+      return next;
+    });
+  }
+
+  async function runImport(body: { ids?: string[]; all?: boolean }) {
+    setImporting(true);
+    setIngError("");
+    setImportMsg("");
+    const res = await fetchJson<{ imported: number; skipped: number }>("/api/ingredients", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    setImporting(false);
+    if (!res.ok) {
+      setIngError(res.error);
+      return;
+    }
+    setImportMsg(`Added ${res.data?.imported ?? 0} item(s)${res.data?.skipped ? `, ${res.data.skipped} already in your inventory` : ""}.`);
+    setIngSel(new Set());
+    await Promise.all([load(), fetchJson<{ ingredients: Ingredient[] }>("/api/ingredients").then((r) => r.ok && setIngredients(r.data?.ingredients ?? []))]);
+  }
 
   const suppliersFor = (itemId: string, type: Item["item_type"]) => {
     if (type === "self_made") return "In-house";
@@ -144,6 +218,9 @@ export function InventoryClient() {
       <Panel loading={loading}>
         <PanelHead title="Stock & inventory" subtitle="Definitions only — add stock from Restock">
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search item…" className={searchInputCls} />
+          <button onClick={openImport} className={btnGhost}>
+            Import ingredients
+          </button>
           <button onClick={openAdd} className={addBtnCls}>
             + Add item
           </button>
@@ -280,6 +357,69 @@ export function InventoryClient() {
             className={`${inputCls} disabled:opacity-60`}
           />
         </Field>
+      </Modal>
+
+      <Modal
+        busy={importing}
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="Import ingredients"
+        width="max-w-2xl"
+        footer={
+          <>
+            <button onClick={() => setImportOpen(false)} className={btnGhost}>
+              Close
+            </button>
+            <button onClick={() => runImport({ all: true })} disabled={importing || newCount === 0} className={btnGhost}>
+              Add all new ({newCount})
+            </button>
+            <button onClick={() => runImport({ ids: Array.from(ingSel) })} disabled={importing || ingSel.size === 0} className={btnPrimary}>
+              {importing ? "Adding…" : `Add selected (${ingSel.size})`}
+            </button>
+          </>
+        }
+      >
+        <p className="text-xs text-ink-faint">
+          Pick from the shared ingredient list. Items you already have are skipped. They arrive with zero stock and zero cost, so set those from Restock.
+        </p>
+        {ingError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{ingError}</p>}
+        {importMsg && <p className="rounded-lg border border-basil-500/30 bg-basil-500/10 px-3 py-2 text-xs text-basil-400">{importMsg}</p>}
+        <div className="flex gap-2">
+          <input value={ingQ} onChange={(e) => setIngQ(e.target.value)} placeholder="Search ingredient…" className={inputCls} />
+          <select value={ingCat} onChange={(e) => setIngCat(e.target.value)} className={`${inputCls} max-w-[200px]`}>
+            <option value="all">All categories</option>
+            {ingCategories.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-ink-mid">
+          <input
+            type="checkbox"
+            checked={ingSelectable.length > 0 && ingSelectable.every((i) => ingSel.has(i.id))}
+            onChange={toggleAllVisible}
+            disabled={ingSelectable.length === 0}
+          />
+          Select all shown ({ingSelectable.length} new)
+        </label>
+        <div className="max-h-[45vh] overflow-y-auto rounded-lg border border-line divide-y divide-line">
+          {ingLoading && <p className="p-4 text-sm text-ink-faint">Loading…</p>}
+          {!ingLoading && ingVisible.length === 0 && <p className="p-4 text-sm text-ink-faint">No ingredients match.</p>}
+          {ingVisible.map((i) => (
+            <label key={i.id} className={`flex items-center gap-3 px-3 py-2 text-sm ${i.alreadyAdded ? "opacity-50" : "cursor-pointer hover:bg-raised"}`}>
+              <input type="checkbox" disabled={i.alreadyAdded} checked={ingSel.has(i.id)} onChange={() => toggleIng(i.id)} />
+              <span className="flex-1">
+                <span className="font-medium text-ink-strong">{i.name}</span>
+                <span className="block text-xs text-ink-mid">
+                  {i.category} · {i.item_type === "self_made" ? "Self Made" : "Ready Made"}
+                </span>
+              </span>
+              {i.alreadyAdded && <span className="text-[11px] text-ink-faint">Already added</span>}
+            </label>
+          ))}
+        </div>
       </Modal>
     </main>
   );
