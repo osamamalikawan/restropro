@@ -58,3 +58,29 @@ export function playOrderChime() {
     /* ignore */
   }
 }
+
+// ---- orders placed on THIS device: no alert for them -------------------------------------------------------------
+const OWN_KEY = "rp_own_orders";
+const OWN_MS = 10 * 60_000;
+
+/** The POS calls this when it saves a sale, so the new-order alert doesn't announce your own order back to you. */
+export function markOwnOrder(orderNo: string | number | null | undefined) {
+  if (orderNo === null || orderNo === undefined || orderNo === "") return;
+  try {
+    const now = Date.now();
+    const list = (JSON.parse(localStorage.getItem(OWN_KEY) || "[]") as { n: string; at: number }[]).filter((o) => now - o.at < OWN_MS);
+    list.push({ n: String(orderNo), at: now });
+    localStorage.setItem(OWN_KEY, JSON.stringify(list.slice(-50)));
+  } catch {
+    /* storage unavailable */
+  }
+}
+export function isOwnOrder(s: { order_no?: string | number | null; display_id?: string | null }): boolean {
+  try {
+    const now = Date.now();
+    const list = (JSON.parse(localStorage.getItem(OWN_KEY) || "[]") as { n: string; at: number }[]).filter((o) => now - o.at < OWN_MS);
+    return list.some((o) => o.n === String(s.order_no) || (!!s.display_id && o.n === s.display_id));
+  } catch {
+    return false;
+  }
+}

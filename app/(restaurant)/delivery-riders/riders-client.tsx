@@ -8,7 +8,7 @@ import { fmtDateTime, fmtMoney } from "@/lib/format";
 
 const PAGE = 50;
 
-type Rider = { id: string; name: string; pending_orders: number; pending_amount: number; pending_due: number };
+type Rider = { id: string; name: string; pending_orders: number; pending_amount: number; pending_due: number; clocked_in?: boolean };
 type Order = {
   id: string;
   order_no: number;
@@ -168,7 +168,10 @@ export function DeliveryRidersClient() {
         </button>
         {riders.map((r) => (
           <button key={r.id} onClick={() => setRiderId(r.id)} className={`rounded-xl border p-4 text-left transition-colors ${riderId === r.id ? "border-chili-500 bg-chili-500/10" : "border-line bg-surface hover:border-chili-500/50"}`}>
-            <div className="text-sm font-semibold">{r.name}</div>
+            <div className="flex items-center justify-between gap-2 text-sm font-semibold">
+              {r.name}
+              <span className={`text-[11px] font-semibold ${r.clocked_in === false ? "text-ink-faint" : "text-basil-400"}`}>{r.clocked_in === false ? "○ Out" : "● Clocked in"}</span>
+            </div>
             <div className="mt-1 text-xs text-ink-faint">{r.pending_orders} order{r.pending_orders === 1 ? "" : "s"} waiting · {fmtMoney(r.pending_amount)}</div>
             <div className={`mt-2 font-mono text-sm ${r.pending_due > 0 ? "text-turmeric-400" : "text-ink-mid"}`}>{fmtMoney(r.pending_due)} <span className="font-sans text-xs text-ink-faint">to hand in</span></div>
           </button>

@@ -88,7 +88,7 @@ export function RecipeModal({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[120]">
-      <div className="w-full max-w-md rounded-xl border border-line bg-surface p-6 space-y-4">
+      <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-xl border border-line bg-surface p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-display text-lg font-semibold">Recipe — {productName}</h3>
           <button onClick={onClose} className="text-ink-faint hover:text-ink-strong">

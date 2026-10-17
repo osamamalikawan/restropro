@@ -3,9 +3,12 @@ import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hasModuleAccess } from "@/lib/permissions";
 import { dueOf, isMissingRiderColumn, RIDER_MIGRATION_WARNING, round2 } from "@/lib/riders";
+import { closeExpiredAttendance } from "@/lib/attendance";
 
 /** Delivery riders (employees marked "Delivery rider") with what each still has to hand in:
- *  pending_orders / pending_amount (value of orders assigned and not yet submitted) / pending_due (cash they owe). */
+ *  pending_orders / pending_amount (value of orders assigned and not yet submitted) / pending_due (cash they owe).
+ *  clocked_in: whether they are clocked in on the Attendance page right now - only clocked-in riders can be given
+ *  deliveries (Ticket Rail -> Assign rider). If attendance isn't set up yet (migration 0025), everyone counts as clocked in. */
 export async function GET() {
   const session = await requireStaffSession();
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
@@ -20,6 +23,11 @@ export async function GET() {
     .neq("status", "left")
     .order("name");
   if (error) return NextResponse.json({ error: isMissingRiderColumn(error) ? RIDER_MIGRATION_WARNING : error.message }, { status: 500 });
+
+  await closeExpiredAttendance(admin, session.restaurantId); // anyone whose shift has ended is clocked out first
+  const att = await admin.from("attendance_records").select("employee_id").eq("restaurant_id", session.restaurantId).eq("status", "open");
+  const clockedIn = new Set((att.data ?? []).map((r) => r.employee_id as string));
+  const attendanceReady = !att.error;
 
   const stats = new Map<string, { pending_orders: number; pending_amount: number; pending_due: number }>();
   for (const r of riders ?? []) stats.set(r.id as string, { pending_orders: 0, pending_amount: 0, pending_due: 0 });
@@ -48,7 +56,7 @@ export async function GET() {
   return NextResponse.json({
     riders: (riders ?? []).map((r) => {
       const st = stats.get(r.id as string)!;
-      return { ...r, pending_orders: st.pending_orders, pending_amount: round2(st.pending_amount), pending_due: round2(st.pending_due) };
+      return { ...r, clocked_in: attendanceReady ? clockedIn.has(r.id as string) : true, pending_orders: st.pending_orders, pending_amount: round2(st.pending_amount), pending_due: round2(st.pending_due) };
     }),
   });
 }

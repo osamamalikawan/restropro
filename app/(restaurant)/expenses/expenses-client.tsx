@@ -6,6 +6,7 @@ import { DateRange, rangeToQuery } from "@/components/ui/date-range";
 import { fmtMoney, todayISO } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
 import { LoadMore, useDebounced } from "@/components/ui/load-more";
+import { PrintBillButton } from "@/components/print-bill-button";
 
 type ExpenseCategory = { id: string; name: string };
 type PaymentMethod = { id: string; name: string };
@@ -171,6 +172,7 @@ export function ExpensesClient() {
                 <Th>Description</Th>
                 <Th>Amount</Th>
                 <Th>Method</Th>
+                <Th> </Th>
               </tr>
             </thead>
             <tbody>
@@ -185,10 +187,32 @@ export function ExpensesClient() {
                   <Td className="text-ink-mid">{e.description || "—"}</Td>
                   <Td className="font-mono font-medium">{fmtMoney(e.amount)}</Td>
                   <Td className="text-ink-mid">{e.payment_method}</Td>
+                  <Td className="text-right">
+                    <PrintBillButton
+                      label="Print expense bill"
+                      bill={() => ({
+                        title: "EXPENSE VOUCHER",
+                        rows: [
+                          { text: `Voucher no: EX-${e.id.slice(0, 8).toUpperCase()}`, center: true },
+                          { rule: true },
+                          { left: "Date", right: e.txn_date },
+                          { left: "Type", right: e.expense_type === "recurring" ? "Recurring" : "Regular" },
+                          { left: "Category", right: e.category },
+                          ...(e.vendor ? ([{ left: "Vendor", right: e.vendor }] as const) : []),
+                          { left: "Method", right: e.payment_method },
+                          ...(e.description ? ([{ rule: true }, { text: `Details: ${e.description}` }] as const) : []),
+                          { rule: true },
+                          { left: "Amount", right: fmtMoney(e.amount), bold: true },
+                          { text: "" },
+                          { text: "Approved by: ___________________" },
+                        ],
+                      })}
+                    />
+                  </Td>
                 </tr>
               ))}
               {!loading && !loadError && expenses.length === 0 && (
-                <EmptyRow colSpan={7} label={q || from || to ? "No expenses match this search or date range." : "No expenses logged yet."} />
+                <EmptyRow colSpan={8} label={q || from || to ? "No expenses match this search or date range." : "No expenses logged yet."} />
               )}
             </tbody>
           </table>

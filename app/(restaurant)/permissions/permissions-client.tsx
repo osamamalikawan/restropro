@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { ReorderableList } from "@/components/ui/reorderable-list";
 import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
@@ -288,6 +289,22 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
     setCategories((await res2.json()).categories ?? []);
   }
 
+  /** Saves a new order of the expense categories (drag a row, or use its arrows). The Expenses page list follows it. */
+  async function reorderCategories(next: Category[]) {
+    const previous = categories;
+    setCategories(next);
+    setCatError("");
+    const res = await fetch("/api/reorder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "expense_categories", ids: next.map((c) => c.id) }),
+    });
+    if (!res.ok) {
+      setCategories(previous);
+      setCatError((await res.json().catch(() => ({}))).error || "Could not save the new order");
+    }
+  }
+
   async function removeCategory(cat: Category) {
     setCatError("");
     const res = await fetch("/api/expense-categories", {
@@ -547,17 +564,21 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean 
         <div className="relative rounded-xl border border-line bg-surface p-6">
           <div className="mb-4">
             <h3 className="font-display font-semibold text-ink-strong text-[15px]">Expense categories</h3>
-            <div className="text-xs text-ink-faint mt-0.5">Used when logging expense ledger entries</div>
+            <div className="text-xs text-ink-faint mt-0.5">Used when logging expense ledger entries - drag to set the order they are listed in</div>
           </div>
-          <div className="space-y-1.5 mb-3">
-            {categories.map((c) => (
-              <div key={c.id} className="flex items-center justify-between rounded-lg bg-raised px-3 py-2 text-sm">
-                <span>{c.name}</span>
-                <button onClick={() => removeCategory(c)} className="text-ink-faint hover:text-crimson-400 text-xs">
-                  ✕
-                </button>
-              </div>
-            ))}
+          <div className="mb-3">
+            <ReorderableList
+              items={categories}
+              onChange={reorderCategories}
+              renderRow={(c) => (
+                <>
+                  <span className="min-w-0 truncate">{c.name}</span>
+                  <button onClick={() => removeCategory(c)} className="text-ink-faint hover:text-crimson-400 text-xs shrink-0" aria-label={`Remove ${c.name}`}>
+                    ✕
+                  </button>
+                </>
+              )}
+            />
             {categories.length === 0 && <p className="text-xs text-ink-faint">No categories yet — add one below.</p>}
           </div>
           {catError && <p className="text-xs text-crimson-400 mb-2">{catError}</p>}

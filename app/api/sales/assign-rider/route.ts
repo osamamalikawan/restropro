@@ -3,6 +3,7 @@ import { requireStaffSession } from "@/lib/auth/require-staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hasModuleAccess } from "@/lib/permissions";
 import { isMissingRiderColumn, RIDER_MIGRATION_WARNING } from "@/lib/riders";
+import { closeExpiredAttendance } from "@/lib/attendance";
 
 /** Assign a delivery order to a rider (or take the rider off with riderId: null). Only delivery orders, and only
  *  until the rider has handed in the money for them. Body: { saleId, riderId | null }. */
@@ -17,7 +18,7 @@ export async function POST(req: Request) {
   const admin = createAdminClient();
   const { data: sale, error } = await admin
     .from("sales")
-    .select("id, order_type, status, rider_settlement_id")
+    .select("id, order_type, status, rider_settlement_id, rider_employee_id")
     .eq("id", saleId)
     .eq("restaurant_id", session.restaurantId)
     .maybeSingle();
@@ -35,6 +36,19 @@ export async function POST(req: Request) {
       .eq("restaurant_id", session.restaurantId)
       .maybeSingle();
     if (!rider || !rider.is_rider || rider.status === "left") return NextResponse.json({ error: "That person is not an active delivery rider" }, { status: 400 });
+
+    // Only riders who are clocked in (Attendance page) can be given a delivery. (Keeping the rider an order already has is fine.)
+    if (sale.rider_employee_id !== riderId) {
+      await closeExpiredAttendance(admin, session.restaurantId);
+      const { data: open, error: attErr } = await admin
+        .from("attendance_records")
+        .select("id")
+        .eq("restaurant_id", session.restaurantId)
+        .eq("employee_id", riderId)
+        .eq("status", "open")
+        .limit(1);
+      if (!attErr && !open?.length) return NextResponse.json({ error: "That rider is not clocked in - mark them in on the Attendance page first" }, { status: 409 });
+    }
   }
 
   const { error: upErr } = await admin

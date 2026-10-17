@@ -92,7 +92,7 @@ export function DesktopSyncBar() {
     <>
       {st.locked && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-6">
-          <div className="max-w-sm rounded-2xl border border-line bg-surface p-6 text-center">
+          <div className="max-w-sm max-h-[90dvh] overflow-y-auto rounded-2xl border border-line bg-surface p-6 text-center">
             <h2 className="mb-2 font-display text-lg font-semibold">Sync required</h2>
             <p className="mb-4 text-sm text-ink-faint">{st.lock_reason}</p>
             {st.pending_sales > 0 && <p className="mb-4 text-sm">{st.pending_sales} sale(s) are saved on this device and will upload during the sync.</p>}

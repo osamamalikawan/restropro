@@ -19,5 +19,10 @@ export async function GET() {
   const open = await admin.from("attendance_records").select("employee_id").eq("restaurant_id", session.restaurantId).eq("status", "open");
   if (!open.error) summary.activeEmployees = new Set((open.data ?? []).map((r) => r.employee_id as string)).size;
 
+  // Low stock: the summary counts every inventory row, including items that were removed (hidden) from the Inventory
+  // page. Recount the visible ones with the same rule the Inventory page shows ("Low stock" = below the minimum).
+  const stock = await admin.from("inventory_items").select("current_stock, min_stock").eq("restaurant_id", session.restaurantId).is("deleted_at", null);
+  if (!stock.error) summary.lowStockCount = (stock.data ?? []).filter((i) => Number(i.current_stock) < Number(i.min_stock)).length;
+
   return NextResponse.json({ summary });
 }

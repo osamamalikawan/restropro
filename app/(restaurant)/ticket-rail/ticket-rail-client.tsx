@@ -94,7 +94,7 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
   const [cancelling, setCancelling] = useState<Sale | null>(null);
   const [cancelError, setCancelError] = useState("");
   // assign rider popup
-  const [riders, setRiders] = useState<{ id: string; name: string; pending_orders: number }[]>([]);
+  const [riders, setRiders] = useState<{ id: string; name: string; pending_orders: number; clocked_in?: boolean }[]>([]);
   const [assigning, setAssigning] = useState<Sale | null>(null);
   const [pickRider, setPickRider] = useState("");
   const [assignBusy, setAssignBusy] = useState(false);
@@ -583,6 +583,14 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
                           {lines.length > 6 && <div className="text-ink-faint">+{lines.length - 6} more</div>}
                         </div>
 
+                        {/* the order's total bill (a held ticket has no tax / charges yet, so it shows the items' subtotal) */}
+                        <div className="mt-2.5 flex items-baseline justify-between rounded-md bg-canvas px-2.5 py-1.5">
+                          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">{s ? "Total bill" : "Subtotal"}</span>
+                          <span className="font-mono text-sm font-bold text-ink-strong">
+                            {fmtMoney(s ? s.total : t!.cart.reduce((sum, i) => sum + i.price * i.qty, 0))}
+                          </span>
+                        </div>
+
                         <div className="mt-3 flex items-center justify-between border-t border-dashed border-line pt-3">
                           <span className="font-mono text-[11px] text-ink-faint">{fmtTime(c.at)}</span>
                           <div className="flex gap-1.5">
@@ -726,9 +734,13 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
         {assignError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{assignError}</p>}
         {riders.length === 0 ? (
           <p className="text-sm text-ink-mid">No delivery riders yet. Open an employee under Employees and tick “Delivery rider”.</p>
+        ) : riders.filter((r) => r.clocked_in !== false || r.id === assigning?.rider_employee_id).length === 0 ? (
+          <p className="text-sm text-ink-mid">
+            No delivery rider is clocked in right now. Only riders who are clocked in can be given deliveries - mark them in on the Attendance page first.
+          </p>
         ) : (
           <div className="space-y-2">
-            {riders.map((r) => (
+            {riders.filter((r) => r.clocked_in !== false || r.id === assigning?.rider_employee_id).map((r) => (
               <label key={r.id} className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-sm ${pickRider === r.id ? "border-chili-500 bg-chili-500/10" : "border-line bg-raised"}`}>
                 <span className="flex items-center gap-2.5">
                   <input type="radio" name="rider" checked={pickRider === r.id} onChange={() => setPickRider(r.id)} className="accent-chili-500" />

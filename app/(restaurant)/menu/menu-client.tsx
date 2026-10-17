@@ -1,9 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "@/lib/posData";
 import { ReorderableList } from "@/components/ui/reorderable-list";
-import { X, Pencil, Image as ImageIcon } from "lucide-react";
+import { X, Pencil, Image as ImageIcon, ChevronLeft, ChevronRight, ArrowUpDown } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, addBtnCls } from "@/components/ui/panel";
 import { Switch } from "@/components/ui/switch";
@@ -21,6 +21,7 @@ type Product = {
   category_id: string | null;
   image_url: string | null;
   is_available: boolean;
+  sort_order?: number | null; // item order (migration 0029) - POS shows items in it
   menu_categories?: { name: string } | null;
 };
 
@@ -39,6 +40,9 @@ export function MenuClient() {
   const [catModalError, setCatModalError] = useState("");
   const [catError, setCatError] = useState("");
   const [filterCat, setFilterCat] = useState<string>("all"); // "all" | category id | "none"
+  const [arranging, setArranging] = useState(false); // "Rearrange" mode: drag an item or use its arrows, one category at a time
+  const [arrangeError, setArrangeError] = useState("");
+  const dragProduct = useRef<string | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -214,6 +218,35 @@ export function MenuClient() {
     loadAll();
   }
 
+  /** Moves item `id` to `toIndex` among the items shown (one category) and saves that category's new order. */
+  async function moveProduct(id: string, toIndex: number) {
+    const ids = shownProducts.map((p) => p.id);
+    const from = ids.indexOf(id);
+    if (from < 0 || toIndex < 0 || toIndex >= ids.length || from === toIndex) return;
+    ids.splice(toIndex, 0, ids.splice(from, 1)[0]);
+
+    const previous = products;
+    // same positions in the full list, new order of this category's items
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const slots = products.map((p, i) => (ids.includes(p.id) ? i : -1)).filter((i) => i >= 0);
+    const next = products.slice();
+    slots.forEach((slot, k) => (next[slot] = byId.get(ids[k])!));
+    setProducts(next);
+    setArrangeError("");
+
+    const res = await fetch("/api/reorder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "products", ids }),
+    });
+    if (!res.ok) {
+      setProducts(previous);
+      setArrangeError((await res.json().catch(() => ({}))).error ?? "Could not save the new order");
+      return;
+    }
+    if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
+  }
+
   const shownProducts = products.filter((p) =>
     filterCat === "all" ? true : filterCat === "none" ? !p.category_id : p.category_id === filterCat
   );
@@ -281,11 +314,26 @@ export function MenuClient() {
         </Panel>
 
         <Panel loading={loading} loadingLabel="Loading menu…">
-          <PanelHead title="Menu products" subtitle="Image-first cards shown to cashiers in POS">
+          <PanelHead title="Menu products" subtitle={arranging ? "Drag an item, or use its arrows - POS shows items in this order" : "Image-first cards shown to cashiers in POS"}>
+            <button
+              onClick={() => {
+                setArranging((a) => !a);
+                setArrangeError("");
+              }}
+              disabled={!arranging && filterCat === "all"}
+              title={filterCat === "all" && !arranging ? "Pick a category first, then rearrange its items" : "Change the order items appear in POS"}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors disabled:opacity-40 ${
+                arranging ? "border-chili-500 bg-chili-500 text-white" : "border-line bg-raised text-ink-mid hover:border-chili-500/60 hover:text-ink-strong"
+              }`}
+            >
+              <ArrowUpDown className="h-4 w-4" />
+              {arranging ? "Done" : "Rearrange"}
+            </button>
             <button onClick={openAdd} className={addBtnCls}>
               + Add product
             </button>
           </PanelHead>
+          {arrangeError && <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{arrangeError}</p>}
           <div className="flex flex-wrap gap-2 px-5 pt-4">
             {[
               { id: "all", name: "All", count: products.length, color: null as string | null | undefined },
@@ -295,7 +343,10 @@ export function MenuClient() {
               <button
                 key={c.id}
                 type="button"
-                onClick={() => setFilterCat(c.id)}
+                onClick={() => {
+                  setFilterCat(c.id);
+                  if (c.id === "all") setArranging(false); // items are rearranged one category at a time
+                }}
                 className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
                   filterCat === c.id ? "border-chili-500 bg-chili-500 text-white" : "border-line bg-raised text-ink-mid hover:border-chili-500/60 hover:text-ink-strong"
                 }`}
@@ -306,13 +357,45 @@ export function MenuClient() {
             ))}
           </div>
           <div className="p-5 grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(155px, 1fr))" }}>
-            {shownProducts.map((p) => (
+            {shownProducts.map((p, idx) => (
               <div
                 key={p.id}
-                className={`group relative overflow-hidden rounded-lg border border-line transition hover:-translate-y-0.5 hover:border-chili-500 ${
+                draggable={arranging}
+                onDragStart={() => (dragProduct.current = p.id)}
+                onDragOver={(e) => arranging && dragProduct.current && dragProduct.current !== p.id && e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (arranging && dragProduct.current) moveProduct(dragProduct.current, idx);
+                  dragProduct.current = null;
+                }}
+                onDragEnd={() => (dragProduct.current = null)}
+                className={`group relative overflow-hidden rounded-lg border transition ${arranging ? "cursor-grab border-dashed border-chili-500/60 active:cursor-grabbing" : "border-line hover:-translate-y-0.5 hover:border-chili-500"} ${
                   !p.is_available ? "opacity-40" : ""
                 }`}
               >
+                {arranging && (
+                  <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between bg-surface/90 px-1.5 py-1">
+                    <button
+                      type="button"
+                      onClick={() => moveProduct(p.id, idx - 1)}
+                      disabled={idx === 0}
+                      aria-label="Move earlier"
+                      className="grid h-7 w-7 place-items-center rounded-md border border-line bg-raised text-ink-strong hover:border-chili-500 disabled:opacity-30"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <span className="font-mono text-[11px] font-bold text-ink-mid">{idx + 1}</span>
+                    <button
+                      type="button"
+                      onClick={() => moveProduct(p.id, idx + 1)}
+                      disabled={idx === shownProducts.length - 1}
+                      aria-label="Move later"
+                      className="grid h-7 w-7 place-items-center rounded-md border border-line bg-raised text-ink-strong hover:border-chili-500 disabled:opacity-30"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
                 <div className="h-24 w-full bg-raised bg-cover bg-center" style={p.image_url ? { backgroundImage: `url('${p.image_url}')` } : undefined} />
                 <div className="p-3">
                   <div className="mb-1.5 text-[13px] font-bold leading-tight">{p.name}</div>
@@ -323,13 +406,13 @@ export function MenuClient() {
                   )}
                   <div className="font-mono text-[13px] font-bold text-basil-400">{fmtMoney(p.price)}</div>
                 </div>
-                <button
+                {!arranging && <button
                   onClick={() => openEdit(p)}
                   title="Edit"
                   className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg bg-surface/90 border border-line opacity-0 transition group-hover:opacity-100 hover:bg-raised"
                 >
                   <Pencil className="h-3.5 w-3.5" />
-                </button>
+                </button>}
               </div>
             ))}
             {shownProducts.length === 0 && (

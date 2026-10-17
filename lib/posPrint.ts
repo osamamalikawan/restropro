@@ -467,3 +467,76 @@ export async function printShiftSlip(s: ShiftSlip) {
   if (!hasTauri()) throw new Error("printing works in the desktop app only");
   await printToRole("receipt", buildShiftSlip(s));
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Simple bills / vouchers (supplier payment bill, expense voucher): a title, then rows. Desktop app -> receipt printer;
+// in the browser -> the browser's print dialog with a receipt-width page (so "Save as PDF" works there too).
+
+export type SlipRow = { left: string; right?: string; bold?: boolean } | { text: string; bold?: boolean; center?: boolean } | { rule: true };
+export type SimpleSlip = { restaurantName?: string; paper: string; title: string; rows: SlipRow[] };
+
+export function buildSimpleSlip(s: SimpleSlip): number[] {
+  const b = new Buf(colsFor(s.paper), dotsFor(s.paper));
+  b.align("center");
+  if (s.restaurantName) {
+    b.bold(true);
+    for (const l of wrap(s.restaurantName, b.cols)) b.line(l);
+    b.bold(false);
+  }
+  b.bold(true).size(true).line(s.title).size(false).bold(false);
+  b.align("left").rule();
+  for (const r of s.rows) {
+    if ("rule" in r) b.rule();
+    else if ("text" in r) {
+      b.align(r.center ? "center" : "left").bold(!!r.bold);
+      for (const l of r.text ? wrap(r.text, b.cols) : [""]) b.line(l);
+      b.bold(false).align("left");
+    } else {
+      b.bold(!!r.bold).row(r.left, r.right ?? "").bold(false);
+    }
+  }
+  b.rule();
+  b.align("center").line(`Printed ${new Date().toLocaleString()}`).align("left").line();
+  return b.cut().bytes;
+}
+
+const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function printInBrowser(s: SimpleSlip) {
+  const width = String(s.paper) === "58" ? "58mm" : "80mm";
+  const rows = s.rows
+    .map((r) => {
+      if ("rule" in r) return '<hr/>';
+      if ("text" in r) return `<div class="t${r.center ? " c" : ""}${r.bold ? " b" : ""}">${r.text ? esc(r.text) : "&nbsp;"}</div>`;
+      return `<div class="r${r.bold ? " b" : ""}"><span>${esc(r.left)}</span><span>${esc(r.right ?? "")}</span></div>`;
+    })
+    .join("");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(s.title)}</title><style>
+    @page { size: ${width} auto; margin: 4mm; }
+    body { width: ${width}; margin: 0 auto; font: 12px/1.4 "Courier New", monospace; color: #000; }
+    .h { text-align: center; font-weight: bold; } .title { text-align: center; font-weight: bold; font-size: 16px; margin: 2px 0; }
+    hr { border: 0; border-top: 1px dashed #000; margin: 6px 0; }
+    .r { display: flex; justify-content: space-between; gap: 8px; } .r span:last-child { text-align: right; }
+    .t { word-break: break-word; } .c { text-align: center; } .b { font-weight: bold; }
+  </style></head><body>${s.restaurantName ? `<div class="h">${esc(s.restaurantName)}</div>` : ""}<div class="title">${esc(s.title)}</div><hr/>${rows}<hr/><div class="c">Printed ${esc(new Date().toLocaleString())}</div></body></html>`;
+  const w = window.open("", "_blank", "width=420,height=640");
+  if (!w) throw new Error("the browser blocked the print window - allow pop-ups for this site");
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => {
+    w.print();
+    w.close();
+  }, 250);
+}
+
+/** Prints a bill. Returns where it went: "printer" (receipt printer, desktop app) or "browser" (print dialog). */
+export async function printSimpleSlip(s: SimpleSlip): Promise<"printer" | "browser"> {
+  if (hasTauri()) {
+    await printToRole("receipt", buildSimpleSlip(s));
+    return "printer";
+  }
+  printInBrowser(s);
+  return "browser";
+}

@@ -43,7 +43,7 @@ export function Modal({
         if (e.target === e.currentTarget && !busy) onClose();
       }}
     >
-      <div className={`w-full ${width} max-h-[90vh] flex flex-col rounded-xl border border-line bg-surface shadow-xl`}>
+      <div className={`w-full ${width} max-h-[90dvh] flex flex-col rounded-xl border border-line bg-surface shadow-xl`}>
         <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-4 shrink-0">
           <h3 className="font-display text-lg font-semibold text-ink-strong">{title}</h3>
           <button
@@ -55,8 +55,9 @@ export function Modal({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="relative">
-          <div className="overflow-y-auto px-5 py-4 space-y-3">{children}</div>
+        {/* min-h-0 + flex-1 let this part shrink inside the card, so tall content scrolls instead of running off-screen */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 space-y-3">{children}</div>
           <LoadingOverlay show={busy} />
         </div>
         {footer && <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3 shrink-0">{footer}</div>}

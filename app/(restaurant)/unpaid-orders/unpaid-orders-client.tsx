@@ -138,7 +138,7 @@ export function UnpaidOrdersClient() {
             if (e.target === e.currentTarget && !saving) setCollecting(null);
           }}
         >
-          <div className="relative w-full max-w-sm rounded-xl border border-line bg-surface p-6 space-y-4">
+          <div className="relative w-full max-w-sm max-h-[90dvh] overflow-y-auto rounded-xl border border-line bg-surface p-6 space-y-4">
             <h3 className="font-display text-lg font-semibold">Collect payment — #{collecting.display_id ?? collecting.order_no}</h3>
             <div className="flex justify-between text-sm text-ink-mid">
               <span>Balance due</span>

@@ -9,6 +9,8 @@ import { printSale, type SaleSnapshot, type SaveAction } from "@/lib/posPrint";
 import { invoke } from "@tauri-apps/api/core";
 import { ClockOutDialog } from "@/components/clock-out-dialog";
 import { SessionHeartbeat } from "@/components/session-heartbeat";
+import { NewOrderAlert } from "@/components/new-order-alert";
+import { markOwnOrder } from "@/lib/order-alert";
 import {
   getProducts,
   getTables,
@@ -28,6 +30,7 @@ type Product = {
   price: number;
   is_available: boolean;
   image_url?: string | null;
+  sort_order?: number | null; // item order set on the Menu page (migration 0029)
   // joined by /api/products; supabase returns an object for many-to-one, handle an array defensively
   menu_categories?: CategoryRef | CategoryRef[] | null;
 };
@@ -153,6 +156,14 @@ export function PosClient({
     receiptFooter: "",
     paper: "80",
   }); // replaced with the tenant's real values once Settings loads
+  // Order panel width (desktop / tablet): drag its left edge to resize; remembered on this device.
+  const [sideWidth, setSideWidth] = useState(370);
+  const [resizing, setResizing] = useState(false);
+  useEffect(() => {
+    const saved = Number(localStorage.getItem("rp_pos_side_w"));
+    if (Number.isFinite(saved) && saved >= 300) setSideWidth(Math.min(saved, 720));
+  }, []);
+  const clampSide = (w: number) => Math.round(Math.max(300, Math.min(w, 720, window.innerWidth * 0.6)));
   const [clockOutOpen, setClockOutOpen] = useState(false); // desktop POS: "Clock out & switch cashier" popup
   const [profile, setProfile] = useState({ address: "", phone: "" });
   const [cart, setCart] = useState<CartLine[]>([]);
@@ -686,6 +697,7 @@ export function PosClient({
       setError(result.error || "Checkout failed");
       return;
     }
+    markOwnOrder(result.orderNo); // this device placed it: no new-order alert for it
     saleIdRef.current = crypto.randomUUID(); // next sale gets a fresh id; a failed attempt above keeps its id so a retry can't double-post
     const data = { orderNo: result.orderNo ?? "", total: result.total ?? total, balance: result.balance ?? 0, offline: !!result.offline };
 
@@ -756,11 +768,19 @@ export function PosClient({
   }, [available]);
   const activeColor = category === "All" ? null : catColors.get(category) ?? null; // background tint for the whole grid
   const q = search.trim().toLowerCase();
-  const visible = available.filter(
-    (p) =>
-      (category === "All" || categoryOf(p) === category) &&
-      (!q || p.name.toLowerCase().includes(q) || (p.name_ur ?? "").toLowerCase().includes(q))
-  );
+  // Same arrangement as Menu -> Menu products: category order first, then the item order set there (A-Z for ties).
+  const visible = available
+    .filter(
+      (p) =>
+        (category === "All" || categoryOf(p) === category) &&
+        (!q || p.name.toLowerCase().includes(q) || (p.name_ur ?? "").toLowerCase().includes(q))
+    )
+    .sort(
+      (a, b) =>
+        categoryOrderOf(a) - categoryOrderOf(b) ||
+        (Number(a.sort_order ?? Number.MAX_SAFE_INTEGER) - Number(b.sort_order ?? Number.MAX_SAFE_INTEGER)) ||
+        a.name.localeCompare(b.name)
+    );
   const qtyInCart = (id: string) => cart.find((l) => l.productId === id)?.qty ?? 0;
 
   return (
@@ -892,7 +912,7 @@ export function PosClient({
 
         {/* categories */}
         {categories.length > 0 && (
-          <div className="mb-4 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
+          <div className="mb-4 flex flex-wrap gap-2">
             {["All", ...categories].map((c) => {
               const col = c === "All" ? null : catColors.get(c) ?? null;
               const on = category === c;
@@ -908,7 +928,7 @@ export function PosClient({
                   key={c}
                   onClick={() => setCategory(c)}
                   style={style}
-                  className={`shrink-0 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
+                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
                     col
                       ? on
                         ? ""
@@ -1025,9 +1045,34 @@ export function PosClient({
       <aside
         className={`flex flex-col border border-line bg-surface p-4 sm:p-5 transition-[transform,visibility] duration-300
           fixed inset-x-0 bottom-0 z-40 max-h-[88dvh] rounded-t-2xl shadow-2xl
-          md:static md:z-auto md:m-0 md:max-h-none md:w-[340px] md:shrink-0 md:translate-y-0 md:rounded-none md:border-y-0 md:border-r-0 md:shadow-none md:visible lg:w-[370px]
+          md:relative md:z-auto md:m-0 md:max-h-none md:w-[var(--side-w)] md:shrink-0 md:translate-y-0 md:rounded-none md:border-y-0 md:border-r-0 md:shadow-none md:visible
           ${sheetOpen ? "translate-y-0 max-md:visible" : "translate-y-full max-md:invisible max-md:[transition-delay:0s,.3s]"}`}
+        style={{ ["--side-w" as string]: `${sideWidth}px` }}
       >
+        {/* drag handle: the order panel's left edge (md and up) */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Drag to resize the order panel"
+          title="Drag to resize (double-click to reset)"
+          className={`absolute inset-y-0 -left-1.5 z-10 hidden w-3 cursor-col-resize touch-none md:block ${resizing ? "bg-chili-500/30" : "hover:bg-chili-500/20"}`}
+          onDoubleClick={() => {
+            setSideWidth(370);
+            localStorage.setItem("rp_pos_side_w", "370");
+          }}
+          onPointerDown={(e) => {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            setResizing(true);
+          }}
+          onPointerMove={(e) => {
+            if (resizing) setSideWidth(clampSide(window.innerWidth - e.clientX)); // the panel hugs the right edge
+          }}
+          onPointerUp={(e) => {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+            setResizing(false);
+            localStorage.setItem("rp_pos_side_w", String(clampSide(window.innerWidth - e.clientX)));
+          }}
+        />
         <div className="mb-3 flex items-center gap-2">
           <div className="grid flex-1 grid-cols-3 gap-2">
             {ORDER_TYPES.map((t) => (
@@ -1223,7 +1268,7 @@ export function PosClient({
           className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm sm:p-4"
           onMouseDown={(e) => e.target === e.currentTarget && setNoteFor(null)}
         >
-          <div className="w-full sm:max-w-[420px] rounded-t-2xl sm:rounded-2xl border border-line bg-surface p-5 shadow-2xl">
+          <div className="w-full sm:max-w-[420px] max-h-[90dvh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-line bg-surface p-5 shadow-2xl">
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg font-semibold">{cart.find((l) => l.productId === noteFor)?.name ?? "Item note"}</h3>
               <button
@@ -1606,6 +1651,7 @@ export function PosClient({
         </div>
       )}
       <SessionHeartbeat />
+      <NewOrderAlert />
       {isTauri() && (
         <ClockOutDialog
           open={clockOutOpen}

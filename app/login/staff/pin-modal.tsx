@@ -28,7 +28,7 @@ export function PinModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
       onClick={(e) => e.target === e.currentTarget && !loading && onClose()}
     >
-      <div className="w-full max-w-[340px] rounded-2xl border border-line bg-surface shadow-2xl">
+      <div className="w-full max-w-[340px] max-h-[90dvh] overflow-y-auto rounded-2xl border border-line bg-surface shadow-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-line">
           <h3 className="font-display font-semibold text-ink-strong text-[15px]">
             Hi {employeeName.split(" ")[0]} — enter PIN

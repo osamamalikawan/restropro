@@ -1,0 +1,1501 @@
+From 3275326d8c7ebc4e7b146a3837891760cd9af186 Mon Sep 17 00:00:00 2001
+From: Claude <claude@anthropic.com>
+Date: Thu, 15 Oct 2026 05:37:19 +0000
+Subject: [PATCH] Order totals, global new-order alerts, printable bills,
+ ordering and inventory hiding
+
+- Ticket Rail: total bill on every order card (subtotal on held tickets)
+- New-order alert on every page (banner + chime + optional desktop notification), skips orders this device placed
+- Print supplier payment bill and expense voucher (receipt printer in the desktop app, print dialog in the browser)
+- Expense categories can be rearranged (Users & Permissions); Expenses lists follow it
+- Inventory: Remove hides an item (soft delete) only when no product / self-made recipe uses it
+- Popups scroll when taller than the screen (shared Modal + custom popups)
+- POS: categories wrap, order panel width is draggable, items follow the Menu page order
+- Menu: Rearrange items per category (products.sort_order)
+- Only clocked-in riders can be assigned deliveries
+- Migration 0029: products.sort_order, expense_categories.sort_order, inventory_items.deleted_at
+---
+ .../delivery-riders/riders-client.tsx         |   7 +-
+ app/(restaurant)/expenses/expenses-client.tsx |  26 +++-
+ .../inventory/inventory-client.tsx            |  39 +++++-
+ app/(restaurant)/menu/menu-client.tsx         |  99 ++++++++++++--
+ app/(restaurant)/menu/recipe-modal.tsx        |   2 +-
+ .../permissions/permissions-client.tsx        |  41 ++++--
+ app/(restaurant)/shell.tsx                    |   2 +
+ .../supplier-ledger-client.tsx                |  26 +++-
+ .../ticket-rail/ticket-rail-client.tsx        |  16 ++-
+ .../unpaid-orders/unpaid-orders-client.tsx    |   2 +-
+ app/api/dashboard/route.ts                    |   5 +
+ app/api/expense-categories/route.ts           |   8 +-
+ app/api/inventory/route.ts                    |  56 +++++++-
+ app/api/reorder/route.ts                      |  12 +-
+ app/api/riders/route.ts                       |  12 +-
+ app/api/sales/assign-rider/route.ts           |  16 ++-
+ app/api/sales/new/route.ts                    |  49 +++++++
+ app/login/staff/pin-modal.tsx                 |   2 +-
+ app/pos/pos-client.tsx                        |  64 +++++++--
+ components/desktop-sync-bar.tsx               |   2 +-
+ components/edit-order-modal.tsx               |   2 +-
+ components/new-order-alert.tsx                | 129 ++++++++++++++++++
+ components/print-bill-button.tsx              |  44 ++++++
+ components/ui/modal.tsx                       |   7 +-
+ lib/order-alert.ts                            |  26 ++++
+ lib/posPrint.ts                               |  73 ++++++++++
+ lib/print-context.ts                          |  15 ++
+ lib/products-query.ts                         |  38 ++++--
+ .../0029_item_order_and_hide_inventory.sql    |  32 +++++
+ 29 files changed, 781 insertions(+), 71 deletions(-)
+ create mode 100644 app/api/sales/new/route.ts
+ create mode 100644 components/new-order-alert.tsx
+ create mode 100644 components/print-bill-button.tsx
+ create mode 100644 lib/print-context.ts
+ create mode 100644 supabase/migrations/0029_item_order_and_hide_inventory.sql
+
+diff --git a/app/(restaurant)/delivery-riders/riders-client.tsx b/app/(restaurant)/delivery-riders/riders-client.tsx
+index 1aff9f5..6f04b81 100644
+--- a/app/(restaurant)/delivery-riders/riders-client.tsx
++++ b/app/(restaurant)/delivery-riders/riders-client.tsx
+@@ -8,7 +8,7 @@ import { fmtDateTime, fmtMoney } from "@/lib/format";
+ 
+ const PAGE = 50;
+ 
+-type Rider = { id: string; name: string; pending_orders: number; pending_amount: number; pending_due: number };
++type Rider = { id: string; name: string; pending_orders: number; pending_amount: number; pending_due: number; clocked_in?: boolean };
+ type Order = {
+   id: string;
+   order_no: number;
+@@ -168,7 +168,10 @@ export function DeliveryRidersClient() {
+         </button>
+         {riders.map((r) => (
+           <button key={r.id} onClick={() => setRiderId(r.id)} className={`rounded-xl border p-4 text-left transition-colors ${riderId === r.id ? "border-chili-500 bg-chili-500/10" : "border-line bg-surface hover:border-chili-500/50"}`}>
+-            <div className="text-sm font-semibold">{r.name}</div>
++            <div className="flex items-center justify-between gap-2 text-sm font-semibold">
++              {r.name}
++              <span className={`text-[11px] font-semibold ${r.clocked_in === false ? "text-ink-faint" : "text-basil-400"}`}>{r.clocked_in === false ? "○ Out" : "● Clocked in"}</span>
++            </div>
+             <div className="mt-1 text-xs text-ink-faint">{r.pending_orders} order{r.pending_orders === 1 ? "" : "s"} waiting · {fmtMoney(r.pending_amount)}</div>
+             <div className={`mt-2 font-mono text-sm ${r.pending_due > 0 ? "text-turmeric-400" : "text-ink-mid"}`}>{fmtMoney(r.pending_due)} <span className="font-sans text-xs text-ink-faint">to hand in</span></div>
+           </button>
+diff --git a/app/(restaurant)/expenses/expenses-client.tsx b/app/(restaurant)/expenses/expenses-client.tsx
+index 12179dc..de885ee 100644
+--- a/app/(restaurant)/expenses/expenses-client.tsx
++++ b/app/(restaurant)/expenses/expenses-client.tsx
+@@ -6,6 +6,7 @@ import { DateRange, rangeToQuery } from "@/components/ui/date-range";
+ import { fmtMoney, todayISO } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
+ import { LoadMore, useDebounced } from "@/components/ui/load-more";
++import { PrintBillButton } from "@/components/print-bill-button";
+ 
+ type ExpenseCategory = { id: string; name: string };
+ type PaymentMethod = { id: string; name: string };
+@@ -171,6 +172,7 @@ export function ExpensesClient() {
+                 <Th>Description</Th>
+                 <Th>Amount</Th>
+                 <Th>Method</Th>
++                <Th> </Th>
+               </tr>
+             </thead>
+             <tbody>
+@@ -185,10 +187,32 @@ export function ExpensesClient() {
+                   <Td className="text-ink-mid">{e.description || "—"}</Td>
+                   <Td className="font-mono font-medium">{fmtMoney(e.amount)}</Td>
+                   <Td className="text-ink-mid">{e.payment_method}</Td>
++                  <Td className="text-right">
++                    <PrintBillButton
++                      label="Print expense bill"
++                      bill={() => ({
++                        title: "EXPENSE VOUCHER",
++                        rows: [
++                          { text: `Voucher no: EX-${e.id.slice(0, 8).toUpperCase()}`, center: true },
++                          { rule: true },
++                          { left: "Date", right: e.txn_date },
++                          { left: "Type", right: e.expense_type === "recurring" ? "Recurring" : "Regular" },
++                          { left: "Category", right: e.category },
++                          ...(e.vendor ? ([{ left: "Vendor", right: e.vendor }] as const) : []),
++                          { left: "Method", right: e.payment_method },
++                          ...(e.description ? ([{ rule: true }, { text: `Details: ${e.description}` }] as const) : []),
++                          { rule: true },
++                          { left: "Amount", right: fmtMoney(e.amount), bold: true },
++                          { text: "" },
++                          { text: "Approved by: ___________________" },
++                        ],
++                      })}
++                    />
++                  </Td>
+                 </tr>
+               ))}
+               {!loading && !loadError && expenses.length === 0 && (
+-                <EmptyRow colSpan={7} label={q || from || to ? "No expenses match this search or date range." : "No expenses logged yet."} />
++                <EmptyRow colSpan={8} label={q || from || to ? "No expenses match this search or date range." : "No expenses logged yet."} />
+               )}
+             </tbody>
+           </table>
+diff --git a/app/(restaurant)/inventory/inventory-client.tsx b/app/(restaurant)/inventory/inventory-client.tsx
+index d860d67..5169dc3 100644
+--- a/app/(restaurant)/inventory/inventory-client.tsx
++++ b/app/(restaurant)/inventory/inventory-client.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ import { useEffect, useMemo, useState } from "react";
+ import { useRouter } from "next/navigation";
+-import { RotateCw, Pencil } from "lucide-react";
++import { RotateCw, Pencil, Trash2 } from "lucide-react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
+ import { fmtMoney } from "@/lib/format";
+@@ -48,6 +48,8 @@ export function InventoryClient() {
+   const [error, setError] = useState("");
+   const [saving, setSaving] = useState(false);
+   const [loadError, setLoadError] = useState("");
++  const [removeMsg, setRemoveMsg] = useState<{ ok: boolean; text: string } | null>(null);
++  const [removingId, setRemovingId] = useState<string | null>(null);
+ 
+   // "Import ingredients" — pick from the platform's master ingredient list
+   const [importOpen, setImportOpen] = useState(false);
+@@ -176,6 +178,32 @@ export function InventoryClient() {
+     setModalOpen(true);
+   }
+ 
++  /** "Remove" hides the item (nothing is deleted). The server refuses - and says why - when the item is still used in a
++   *  product recipe or in a self-made item's recipe. */
++  async function removeItem(item: Item) {
++    if (!confirm(`Remove "${item.name}" from inventory?\n\nIt will be hidden from the lists. Nothing is deleted - sales and purchase history stay as they are.`)) return;
++    setRemovingId(item.id);
++    setRemoveMsg(null);
++    try {
++      const res = await fetch("/api/inventory", {
++        method: "POST",
++        headers: { "content-type": "application/json" },
++        body: JSON.stringify({ op: "delete", row: { id: item.id } }),
++      });
++      const d = await res.json().catch(() => ({}));
++      if (!res.ok) {
++        setRemoveMsg({ ok: false, text: d.error ?? "Could not remove the item" });
++      } else {
++        setRemoveMsg({ ok: true, text: `"${item.name}" removed.` });
++        await load();
++      }
++    } catch {
++      setRemoveMsg({ ok: false, text: "Couldn't reach the server - nothing was removed." });
++    } finally {
++      setRemovingId(null);
++    }
++  }
++
+   async function save() {
+     if (!fName.trim()) {
+       setError("Item name is required");
+@@ -230,6 +258,12 @@ export function InventoryClient() {
+             Couldn&apos;t load inventory: {loadError}
+           </p>
+         )}
++        {removeMsg && (
++          <p className={`mx-5 mt-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-xs ${removeMsg.ok ? "border-basil-500/30 bg-basil-500/10 text-basil-400" : "border-crimson-500/30 bg-crimson-500/10 text-crimson-400"}`}>
++            <span>{removeMsg.text}</span>
++            <button onClick={() => setRemoveMsg(null)} className="font-bold" aria-label="Dismiss">×</button>
++          </p>
++        )}
+         <TableScroll>
+           <table className="w-full">
+             <thead>
+@@ -288,6 +322,9 @@ export function InventoryClient() {
+                         <IconBtn title="Edit" onClick={() => openEdit(i)}>
+                           <Pencil className="h-3.5 w-3.5" />
+                         </IconBtn>
++                        <IconBtn title="Remove (hide) this item" onClick={() => removingId === null && removeItem(i)}>
++                          <Trash2 className="h-3.5 w-3.5" />
++                        </IconBtn>
+                       </div>
+                     </Td>
+                   </tr>
+diff --git a/app/(restaurant)/menu/menu-client.tsx b/app/(restaurant)/menu/menu-client.tsx
+index 0015f76..f0c41d1 100644
+--- a/app/(restaurant)/menu/menu-client.tsx
++++ b/app/(restaurant)/menu/menu-client.tsx
+@@ -1,9 +1,9 @@
+ "use client";
+-import { useEffect, useState } from "react";
++import { useEffect, useRef, useState } from "react";
+ import { invoke } from "@tauri-apps/api/core";
+ import { isTauri } from "@/lib/posData";
+ import { ReorderableList } from "@/components/ui/reorderable-list";
+-import { X, Pencil, Image as ImageIcon } from "lucide-react";
++import { X, Pencil, Image as ImageIcon, ChevronLeft, ChevronRight, ArrowUpDown } from "lucide-react";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+ import { Panel, PanelHead, addBtnCls } from "@/components/ui/panel";
+ import { Switch } from "@/components/ui/switch";
+@@ -21,6 +21,7 @@ type Product = {
+   category_id: string | null;
+   image_url: string | null;
+   is_available: boolean;
++  sort_order?: number | null; // item order (migration 0029) - POS shows items in it
+   menu_categories?: { name: string } | null;
+ };
+ 
+@@ -39,6 +40,9 @@ export function MenuClient() {
+   const [catModalError, setCatModalError] = useState("");
+   const [catError, setCatError] = useState("");
+   const [filterCat, setFilterCat] = useState<string>("all"); // "all" | category id | "none"
++  const [arranging, setArranging] = useState(false); // "Rearrange" mode: drag an item or use its arrows, one category at a time
++  const [arrangeError, setArrangeError] = useState("");
++  const dragProduct = useRef<string | null>(null);
+ 
+   const [modalOpen, setModalOpen] = useState(false);
+   const [editingId, setEditingId] = useState<string | null>(null);
+@@ -214,6 +218,35 @@ export function MenuClient() {
+     loadAll();
+   }
+ 
++  /** Moves item `id` to `toIndex` among the items shown (one category) and saves that category's new order. */
++  async function moveProduct(id: string, toIndex: number) {
++    const ids = shownProducts.map((p) => p.id);
++    const from = ids.indexOf(id);
++    if (from < 0 || toIndex < 0 || toIndex >= ids.length || from === toIndex) return;
++    ids.splice(toIndex, 0, ids.splice(from, 1)[0]);
++
++    const previous = products;
++    // same positions in the full list, new order of this category's items
++    const byId = new Map(products.map((p) => [p.id, p]));
++    const slots = products.map((p, i) => (ids.includes(p.id) ? i : -1)).filter((i) => i >= 0);
++    const next = products.slice();
++    slots.forEach((slot, k) => (next[slot] = byId.get(ids[k])!));
++    setProducts(next);
++    setArrangeError("");
++
++    const res = await fetch("/api/reorder", {
++      method: "POST",
++      headers: { "content-type": "application/json" },
++      body: JSON.stringify({ kind: "products", ids }),
++    });
++    if (!res.ok) {
++      setProducts(previous);
++      setArrangeError((await res.json().catch(() => ({}))).error ?? "Could not save the new order");
++      return;
++    }
++    if (isTauri()) invoke("sync_now", { retryRejected: false }).catch(() => {}); // desktop POS picks it up now
++  }
++
+   const shownProducts = products.filter((p) =>
+     filterCat === "all" ? true : filterCat === "none" ? !p.category_id : p.category_id === filterCat
+   );
+@@ -281,11 +314,26 @@ export function MenuClient() {
+         </Panel>
+ 
+         <Panel loading={loading} loadingLabel="Loading menu…">
+-          <PanelHead title="Menu products" subtitle="Image-first cards shown to cashiers in POS">
++          <PanelHead title="Menu products" subtitle={arranging ? "Drag an item, or use its arrows - POS shows items in this order" : "Image-first cards shown to cashiers in POS"}>
++            <button
++              onClick={() => {
++                setArranging((a) => !a);
++                setArrangeError("");
++              }}
++              disabled={!arranging && filterCat === "all"}
++              title={filterCat === "all" && !arranging ? "Pick a category first, then rearrange its items" : "Change the order items appear in POS"}
++              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors disabled:opacity-40 ${
++                arranging ? "border-chili-500 bg-chili-500 text-white" : "border-line bg-raised text-ink-mid hover:border-chili-500/60 hover:text-ink-strong"
++              }`}
++            >
++              <ArrowUpDown className="h-4 w-4" />
++              {arranging ? "Done" : "Rearrange"}
++            </button>
+             <button onClick={openAdd} className={addBtnCls}>
+               + Add product
+             </button>
+           </PanelHead>
++          {arrangeError && <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{arrangeError}</p>}
+           <div className="flex flex-wrap gap-2 px-5 pt-4">
+             {[
+               { id: "all", name: "All", count: products.length, color: null as string | null | undefined },
+@@ -295,7 +343,10 @@ export function MenuClient() {
+               <button
+                 key={c.id}
+                 type="button"
+-                onClick={() => setFilterCat(c.id)}
++                onClick={() => {
++                  setFilterCat(c.id);
++                  if (c.id === "all") setArranging(false); // items are rearranged one category at a time
++                }}
+                 className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                   filterCat === c.id ? "border-chili-500 bg-chili-500 text-white" : "border-line bg-raised text-ink-mid hover:border-chili-500/60 hover:text-ink-strong"
+                 }`}
+@@ -306,13 +357,45 @@ export function MenuClient() {
+             ))}
+           </div>
+           <div className="p-5 grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(155px, 1fr))" }}>
+-            {shownProducts.map((p) => (
++            {shownProducts.map((p, idx) => (
+               <div
+                 key={p.id}
+-                className={`group relative overflow-hidden rounded-lg border border-line transition hover:-translate-y-0.5 hover:border-chili-500 ${
++                draggable={arranging}
++                onDragStart={() => (dragProduct.current = p.id)}
++                onDragOver={(e) => arranging && dragProduct.current && dragProduct.current !== p.id && e.preventDefault()}
++                onDrop={(e) => {
++                  e.preventDefault();
++                  if (arranging && dragProduct.current) moveProduct(dragProduct.current, idx);
++                  dragProduct.current = null;
++                }}
++                onDragEnd={() => (dragProduct.current = null)}
++                className={`group relative overflow-hidden rounded-lg border transition ${arranging ? "cursor-grab border-dashed border-chili-500/60 active:cursor-grabbing" : "border-line hover:-translate-y-0.5 hover:border-chili-500"} ${
+                   !p.is_available ? "opacity-40" : ""
+                 }`}
+               >
++                {arranging && (
++                  <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between bg-surface/90 px-1.5 py-1">
++                    <button
++                      type="button"
++                      onClick={() => moveProduct(p.id, idx - 1)}
++                      disabled={idx === 0}
++                      aria-label="Move earlier"
++                      className="grid h-7 w-7 place-items-center rounded-md border border-line bg-raised text-ink-strong hover:border-chili-500 disabled:opacity-30"
++                    >
++                      <ChevronLeft className="h-4 w-4" />
++                    </button>
++                    <span className="font-mono text-[11px] font-bold text-ink-mid">{idx + 1}</span>
++                    <button
++                      type="button"
++                      onClick={() => moveProduct(p.id, idx + 1)}
++                      disabled={idx === shownProducts.length - 1}
++                      aria-label="Move later"
++                      className="grid h-7 w-7 place-items-center rounded-md border border-line bg-raised text-ink-strong hover:border-chili-500 disabled:opacity-30"
++                    >
++                      <ChevronRight className="h-4 w-4" />
++                    </button>
++                  </div>
++                )}
+                 <div className="h-24 w-full bg-raised bg-cover bg-center" style={p.image_url ? { backgroundImage: `url('${p.image_url}')` } : undefined} />
+                 <div className="p-3">
+                   <div className="mb-1.5 text-[13px] font-bold leading-tight">{p.name}</div>
+@@ -323,13 +406,13 @@ export function MenuClient() {
+                   )}
+                   <div className="font-mono text-[13px] font-bold text-basil-400">{fmtMoney(p.price)}</div>
+                 </div>
+-                <button
++                {!arranging && <button
+                   onClick={() => openEdit(p)}
+                   title="Edit"
+                   className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg bg-surface/90 border border-line opacity-0 transition group-hover:opacity-100 hover:bg-raised"
+                 >
+                   <Pencil className="h-3.5 w-3.5" />
+-                </button>
++                </button>}
+               </div>
+             ))}
+             {shownProducts.length === 0 && (
+diff --git a/app/(restaurant)/menu/recipe-modal.tsx b/app/(restaurant)/menu/recipe-modal.tsx
+index 309acd8..e6a0221 100644
+--- a/app/(restaurant)/menu/recipe-modal.tsx
++++ b/app/(restaurant)/menu/recipe-modal.tsx
+@@ -88,7 +88,7 @@ export function RecipeModal({
+ 
+   return (
+     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[120]">
+-      <div className="w-full max-w-md rounded-xl border border-line bg-surface p-6 space-y-4">
++      <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-xl border border-line bg-surface p-6 space-y-4">
+         <div className="flex items-center justify-between">
+           <h3 className="font-display text-lg font-semibold">Recipe — {productName}</h3>
+           <button onClick={onClose} className="text-ink-faint hover:text-ink-strong">
+diff --git a/app/(restaurant)/permissions/permissions-client.tsx b/app/(restaurant)/permissions/permissions-client.tsx
+index 9c9e627..94f689c 100644
+--- a/app/(restaurant)/permissions/permissions-client.tsx
++++ b/app/(restaurant)/permissions/permissions-client.tsx
+@@ -1,5 +1,6 @@
+ "use client";
+ import { useEffect, useMemo, useState } from "react";
++import { ReorderableList } from "@/components/ui/reorderable-list";
+ import { LoadingOverlay, PageLoader, Spinner } from "@/components/ui/loading";
+ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
+ import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
+@@ -288,6 +289,22 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean
+     setCategories((await res2.json()).categories ?? []);
+   }
+ 
++  /** Saves a new order of the expense categories (drag a row, or use its arrows). The Expenses page list follows it. */
++  async function reorderCategories(next: Category[]) {
++    const previous = categories;
++    setCategories(next);
++    setCatError("");
++    const res = await fetch("/api/reorder", {
++      method: "POST",
++      headers: { "content-type": "application/json" },
++      body: JSON.stringify({ kind: "expense_categories", ids: next.map((c) => c.id) }),
++    });
++    if (!res.ok) {
++      setCategories(previous);
++      setCatError((await res.json().catch(() => ({}))).error || "Could not save the new order");
++    }
++  }
++
+   async function removeCategory(cat: Category) {
+     setCatError("");
+     const res = await fetch("/api/expense-categories", {
+@@ -547,17 +564,21 @@ export function PermissionsClient({ canManageUsers }: { canManageUsers: boolean
+         <div className="relative rounded-xl border border-line bg-surface p-6">
+           <div className="mb-4">
+             <h3 className="font-display font-semibold text-ink-strong text-[15px]">Expense categories</h3>
+-            <div className="text-xs text-ink-faint mt-0.5">Used when logging expense ledger entries</div>
++            <div className="text-xs text-ink-faint mt-0.5">Used when logging expense ledger entries - drag to set the order they are listed in</div>
+           </div>
+-          <div className="space-y-1.5 mb-3">
+-            {categories.map((c) => (
+-              <div key={c.id} className="flex items-center justify-between rounded-lg bg-raised px-3 py-2 text-sm">
+-                <span>{c.name}</span>
+-                <button onClick={() => removeCategory(c)} className="text-ink-faint hover:text-crimson-400 text-xs">
+-                  ✕
+-                </button>
+-              </div>
+-            ))}
++          <div className="mb-3">
++            <ReorderableList
++              items={categories}
++              onChange={reorderCategories}
++              renderRow={(c) => (
++                <>
++                  <span className="min-w-0 truncate">{c.name}</span>
++                  <button onClick={() => removeCategory(c)} className="text-ink-faint hover:text-crimson-400 text-xs shrink-0" aria-label={`Remove ${c.name}`}>
++                    ✕
++                  </button>
++                </>
++              )}
++            />
+             {categories.length === 0 && <p className="text-xs text-ink-faint">No categories yet — add one below.</p>}
+           </div>
+           {catError && <p className="text-xs text-crimson-400 mb-2">{catError}</p>}
+diff --git a/app/(restaurant)/shell.tsx b/app/(restaurant)/shell.tsx
+index 4e22403..f04c6d5 100644
+--- a/app/(restaurant)/shell.tsx
++++ b/app/(restaurant)/shell.tsx
+@@ -1,5 +1,6 @@
+ "use client";
+ import { SessionHeartbeat } from "@/components/session-heartbeat";
++import { NewOrderAlert } from "@/components/new-order-alert";
+ import { useState } from "react";
+ import { Sidebar } from "./sidebar";
+ import { Topbar } from "./topbar";
+@@ -36,6 +37,7 @@ export function DashboardShell({
+   return (
+     <div className="h-dvh overflow-hidden bg-canvas text-ink-strong flex">
+       <SessionHeartbeat />
++      <NewOrderAlert />
+       <Sidebar
+         role={role}
+         restaurantName={restaurantName}
+diff --git a/app/(restaurant)/supplier-ledger/supplier-ledger-client.tsx b/app/(restaurant)/supplier-ledger/supplier-ledger-client.tsx
+index f82126e..6af488d 100644
+--- a/app/(restaurant)/supplier-ledger/supplier-ledger-client.tsx
++++ b/app/(restaurant)/supplier-ledger/supplier-ledger-client.tsx
+@@ -5,6 +5,7 @@ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/compon
+ import { fmtMoney, todayISO } from "@/lib/format";
+ import { fetchJson } from "@/lib/fetch-json";
+ import { LoadMore, useProgressive } from "@/components/ui/load-more";
++import { PrintBillButton } from "@/components/print-bill-button";
+ 
+ type Supplier = { id: string; name: string };
+ type PaymentMethod = { id: string; name: string };
+@@ -124,6 +125,7 @@ export function SupplierLedgerClient() {
+                   <Th>Amount</Th>
+                   <Th>Method</Th>
+                   <Th>Note</Th>
++                  <Th> </Th>
+                 </tr>
+               </thead>
+               <tbody>
+@@ -136,9 +138,31 @@ export function SupplierLedgerClient() {
+                       <Badge>{l.method}</Badge>
+                     </Td>
+                     <Td className="text-ink-mid">{l.note || "—"}</Td>
++                    <Td className="text-right">
++                      <PrintBillButton
++                        label="Print payment bill"
++                        bill={() => ({
++                          title: "SUPPLIER PAYMENT",
++                          rows: [
++                            { text: `Bill no: SP-${l.id.slice(0, 8).toUpperCase()}`, center: true },
++                            { rule: true },
++                            { left: "Date", right: l.txn_date },
++                            { left: "Supplier", right: l.suppliers?.name ?? "-" },
++                            { left: "Method", right: l.method },
++                            { rule: true },
++                            { left: "Amount paid", right: fmtMoney(l.amount), bold: true },
++                            ...(l.note ? ([{ rule: true }, { text: `Note: ${l.note}` }] as const) : []),
++                            { text: "" },
++                            { text: "Paid by: ______________________" },
++                            { text: "" },
++                            { text: "Received by: ___________________" },
++                          ],
++                        })}
++                      />
++                    </Td>
+                   </tr>
+                 ))}
+-                {entries.length === 0 && <EmptyRow colSpan={5} label="No payments logged yet." />}
++                {entries.length === 0 && <EmptyRow colSpan={6} label="No payments logged yet." />}
+               </tbody>
+             </table>
+           </TableScroll>
+diff --git a/app/(restaurant)/ticket-rail/ticket-rail-client.tsx b/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
+index f0b0de2..d3675f5 100644
+--- a/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
++++ b/app/(restaurant)/ticket-rail/ticket-rail-client.tsx
+@@ -94,7 +94,7 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
+   const [cancelling, setCancelling] = useState<Sale | null>(null);
+   const [cancelError, setCancelError] = useState("");
+   // assign rider popup
+-  const [riders, setRiders] = useState<{ id: string; name: string; pending_orders: number }[]>([]);
++  const [riders, setRiders] = useState<{ id: string; name: string; pending_orders: number; clocked_in?: boolean }[]>([]);
+   const [assigning, setAssigning] = useState<Sale | null>(null);
+   const [pickRider, setPickRider] = useState("");
+   const [assignBusy, setAssignBusy] = useState(false);
+@@ -583,6 +583,14 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
+                           {lines.length > 6 && <div className="text-ink-faint">+{lines.length - 6} more</div>}
+                         </div>
+ 
++                        {/* the order's total bill (a held ticket has no tax / charges yet, so it shows the items' subtotal) */}
++                        <div className="mt-2.5 flex items-baseline justify-between rounded-md bg-canvas px-2.5 py-1.5">
++                          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">{s ? "Total bill" : "Subtotal"}</span>
++                          <span className="font-mono text-sm font-bold text-ink-strong">
++                            {fmtMoney(s ? s.total : t!.cart.reduce((sum, i) => sum + i.price * i.qty, 0))}
++                          </span>
++                        </div>
++
+                         <div className="mt-3 flex items-center justify-between border-t border-dashed border-line pt-3">
+                           <span className="font-mono text-[11px] text-ink-faint">{fmtTime(c.at)}</span>
+                           <div className="flex gap-1.5">
+@@ -726,9 +734,13 @@ export function TicketRailClient({ canCancel, restaurantId }: { canCancel: boole
+         {assignError && <p className="rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">{assignError}</p>}
+         {riders.length === 0 ? (
+           <p className="text-sm text-ink-mid">No delivery riders yet. Open an employee under Employees and tick “Delivery rider”.</p>
++        ) : riders.filter((r) => r.clocked_in !== false || r.id === assigning?.rider_employee_id).length === 0 ? (
++          <p className="text-sm text-ink-mid">
++            No delivery rider is clocked in right now. Only riders who are clocked in can be given deliveries - mark them in on the Attendance page first.
++          </p>
+         ) : (
+           <div className="space-y-2">
+-            {riders.map((r) => (
++            {riders.filter((r) => r.clocked_in !== false || r.id === assigning?.rider_employee_id).map((r) => (
+               <label key={r.id} className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-sm ${pickRider === r.id ? "border-chili-500 bg-chili-500/10" : "border-line bg-raised"}`}>
+                 <span className="flex items-center gap-2.5">
+                   <input type="radio" name="rider" checked={pickRider === r.id} onChange={() => setPickRider(r.id)} className="accent-chili-500" />
+diff --git a/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx b/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx
+index 76fc7e1..4083049 100644
+--- a/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx
++++ b/app/(restaurant)/unpaid-orders/unpaid-orders-client.tsx
+@@ -138,7 +138,7 @@ export function UnpaidOrdersClient() {
+             if (e.target === e.currentTarget && !saving) setCollecting(null);
+           }}
+         >
+-          <div className="relative w-full max-w-sm rounded-xl border border-line bg-surface p-6 space-y-4">
++          <div className="relative w-full max-w-sm max-h-[90dvh] overflow-y-auto rounded-xl border border-line bg-surface p-6 space-y-4">
+             <h3 className="font-display text-lg font-semibold">Collect payment — #{collecting.display_id ?? collecting.order_no}</h3>
+             <div className="flex justify-between text-sm text-ink-mid">
+               <span>Balance due</span>
+diff --git a/app/api/dashboard/route.ts b/app/api/dashboard/route.ts
+index 446ad60..479e195 100644
+--- a/app/api/dashboard/route.ts
++++ b/app/api/dashboard/route.ts
+@@ -19,5 +19,10 @@ export async function GET() {
+   const open = await admin.from("attendance_records").select("employee_id").eq("restaurant_id", session.restaurantId).eq("status", "open");
+   if (!open.error) summary.activeEmployees = new Set((open.data ?? []).map((r) => r.employee_id as string)).size;
+ 
++  // Low stock: the summary counts every inventory row, including items that were removed (hidden) from the Inventory
++  // page. Recount the visible ones with the same rule the Inventory page shows ("Low stock" = below the minimum).
++  const stock = await admin.from("inventory_items").select("current_stock, min_stock").eq("restaurant_id", session.restaurantId).is("deleted_at", null);
++  if (!stock.error) summary.lowStockCount = (stock.data ?? []).filter((i) => Number(i.current_stock) < Number(i.min_stock)).length;
++
+   return NextResponse.json({ summary });
+ }
+diff --git a/app/api/expense-categories/route.ts b/app/api/expense-categories/route.ts
+index 2b95c45..1c136ff 100644
+--- a/app/api/expense-categories/route.ts
++++ b/app/api/expense-categories/route.ts
+@@ -7,11 +7,17 @@ export async function GET() {
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+ 
+   const admin = createAdminClient();
+-  let { data } = await admin
++  // in the order set on Users & Permissions (migration 0029); A-Z until that migration is run
++  let ordered = await admin
+     .from("expense_categories")
+     .select("id, name")
+     .eq("restaurant_id", session.restaurantId)
++    .order("sort_order")
+     .order("name");
++  if (ordered.error) {
++    ordered = await admin.from("expense_categories").select("id, name").eq("restaurant_id", session.restaurantId).order("name");
++  }
++  let data = ordered.data;
+ 
+   if (!data || data.length === 0) {
+     const defaults = ["Utilities", "Rent", "Maintenance", "Marketing", "Salaries", "Other"];
+diff --git a/app/api/inventory/route.ts b/app/api/inventory/route.ts
+index d82905c..acee549 100644
+--- a/app/api/inventory/route.ts
++++ b/app/api/inventory/route.ts
+@@ -7,13 +7,19 @@ export async function GET() {
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+ 
+   const admin = createAdminClient();
+-  const { data, error } = await admin
++  const cols = "id, name, unit, item_type, category, current_stock, min_stock, cost, updated_at";
++  // items removed from the Inventory page are hidden (deleted_at, migration 0029), never listed again
++  let res: { data: unknown; error: { message: string } | null } = await admin
+     .from("inventory_items")
+-    .select("id, name, unit, item_type, category, current_stock, min_stock, cost, updated_at")
++    .select(cols)
+     .eq("restaurant_id", session.restaurantId)
++    .is("deleted_at", null)
+     .order("name");
+-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+-  return NextResponse.json({ inventoryItems: data });
++  if (res.error && /deleted_at/.test(res.error.message)) {
++    res = await admin.from("inventory_items").select(cols).eq("restaurant_id", session.restaurantId).order("name");
++  }
++  if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
++  return NextResponse.json({ inventoryItems: res.data });
+ }
+ 
+ export async function POST(req: Request) {
+@@ -28,8 +34,46 @@ export async function POST(req: Request) {
+ 
+   const admin = createAdminClient();
+   if (op === "delete") {
+-    const { error } = await admin.from("inventory_items").delete().eq("id", row.id).eq("restaurant_id", session.restaurantId);
+-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
++    // "Remove" hides the item (nothing is deleted, history stays intact) - but only when nothing uses it:
++    // not an ingredient in any product's recipe and not an ingredient in any self-made item's recipe.
++    const { data: item } = await admin.from("inventory_items").select("id, name").eq("id", row.id).eq("restaurant_id", session.restaurantId).maybeSingle();
++    if (!item) return NextResponse.json({ error: "Item not found" }, { status: 404 });
++
++    // who uses it? (plain queries - a failed lookup must never be read as "unused")
++    const [rec, prod] = await Promise.all([
++      admin.from("recipe_items").select("product_id").eq("inventory_item_id", row.id),
++      admin.from("production_recipe_items").select("self_made_item_id").eq("ingredient_item_id", row.id),
++    ]);
++    if (rec.error || prod.error) return NextResponse.json({ error: `Could not check where this item is used: ${(rec.error ?? prod.error)!.message}` }, { status: 500 });
++
++    const productIds = [...new Set((rec.data ?? []).map((r) => r.product_id as string))];
++    const selfMadeIds = [...new Set((prod.data ?? []).map((r) => r.self_made_item_id as string))];
++    let productNames: string[] = [];
++    let selfMadeNames: string[] = [];
++    if (productIds.length) {
++      // products that have been removed from the menu don't count
++      const { data, error } = await admin.from("products").select("name").in("id", productIds).eq("restaurant_id", session.restaurantId).is("deleted_at", null);
++      if (error) return NextResponse.json({ error: `Could not check where this item is used: ${error.message}` }, { status: 500 });
++      productNames = (data ?? []).map((p) => p.name as string);
++    }
++    if (selfMadeIds.length) {
++      // self-made items that were themselves removed don't count
++      let q = await admin.from("inventory_items").select("name").in("id", selfMadeIds).eq("restaurant_id", session.restaurantId).is("deleted_at", null);
++      if (q.error && /deleted_at/.test(q.error.message)) q = await admin.from("inventory_items").select("name").in("id", selfMadeIds).eq("restaurant_id", session.restaurantId);
++      if (q.error) return NextResponse.json({ error: `Could not check where this item is used: ${q.error.message}` }, { status: 500 });
++      selfMadeNames = (q.data ?? []).map((i) => i.name as string);
++    }
++    if (productNames.length || selfMadeNames.length) {
++      const show = (a: string[]) => a.slice(0, 5).join(", ") + (a.length > 5 ? ` and ${a.length - 5} more` : "");
++      const parts = [productNames.length ? `product recipes (${show(productNames)})` : "", selfMadeNames.length ? `self-made item recipes (${show(selfMadeNames)})` : ""].filter(Boolean);
++      return NextResponse.json({ error: `"${item.name}" can't be removed - it is used in ${parts.join(" and ")}. Take it out of those recipes first.`, usedIn: { products: productNames, selfMade: selfMadeNames } }, { status: 409 });
++    }
++
++    const { error } = await admin.from("inventory_items").update({ deleted_at: new Date().toISOString() }).eq("id", row.id).eq("restaurant_id", session.restaurantId);
++    if (error) {
++      const missing = /deleted_at/.test(error.message);
++      return NextResponse.json({ error: missing ? "Run migration 0029_item_order_and_hide_inventory.sql in Supabase first" : error.message }, { status: 500 });
++    }
+   } else {
+     const payload = { ...row, restaurant_id: session.restaurantId, updated_at: new Date().toISOString() };
+     const { error } = await admin.from("inventory_items").upsert(payload);
+diff --git a/app/api/reorder/route.ts b/app/api/reorder/route.ts
+index d1e2f81..c300f49 100644
+--- a/app/api/reorder/route.ts
++++ b/app/api/reorder/route.ts
+@@ -3,12 +3,14 @@ import { requireStaffSession } from "@/lib/auth/require-staff";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ import { hasModuleAccess } from "@/lib/permissions";
+ 
+-const KINDS = ["payment_methods", "tables", "delivery_areas"] as const;
++const KINDS = ["payment_methods", "tables", "delivery_areas", "products", "expense_categories"] as const;
+ type Kind = (typeof KINDS)[number];
+ 
+ /** Saves a drag-and-drop / up-down reordering from Settings. Body: { kind, ids } where ids is the
+  *  full list in its new order. Same permission as editing that list: payment methods need the
+- *  "settings" module; tables and delivery areas need admin/manager (see their own routes). */
++ *  "settings" module; tables, delivery areas and menu items (products) need admin/manager; expense categories need
++ *  admin (like the rest of the Users & Permissions page). Menu items are reordered per category: send only that
++ *  category's ids - POS lists items by category first, then by this order. */
+ export async function POST(req: Request) {
+   const session = await requireStaffSession();
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+@@ -21,7 +23,9 @@ export async function POST(req: Request) {
+   const allowed =
+     kind === "payment_methods"
+       ? await hasModuleAccess(session.restaurantId, session.role, "settings")
+-      : session.role === "admin" || session.role === "manager";
++      : kind === "expense_categories"
++        ? session.role === "admin"
++        : session.role === "admin" || session.role === "manager";
+   if (!allowed) return NextResponse.json({ error: "Not permitted" }, { status: 403 });
+ 
+   const admin = createAdminClient();
+@@ -38,7 +42,7 @@ export async function POST(req: Request) {
+   if (failed?.error) {
+     const missing = /sort_order/.test(failed.error.message);
+     return NextResponse.json(
+-      { error: missing ? "Run migration 0016 in Supabase first (adds the sort_order column)." : failed.error.message },
++      { error: missing ? "Run migration 0016 / 0029 in Supabase first (adds the sort_order column)." : failed.error.message },
+       { status: 500 }
+     );
+   }
+diff --git a/app/api/riders/route.ts b/app/api/riders/route.ts
+index 54ad8d6..0a3add1 100644
+--- a/app/api/riders/route.ts
++++ b/app/api/riders/route.ts
+@@ -3,9 +3,12 @@ import { requireStaffSession } from "@/lib/auth/require-staff";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ import { hasModuleAccess } from "@/lib/permissions";
+ import { dueOf, isMissingRiderColumn, RIDER_MIGRATION_WARNING, round2 } from "@/lib/riders";
++import { closeExpiredAttendance } from "@/lib/attendance";
+ 
+ /** Delivery riders (employees marked "Delivery rider") with what each still has to hand in:
+- *  pending_orders / pending_amount (value of orders assigned and not yet submitted) / pending_due (cash they owe). */
++ *  pending_orders / pending_amount (value of orders assigned and not yet submitted) / pending_due (cash they owe).
++ *  clocked_in: whether they are clocked in on the Attendance page right now - only clocked-in riders can be given
++ *  deliveries (Ticket Rail -> Assign rider). If attendance isn't set up yet (migration 0025), everyone counts as clocked in. */
+ export async function GET() {
+   const session = await requireStaffSession();
+   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+@@ -21,6 +24,11 @@ export async function GET() {
+     .order("name");
+   if (error) return NextResponse.json({ error: isMissingRiderColumn(error) ? RIDER_MIGRATION_WARNING : error.message }, { status: 500 });
+ 
++  await closeExpiredAttendance(admin, session.restaurantId); // anyone whose shift has ended is clocked out first
++  const att = await admin.from("attendance_records").select("employee_id").eq("restaurant_id", session.restaurantId).eq("status", "open");
++  const clockedIn = new Set((att.data ?? []).map((r) => r.employee_id as string));
++  const attendanceReady = !att.error;
++
+   const stats = new Map<string, { pending_orders: number; pending_amount: number; pending_due: number }>();
+   for (const r of riders ?? []) stats.set(r.id as string, { pending_orders: 0, pending_amount: 0, pending_due: 0 });
+ 
+@@ -48,7 +56,7 @@ export async function GET() {
+   return NextResponse.json({
+     riders: (riders ?? []).map((r) => {
+       const st = stats.get(r.id as string)!;
+-      return { ...r, pending_orders: st.pending_orders, pending_amount: round2(st.pending_amount), pending_due: round2(st.pending_due) };
++      return { ...r, clocked_in: attendanceReady ? clockedIn.has(r.id as string) : true, pending_orders: st.pending_orders, pending_amount: round2(st.pending_amount), pending_due: round2(st.pending_due) };
+     }),
+   });
+ }
+diff --git a/app/api/sales/assign-rider/route.ts b/app/api/sales/assign-rider/route.ts
+index 280e667..beb2daf 100644
+--- a/app/api/sales/assign-rider/route.ts
++++ b/app/api/sales/assign-rider/route.ts
+@@ -3,6 +3,7 @@ import { requireStaffSession } from "@/lib/auth/require-staff";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ import { hasModuleAccess } from "@/lib/permissions";
+ import { isMissingRiderColumn, RIDER_MIGRATION_WARNING } from "@/lib/riders";
++import { closeExpiredAttendance } from "@/lib/attendance";
+ 
+ /** Assign a delivery order to a rider (or take the rider off with riderId: null). Only delivery orders, and only
+  *  until the rider has handed in the money for them. Body: { saleId, riderId | null }. */
+@@ -17,7 +18,7 @@ export async function POST(req: Request) {
+   const admin = createAdminClient();
+   const { data: sale, error } = await admin
+     .from("sales")
+-    .select("id, order_type, status, rider_settlement_id")
++    .select("id, order_type, status, rider_settlement_id, rider_employee_id")
+     .eq("id", saleId)
+     .eq("restaurant_id", session.restaurantId)
+     .maybeSingle();
+@@ -35,6 +36,19 @@ export async function POST(req: Request) {
+       .eq("restaurant_id", session.restaurantId)
+       .maybeSingle();
+     if (!rider || !rider.is_rider || rider.status === "left") return NextResponse.json({ error: "That person is not an active delivery rider" }, { status: 400 });
++
++    // Only riders who are clocked in (Attendance page) can be given a delivery. (Keeping the rider an order already has is fine.)
++    if (sale.rider_employee_id !== riderId) {
++      await closeExpiredAttendance(admin, session.restaurantId);
++      const { data: open, error: attErr } = await admin
++        .from("attendance_records")
++        .select("id")
++        .eq("restaurant_id", session.restaurantId)
++        .eq("employee_id", riderId)
++        .eq("status", "open")
++        .limit(1);
++      if (!attErr && !open?.length) return NextResponse.json({ error: "That rider is not clocked in - mark them in on the Attendance page first" }, { status: 409 });
++    }
+   }
+ 
+   const { error: upErr } = await admin
+diff --git a/app/api/sales/new/route.ts b/app/api/sales/new/route.ts
+new file mode 100644
+index 0000000..15438a5
+--- /dev/null
++++ b/app/api/sales/new/route.ts
+@@ -0,0 +1,49 @@
++import { NextResponse } from "next/server";
++import { requireStaffSession } from "@/lib/auth/require-staff";
++import { createAdminClient } from "@/lib/supabase/admin";
++import { hasModuleAccess } from "@/lib/permissions";
++
++/** New-order alerts: the orders placed after `?since=` (an ISO time returned by the previous call), newest last.
++ *  Polled every few seconds by the app shell and the POS so a chime + banner can appear on whatever page is open -
++ *  orders are often placed on other devices. Without `since` it only returns { now } (the starting point).
++ *  `since` is never older than 10 minutes, so a long-closed tab doesn't replay old orders. */
++export async function GET(req: Request) {
++  const session = await requireStaffSession();
++  if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
++  if (!(await hasModuleAccess(session.restaurantId, session.role, "sales"))) return NextResponse.json({ error: "Not permitted" }, { status: 403 });
++
++  const now = new Date().toISOString();
++  const raw = new URL(req.url).searchParams.get("since");
++  if (!raw || !Number.isFinite(Date.parse(raw))) return NextResponse.json({ now, sales: [] });
++  const since = new Date(Math.max(Date.parse(raw), Date.now() - 10 * 60_000)).toISOString();
++
++  const admin = createAdminClient();
++  const { data, error } = await admin
++    .from("sales")
++    .select("id, order_no, display_id, total, order_type, created_at, cashier_employee_id")
++    .eq("restaurant_id", session.restaurantId)
++    .neq("status", "cancelled")
++    .gt("created_at", since)
++    .order("created_at", { ascending: true })
++    .limit(20);
++  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
++
++  const ids = [...new Set((data ?? []).map((s) => s.cashier_employee_id as string | null).filter(Boolean) as string[])];
++  const names = new Map<string, string>();
++  if (ids.length) {
++    const { data: emps } = await admin.from("employees").select("id, name").in("id", ids);
++    for (const e of emps ?? []) names.set(e.id as string, e.name as string);
++  }
++  return NextResponse.json({
++    now,
++    sales: (data ?? []).map((s) => ({
++      id: s.id,
++      order_no: s.order_no,
++      display_id: s.display_id ?? null,
++      total: Number(s.total) || 0,
++      order_type: s.order_type,
++      created_at: s.created_at,
++      cashier: s.cashier_employee_id ? names.get(s.cashier_employee_id as string) ?? null : null,
++    })),
++  });
++}
+diff --git a/app/login/staff/pin-modal.tsx b/app/login/staff/pin-modal.tsx
+index ec3cb83..3529949 100644
+--- a/app/login/staff/pin-modal.tsx
++++ b/app/login/staff/pin-modal.tsx
+@@ -28,7 +28,7 @@ export function PinModal({
+       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+       onClick={(e) => e.target === e.currentTarget && !loading && onClose()}
+     >
+-      <div className="w-full max-w-[340px] rounded-2xl border border-line bg-surface shadow-2xl">
++      <div className="w-full max-w-[340px] max-h-[90dvh] overflow-y-auto rounded-2xl border border-line bg-surface shadow-2xl">
+         <div className="flex items-center justify-between px-5 py-4 border-b border-line">
+           <h3 className="font-display font-semibold text-ink-strong text-[15px]">
+             Hi {employeeName.split(" ")[0]} — enter PIN
+diff --git a/app/pos/pos-client.tsx b/app/pos/pos-client.tsx
+index 4c68f4b..92f2742 100644
+--- a/app/pos/pos-client.tsx
++++ b/app/pos/pos-client.tsx
+@@ -9,6 +9,8 @@ import { printSale, type SaleSnapshot, type SaveAction } from "@/lib/posPrint";
+ import { invoke } from "@tauri-apps/api/core";
+ import { ClockOutDialog } from "@/components/clock-out-dialog";
+ import { SessionHeartbeat } from "@/components/session-heartbeat";
++import { NewOrderAlert } from "@/components/new-order-alert";
++import { markOwnOrder } from "@/lib/order-alert";
+ import {
+   getProducts,
+   getTables,
+@@ -28,6 +30,7 @@ type Product = {
+   price: number;
+   is_available: boolean;
+   image_url?: string | null;
++  sort_order?: number | null; // item order set on the Menu page (migration 0029)
+   // joined by /api/products; supabase returns an object for many-to-one, handle an array defensively
+   menu_categories?: CategoryRef | CategoryRef[] | null;
+ };
+@@ -153,6 +156,14 @@ export function PosClient({
+     receiptFooter: "",
+     paper: "80",
+   }); // replaced with the tenant's real values once Settings loads
++  // Order panel width (desktop / tablet): drag its left edge to resize; remembered on this device.
++  const [sideWidth, setSideWidth] = useState(370);
++  const [resizing, setResizing] = useState(false);
++  useEffect(() => {
++    const saved = Number(localStorage.getItem("rp_pos_side_w"));
++    if (Number.isFinite(saved) && saved >= 300) setSideWidth(Math.min(saved, 720));
++  }, []);
++  const clampSide = (w: number) => Math.round(Math.max(300, Math.min(w, 720, window.innerWidth * 0.6)));
+   const [clockOutOpen, setClockOutOpen] = useState(false); // desktop POS: "Clock out & switch cashier" popup
+   const [profile, setProfile] = useState({ address: "", phone: "" });
+   const [cart, setCart] = useState<CartLine[]>([]);
+@@ -686,6 +697,7 @@ export function PosClient({
+       setError(result.error || "Checkout failed");
+       return;
+     }
++    markOwnOrder(result.orderNo); // this device placed it: no new-order alert for it
+     saleIdRef.current = crypto.randomUUID(); // next sale gets a fresh id; a failed attempt above keeps its id so a retry can't double-post
+     const data = { orderNo: result.orderNo ?? "", total: result.total ?? total, balance: result.balance ?? 0, offline: !!result.offline };
+ 
+@@ -756,11 +768,19 @@ export function PosClient({
+   }, [available]);
+   const activeColor = category === "All" ? null : catColors.get(category) ?? null; // background tint for the whole grid
+   const q = search.trim().toLowerCase();
+-  const visible = available.filter(
+-    (p) =>
+-      (category === "All" || categoryOf(p) === category) &&
+-      (!q || p.name.toLowerCase().includes(q) || (p.name_ur ?? "").toLowerCase().includes(q))
+-  );
++  // Same arrangement as Menu -> Menu products: category order first, then the item order set there (A-Z for ties).
++  const visible = available
++    .filter(
++      (p) =>
++        (category === "All" || categoryOf(p) === category) &&
++        (!q || p.name.toLowerCase().includes(q) || (p.name_ur ?? "").toLowerCase().includes(q))
++    )
++    .sort(
++      (a, b) =>
++        categoryOrderOf(a) - categoryOrderOf(b) ||
++        (Number(a.sort_order ?? Number.MAX_SAFE_INTEGER) - Number(b.sort_order ?? Number.MAX_SAFE_INTEGER)) ||
++        a.name.localeCompare(b.name)
++    );
+   const qtyInCart = (id: string) => cart.find((l) => l.productId === id)?.qty ?? 0;
+ 
+   return (
+@@ -892,7 +912,7 @@ export function PosClient({
+ 
+         {/* categories */}
+         {categories.length > 0 && (
+-          <div className="mb-4 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
++          <div className="mb-4 flex flex-wrap gap-2">
+             {["All", ...categories].map((c) => {
+               const col = c === "All" ? null : catColors.get(c) ?? null;
+               const on = category === c;
+@@ -908,7 +928,7 @@ export function PosClient({
+                   key={c}
+                   onClick={() => setCategory(c)}
+                   style={style}
+-                  className={`shrink-0 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
++                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
+                     col
+                       ? on
+                         ? ""
+@@ -1025,9 +1045,34 @@ export function PosClient({
+       <aside
+         className={`flex flex-col border border-line bg-surface p-4 sm:p-5 transition-[transform,visibility] duration-300
+           fixed inset-x-0 bottom-0 z-40 max-h-[88dvh] rounded-t-2xl shadow-2xl
+-          md:static md:z-auto md:m-0 md:max-h-none md:w-[340px] md:shrink-0 md:translate-y-0 md:rounded-none md:border-y-0 md:border-r-0 md:shadow-none md:visible lg:w-[370px]
++          md:relative md:z-auto md:m-0 md:max-h-none md:w-[var(--side-w)] md:shrink-0 md:translate-y-0 md:rounded-none md:border-y-0 md:border-r-0 md:shadow-none md:visible
+           ${sheetOpen ? "translate-y-0 max-md:visible" : "translate-y-full max-md:invisible max-md:[transition-delay:0s,.3s]"}`}
++        style={{ ["--side-w" as string]: `${sideWidth}px` }}
+       >
++        {/* drag handle: the order panel's left edge (md and up) */}
++        <div
++          role="separator"
++          aria-orientation="vertical"
++          aria-label="Drag to resize the order panel"
++          title="Drag to resize (double-click to reset)"
++          className={`absolute inset-y-0 -left-1.5 z-10 hidden w-3 cursor-col-resize touch-none md:block ${resizing ? "bg-chili-500/30" : "hover:bg-chili-500/20"}`}
++          onDoubleClick={() => {
++            setSideWidth(370);
++            localStorage.setItem("rp_pos_side_w", "370");
++          }}
++          onPointerDown={(e) => {
++            e.currentTarget.setPointerCapture(e.pointerId);
++            setResizing(true);
++          }}
++          onPointerMove={(e) => {
++            if (resizing) setSideWidth(clampSide(window.innerWidth - e.clientX)); // the panel hugs the right edge
++          }}
++          onPointerUp={(e) => {
++            e.currentTarget.releasePointerCapture(e.pointerId);
++            setResizing(false);
++            localStorage.setItem("rp_pos_side_w", String(clampSide(window.innerWidth - e.clientX)));
++          }}
++        />
+         <div className="mb-3 flex items-center gap-2">
+           <div className="grid flex-1 grid-cols-3 gap-2">
+             {ORDER_TYPES.map((t) => (
+@@ -1223,7 +1268,7 @@ export function PosClient({
+           className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm sm:p-4"
+           onMouseDown={(e) => e.target === e.currentTarget && setNoteFor(null)}
+         >
+-          <div className="w-full sm:max-w-[420px] rounded-t-2xl sm:rounded-2xl border border-line bg-surface p-5 shadow-2xl">
++          <div className="w-full sm:max-w-[420px] max-h-[90dvh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-line bg-surface p-5 shadow-2xl">
+             <div className="flex items-center justify-between">
+               <h3 className="font-display text-lg font-semibold">{cart.find((l) => l.productId === noteFor)?.name ?? "Item note"}</h3>
+               <button
+@@ -1606,6 +1651,7 @@ export function PosClient({
+         </div>
+       )}
+       <SessionHeartbeat />
++      <NewOrderAlert />
+       {isTauri() && (
+         <ClockOutDialog
+           open={clockOutOpen}
+diff --git a/components/desktop-sync-bar.tsx b/components/desktop-sync-bar.tsx
+index d51e617..9d065fa 100644
+--- a/components/desktop-sync-bar.tsx
++++ b/components/desktop-sync-bar.tsx
+@@ -92,7 +92,7 @@ export function DesktopSyncBar() {
+     <>
+       {st.locked && (
+         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-6">
+-          <div className="max-w-sm rounded-2xl border border-line bg-surface p-6 text-center">
++          <div className="max-w-sm max-h-[90dvh] overflow-y-auto rounded-2xl border border-line bg-surface p-6 text-center">
+             <h2 className="mb-2 font-display text-lg font-semibold">Sync required</h2>
+             <p className="mb-4 text-sm text-ink-faint">{st.lock_reason}</p>
+             {st.pending_sales > 0 && <p className="mb-4 text-sm">{st.pending_sales} sale(s) are saved on this device and will upload during the sync.</p>}
+diff --git a/components/edit-order-modal.tsx b/components/edit-order-modal.tsx
+index 08a8d2d..42c0f31 100644
+--- a/components/edit-order-modal.tsx
++++ b/components/edit-order-modal.tsx
+@@ -102,7 +102,7 @@ export function EditOrderModal({
+   return (
+     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-5" onClick={onClose}>
+       <div
+-        className="w-full max-w-lg rounded-xl border border-line bg-surface shadow-2xl max-h-[88vh] overflow-y-auto"
++        className="w-full max-w-lg rounded-xl border border-line bg-surface shadow-2xl max-h-[88dvh] overflow-y-auto"
+         onClick={(e) => e.stopPropagation()}
+       >
+         <div className="flex items-center justify-between px-5 py-4 border-b border-line-soft">
+diff --git a/components/new-order-alert.tsx b/components/new-order-alert.tsx
+new file mode 100644
+index 0000000..0754d7c
+--- /dev/null
++++ b/components/new-order-alert.tsx
+@@ -0,0 +1,129 @@
++"use client";
++import { useEffect, useRef, useState } from "react";
++import { usePathname, useRouter } from "next/navigation";
++import { Bell, X } from "lucide-react";
++import { isOrderSoundOn, isOwnOrder, playOrderChime, primeOrderSound } from "@/lib/order-alert";
++import { fmtMoney } from "@/lib/format";
++
++type NewSale = { id: string; order_no: number | string; display_id: string | null; total: number; order_type: string; cashier: string | null };
++type Toast = { key: string; title: string; body: string };
++
++const POLL_MS = 8000;
++const TOAST_MS = 15000;
++const TYPE_LABEL: Record<string, string> = { dine_in: "Dine in", takeaway: "Takeaway", delivery: "Delivery" };
++
++/** Announces orders placed on OTHER devices, on whatever page is open: a chime (if sound is on) and a banner that blinks
++ *  and opens the Ticket Rail when clicked; a desktop notification too when the browser tab is in the background and
++ *  notifications are allowed. Polls /api/sales/new every few seconds. The Ticket Rail page already blinks + chimes for
++ *  new tickets itself, so there only the banner is added. Renders nothing until an order arrives. */
++export function NewOrderAlert() {
++  const router = useRouter();
++  const pathname = usePathname();
++  const pathRef = useRef(pathname);
++  pathRef.current = pathname;
++  const [toasts, setToasts] = useState<Toast[]>([]);
++  const [canAsk, setCanAsk] = useState(false);
++
++  useEffect(() => {
++    let stopped = false;
++    let since: string | null = null;
++    try {
++      since = sessionStorage.getItem("rp_alert_since");
++    } catch {
++      /* ignore */
++    }
++    setCanAsk(typeof Notification !== "undefined" && Notification.permission === "default");
++
++    async function poll() {
++      if (stopped) return;
++      try {
++        const res = await fetch(`/api/sales/new${since ? `?since=${encodeURIComponent(since)}` : ""}`, { cache: "no-store" });
++        if (res.status === 403) {
++          stopped = true; // this role can't see orders: nothing to announce
++          return;
++        }
++        if (!res.ok) return;
++        const d = (await res.json()) as { now: string; sales: NewSale[] };
++        since = d.now;
++        try {
++          sessionStorage.setItem("rp_alert_since", d.now);
++        } catch {
++          /* ignore */
++        }
++        const fresh = d.sales.filter((s) => !isOwnOrder(s)); // not the order this device just placed
++        if (fresh.length === 0) return;
++
++        if (isOrderSoundOn() && !pathRef.current.startsWith("/ticket-rail")) playOrderChime();
++        const items: Toast[] = fresh.map((s) => ({
++          key: s.id,
++          title: `New order #${s.display_id ?? s.order_no}`,
++          body: `${TYPE_LABEL[s.order_type] ?? s.order_type} · ${fmtMoney(s.total)}${s.cashier ? ` · ${s.cashier}` : ""}`,
++        }));
++        setToasts((prev) => [...prev, ...items].slice(-4));
++        for (const t of items) setTimeout(() => setToasts((prev) => prev.filter((x) => x.key !== t.key)), TOAST_MS);
++
++        if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
++          const first = items[0];
++          new Notification(items.length > 1 ? `${items.length} new orders` : first.title, { body: items.length > 1 ? "Open the Ticket Rail" : first.body, tag: "rp-new-order" });
++        }
++      } catch {
++        /* offline: try again next time */
++      }
++    }
++
++    // browsers only allow sound after the person has touched the page once
++    const unlock = () => primeOrderSound();
++    window.addEventListener("pointerdown", unlock, { once: true });
++    window.addEventListener("keydown", unlock, { once: true });
++    poll();
++    const timer = setInterval(poll, POLL_MS);
++    return () => {
++      stopped = true;
++      clearInterval(timer);
++      window.removeEventListener("pointerdown", unlock);
++      window.removeEventListener("keydown", unlock);
++    };
++  }, []);
++
++  if (toasts.length === 0) return null;
++  return (
++    <div className="pointer-events-none fixed right-4 top-4 z-[70] flex w-[min(92vw,340px)] flex-col gap-2">
++      {toasts.map((t) => (
++        <div key={t.key} className="pointer-events-auto flex animate-pulse items-start gap-3 rounded-xl border-2 border-chili-500 bg-surface p-3 shadow-2xl">
++          <button
++            onClick={() => {
++              setToasts((prev) => prev.filter((x) => x.key !== t.key));
++              router.push("/ticket-rail");
++            }}
++            className="flex min-w-0 flex-1 items-start gap-3 text-left"
++          >
++            <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-chili-500 text-white">
++              <Bell className="h-4 w-4" />
++            </span>
++            <span className="min-w-0">
++              <span className="block text-sm font-bold text-ink-strong">{t.title}</span>
++              <span className="block truncate text-xs text-ink-mid">{t.body}</span>
++              <span className="mt-1 block text-[11px] font-semibold text-chili-500">Open Ticket Rail →</span>
++              {canAsk && (
++                <span
++                  role="button"
++                  tabIndex={0}
++                  onClick={(e) => {
++                    e.stopPropagation();
++                    Notification.requestPermission().then(() => setCanAsk(false));
++                  }}
++                  className="mt-1 block text-[11px] font-semibold text-ink-mid underline"
++                >
++                  Also show desktop notifications
++                </span>
++              )}
++            </span>
++          </button>
++          <button onClick={() => setToasts((prev) => prev.filter((x) => x.key !== t.key))} className="text-ink-faint hover:text-ink-strong" aria-label="Dismiss">
++            <X className="h-4 w-4" />
++          </button>
++        </div>
++      ))}
++    </div>
++  );
++}
+diff --git a/components/print-bill-button.tsx b/components/print-bill-button.tsx
+new file mode 100644
+index 0000000..177d2ea
+--- /dev/null
++++ b/components/print-bill-button.tsx
+@@ -0,0 +1,44 @@
++"use client";
++import { useState } from "react";
++import { Printer } from "lucide-react";
++import { printSimpleSlip, type SlipRow } from "@/lib/posPrint";
++import { getSlipContext } from "@/lib/print-context";
++
++/** A small "Print" button for a table row. `bill` builds the bill's title and rows; the restaurant name and paper size
++ *  are added here. Prints on the receipt printer in the desktop app, or opens the browser's print dialog on the web. */
++export function PrintBillButton({ bill, label = "Print bill" }: { bill: () => { title: string; rows: SlipRow[] }; label?: string }) {
++  const [busy, setBusy] = useState(false);
++  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
++
++  async function print() {
++    setBusy(true);
++    setMsg(null);
++    try {
++      const ctx = await getSlipContext();
++      const b = bill();
++      const where = await printSimpleSlip({ ...ctx, title: b.title, rows: b.rows });
++      setMsg({ ok: true, text: where === "printer" ? "Sent to the printer" : "Print dialog opened" });
++    } catch (e) {
++      setMsg({ ok: false, text: `Couldn't print: ${e instanceof Error ? e.message : String(e)}` });
++    } finally {
++      setBusy(false);
++      setTimeout(() => setMsg(null), 4000);
++    }
++  }
++
++  return (
++    <div className="relative inline-flex flex-col items-end">
++      <button
++        onClick={print}
++        disabled={busy}
++        title={label}
++        aria-label={label}
++        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line bg-raised px-2.5 text-xs font-semibold text-ink-mid hover:border-chili-500/60 hover:text-ink-strong disabled:opacity-50"
++      >
++        <Printer className="h-3.5 w-3.5" />
++        {busy ? "…" : "Print"}
++      </button>
++      {msg && <span className={`absolute right-0 top-9 z-10 w-48 rounded-md border bg-surface px-2 py-1 text-[11px] shadow-lg ${msg.ok ? "border-basil-500/40 text-basil-400" : "border-crimson-500/40 text-crimson-400"}`}>{msg.text}</span>}
++    </div>
++  );
++}
+diff --git a/components/ui/modal.tsx b/components/ui/modal.tsx
+index 8f7b1cc..30e8185 100644
+--- a/components/ui/modal.tsx
++++ b/components/ui/modal.tsx
+@@ -43,7 +43,7 @@ export function Modal({
+         if (e.target === e.currentTarget && !busy) onClose();
+       }}
+     >
+-      <div className={`w-full ${width} max-h-[90vh] flex flex-col rounded-xl border border-line bg-surface shadow-xl`}>
++      <div className={`w-full ${width} max-h-[90dvh] flex flex-col rounded-xl border border-line bg-surface shadow-xl`}>
+         <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-4 shrink-0">
+           <h3 className="font-display text-lg font-semibold text-ink-strong">{title}</h3>
+           <button
+@@ -55,8 +55,9 @@ export function Modal({
+             <X className="h-4 w-4" />
+           </button>
+         </div>
+-        <div className="relative">
+-          <div className="overflow-y-auto px-5 py-4 space-y-3">{children}</div>
++        {/* min-h-0 + flex-1 let this part shrink inside the card, so tall content scrolls instead of running off-screen */}
++        <div className="relative flex min-h-0 flex-1 flex-col">
++          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 space-y-3">{children}</div>
+           <LoadingOverlay show={busy} />
+         </div>
+         {footer && <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3 shrink-0">{footer}</div>}
+diff --git a/lib/order-alert.ts b/lib/order-alert.ts
+index d4319f0..b147ac5 100644
+--- a/lib/order-alert.ts
++++ b/lib/order-alert.ts
+@@ -58,3 +58,29 @@ export function playOrderChime() {
+     /* ignore */
+   }
+ }
++
++// ---- orders placed on THIS device: no alert for them -------------------------------------------------------------
++const OWN_KEY = "rp_own_orders";
++const OWN_MS = 10 * 60_000;
++
++/** The POS calls this when it saves a sale, so the new-order alert doesn't announce your own order back to you. */
++export function markOwnOrder(orderNo: string | number | null | undefined) {
++  if (orderNo === null || orderNo === undefined || orderNo === "") return;
++  try {
++    const now = Date.now();
++    const list = (JSON.parse(localStorage.getItem(OWN_KEY) || "[]") as { n: string; at: number }[]).filter((o) => now - o.at < OWN_MS);
++    list.push({ n: String(orderNo), at: now });
++    localStorage.setItem(OWN_KEY, JSON.stringify(list.slice(-50)));
++  } catch {
++    /* storage unavailable */
++  }
++}
++export function isOwnOrder(s: { order_no?: string | number | null; display_id?: string | null }): boolean {
++  try {
++    const now = Date.now();
++    const list = (JSON.parse(localStorage.getItem(OWN_KEY) || "[]") as { n: string; at: number }[]).filter((o) => now - o.at < OWN_MS);
++    return list.some((o) => o.n === String(s.order_no) || (!!s.display_id && o.n === s.display_id));
++  } catch {
++    return false;
++  }
++}
+diff --git a/lib/posPrint.ts b/lib/posPrint.ts
+index b21c21a..dfd897e 100644
+--- a/lib/posPrint.ts
++++ b/lib/posPrint.ts
+@@ -467,3 +467,76 @@ export async function printShiftSlip(s: ShiftSlip) {
+   if (!hasTauri()) throw new Error("printing works in the desktop app only");
+   await printToRole("receipt", buildShiftSlip(s));
+ }
++
++// ---------------------------------------------------------------------------------------------------------------------
++// Simple bills / vouchers (supplier payment bill, expense voucher): a title, then rows. Desktop app -> receipt printer;
++// in the browser -> the browser's print dialog with a receipt-width page (so "Save as PDF" works there too).
++
++export type SlipRow = { left: string; right?: string; bold?: boolean } | { text: string; bold?: boolean; center?: boolean } | { rule: true };
++export type SimpleSlip = { restaurantName?: string; paper: string; title: string; rows: SlipRow[] };
++
++export function buildSimpleSlip(s: SimpleSlip): number[] {
++  const b = new Buf(colsFor(s.paper), dotsFor(s.paper));
++  b.align("center");
++  if (s.restaurantName) {
++    b.bold(true);
++    for (const l of wrap(s.restaurantName, b.cols)) b.line(l);
++    b.bold(false);
++  }
++  b.bold(true).size(true).line(s.title).size(false).bold(false);
++  b.align("left").rule();
++  for (const r of s.rows) {
++    if ("rule" in r) b.rule();
++    else if ("text" in r) {
++      b.align(r.center ? "center" : "left").bold(!!r.bold);
++      for (const l of r.text ? wrap(r.text, b.cols) : [""]) b.line(l);
++      b.bold(false).align("left");
++    } else {
++      b.bold(!!r.bold).row(r.left, r.right ?? "").bold(false);
++    }
++  }
++  b.rule();
++  b.align("center").line(`Printed ${new Date().toLocaleString()}`).align("left").line();
++  return b.cut().bytes;
++}
++
++const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
++
++function printInBrowser(s: SimpleSlip) {
++  const width = String(s.paper) === "58" ? "58mm" : "80mm";
++  const rows = s.rows
++    .map((r) => {
++      if ("rule" in r) return '<hr/>';
++      if ("text" in r) return `<div class="t${r.center ? " c" : ""}${r.bold ? " b" : ""}">${r.text ? esc(r.text) : "&nbsp;"}</div>`;
++      return `<div class="r${r.bold ? " b" : ""}"><span>${esc(r.left)}</span><span>${esc(r.right ?? "")}</span></div>`;
++    })
++    .join("");
++  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(s.title)}</title><style>
++    @page { size: ${width} auto; margin: 4mm; }
++    body { width: ${width}; margin: 0 auto; font: 12px/1.4 "Courier New", monospace; color: #000; }
++    .h { text-align: center; font-weight: bold; } .title { text-align: center; font-weight: bold; font-size: 16px; margin: 2px 0; }
++    hr { border: 0; border-top: 1px dashed #000; margin: 6px 0; }
++    .r { display: flex; justify-content: space-between; gap: 8px; } .r span:last-child { text-align: right; }
++    .t { word-break: break-word; } .c { text-align: center; } .b { font-weight: bold; }
++  </style></head><body>${s.restaurantName ? `<div class="h">${esc(s.restaurantName)}</div>` : ""}<div class="title">${esc(s.title)}</div><hr/>${rows}<hr/><div class="c">Printed ${esc(new Date().toLocaleString())}</div></body></html>`;
++  const w = window.open("", "_blank", "width=420,height=640");
++  if (!w) throw new Error("the browser blocked the print window - allow pop-ups for this site");
++  w.document.open();
++  w.document.write(html);
++  w.document.close();
++  w.focus();
++  setTimeout(() => {
++    w.print();
++    w.close();
++  }, 250);
++}
++
++/** Prints a bill. Returns where it went: "printer" (receipt printer, desktop app) or "browser" (print dialog). */
++export async function printSimpleSlip(s: SimpleSlip): Promise<"printer" | "browser"> {
++  if (hasTauri()) {
++    await printToRole("receipt", buildSimpleSlip(s));
++    return "printer";
++  }
++  printInBrowser(s);
++  return "browser";
++}
+diff --git a/lib/print-context.ts b/lib/print-context.ts
+new file mode 100644
+index 0000000..1f29faf
+--- /dev/null
++++ b/lib/print-context.ts
+@@ -0,0 +1,15 @@
++/** Restaurant name + paper width for printed bills, read from the settings once and kept for a minute. */
++let cache: { at: number; value: { restaurantName: string; paper: string } } | null = null;
++
++export async function getSlipContext(): Promise<{ restaurantName: string; paper: string }> {
++  if (cache && Date.now() - cache.at < 60_000) return cache.value;
++  let value = { restaurantName: "", paper: "80" };
++  try {
++    const d = await (await fetch("/api/settings")).json();
++    value = { restaurantName: d.restaurant?.name ?? "", paper: d.settings?.paper_width ? String(d.settings.paper_width) : "80" };
++    cache = { at: Date.now(), value };
++  } catch {
++    /* print without the name rather than not at all */
++  }
++  return value;
++}
+diff --git a/lib/products-query.ts b/lib/products-query.ts
+index ddd5037..636d842 100644
+--- a/lib/products-query.ts
++++ b/lib/products-query.ts
+@@ -2,25 +2,33 @@ import type { createAdminClient } from "@/lib/supabase/admin";
+ 
+ const BASE = "id, restaurant_id, category_id, name, price, image_url, is_available, updated_at";
+ 
+-/** Live products of a restaurant, with the category (name, order, colour) joined.
+- *  Falls back step by step when a migration hasn't been applied yet (0018 deleted_at, 0021 name_ur / color, 0022 category name_ur),
+- *  so the app keeps working in the meantime, just without the newer fields. */
++/** Live products of a restaurant, with the category (name, order, colour) joined, in the order set on the Menu page
++ *  (products.sort_order, migration 0029; then A-Z for ties).
++ *  Falls back step by step when a migration hasn't been applied yet (0029 sort_order, 0018 deleted_at, 0021 name_ur / color,
++ *  0022 category name_ur), so the app keeps working in the meantime, just without the newer fields. */
+ export async function listProducts(admin: ReturnType<typeof createAdminClient>, restaurantId: string) {
+   const attempts: { cols: string; live: boolean }[] = [
+-    { cols: `${BASE}, name_ur, menu_categories(name, name_ur, sort_order, color)`, live: true }, // 0022 adds the category's Urdu name
+-    { cols: `${BASE}, name_ur, menu_categories(name, sort_order, color)`, live: true },
+-    { cols: `${BASE}, menu_categories(name, sort_order)`, live: true },
+-    { cols: `${BASE}, name_ur, menu_categories(name, name_ur, sort_order, color)`, live: false },
+-    { cols: `${BASE}, name_ur, menu_categories(name, sort_order, color)`, live: false },
+-    { cols: `${BASE}, menu_categories(name, sort_order)`, live: false },
++    { cols: `, name_ur, menu_categories(name, name_ur, sort_order, color)`, live: true }, // 0022 adds the category's Urdu name
++    { cols: `, name_ur, menu_categories(name, sort_order, color)`, live: true },
++    { cols: `, menu_categories(name, sort_order)`, live: true },
++    { cols: `, name_ur, menu_categories(name, name_ur, sort_order, color)`, live: false },
++    { cols: `, name_ur, menu_categories(name, sort_order, color)`, live: false },
++    { cols: `, menu_categories(name, sort_order)`, live: false },
+   ];
+   let last: { data: any; error: any } = { data: null, error: null };
+-  for (const a of attempts) {
+-    let q: any = admin.from("products").select(a.cols).eq("restaurant_id", restaurantId).order("name");
+-    if (a.live) q = q.is("deleted_at", null); // removed products stay in the database for old sales but are never listed
+-    last = await q;
+-    if (!last.error) return last;
+-    if (!/deleted_at|name_ur|color/.test(last.error.message)) return last; // a real error, don't mask it
++  for (const sorted of [true, false]) {
++    for (const a of attempts) {
++      let q: any = admin
++        .from("products")
++        .select(`${BASE}${sorted ? ", sort_order" : ""}${a.cols}`)
++        .eq("restaurant_id", restaurantId);
++      if (sorted) q = q.order("sort_order");
++      q = q.order("name");
++      if (a.live) q = q.is("deleted_at", null); // removed products stay in the database for old sales but are never listed
++      last = await q;
++      if (!last.error) return last;
++      if (!/deleted_at|name_ur|color|sort_order/.test(last.error.message)) return last; // a real error, don't mask it
++    }
+   }
+   return last;
+ }
+diff --git a/supabase/migrations/0029_item_order_and_hide_inventory.sql b/supabase/migrations/0029_item_order_and_hide_inventory.sql
+new file mode 100644
+index 0000000..ec8e4c0
+--- /dev/null
++++ b/supabase/migrations/0029_item_order_and_hide_inventory.sql
+@@ -0,0 +1,32 @@
++-- =====================================================================
++-- RESTRO PRO - Supabase migration 0029
++--   1. products.sort_order        - the order of menu items. Menu page -> "Rearrange" saves it; POS shows items in it
++--                                   (within their category). IDENTITY column, like migration 0016: a product created later
++--                                   automatically goes to the end of the list. Existing products are numbered once,
++--                                   per category, by name (their previous order).
++--   2. expense_categories.sort_order - the order of expense categories (Users & Permissions page); the Expenses page
++--                                   category list follows it. Same identity approach.
++--   3. inventory_items.deleted_at - "Remove" on the Inventory page hides an item instead of deleting it (so history,
++--                                   purchases and old productions keep working), like products.deleted_at (0018).
++-- Safe to run twice.
++-- =====================================================================
++alter table public.inventory_items add column if not exists deleted_at timestamptz;
++
++do $$
++begin
++  if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'products' and column_name = 'sort_order') then
++    alter table public.products add column sort_order bigint generated by default as identity;
++    update public.products p set sort_order = r.rn
++      from (select id, row_number() over (partition by restaurant_id, category_id order by name) as rn from public.products) r
++      where r.id = p.id;
++  end if;
++
++  if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'expense_categories' and column_name = 'sort_order') then
++    alter table public.expense_categories add column sort_order bigint generated by default as identity;
++    update public.expense_categories c set sort_order = r.rn
++      from (select id, row_number() over (partition by restaurant_id order by name) as rn from public.expense_categories) r
++      where r.id = c.id;
++  end if;
++end $$;
++
++notify pgrst, 'reload schema';
+-- 
+2.43.0
+

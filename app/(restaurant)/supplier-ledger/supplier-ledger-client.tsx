@@ -5,6 +5,7 @@ import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge } from "@/compon
 import { fmtMoney, todayISO } from "@/lib/format";
 import { fetchJson } from "@/lib/fetch-json";
 import { LoadMore, useProgressive } from "@/components/ui/load-more";
+import { PrintBillButton } from "@/components/print-bill-button";
 
 type Supplier = { id: string; name: string };
 type PaymentMethod = { id: string; name: string };
@@ -124,6 +125,7 @@ export function SupplierLedgerClient() {
                   <Th>Amount</Th>
                   <Th>Method</Th>
                   <Th>Note</Th>
+                  <Th> </Th>
                 </tr>
               </thead>
               <tbody>
@@ -136,9 +138,31 @@ export function SupplierLedgerClient() {
                       <Badge>{l.method}</Badge>
                     </Td>
                     <Td className="text-ink-mid">{l.note || "—"}</Td>
+                    <Td className="text-right">
+                      <PrintBillButton
+                        label="Print payment bill"
+                        bill={() => ({
+                          title: "SUPPLIER PAYMENT",
+                          rows: [
+                            { text: `Bill no: SP-${l.id.slice(0, 8).toUpperCase()}`, center: true },
+                            { rule: true },
+                            { left: "Date", right: l.txn_date },
+                            { left: "Supplier", right: l.suppliers?.name ?? "-" },
+                            { left: "Method", right: l.method },
+                            { rule: true },
+                            { left: "Amount paid", right: fmtMoney(l.amount), bold: true },
+                            ...(l.note ? ([{ rule: true }, { text: `Note: ${l.note}` }] as const) : []),
+                            { text: "" },
+                            { text: "Paid by: ______________________" },
+                            { text: "" },
+                            { text: "Received by: ___________________" },
+                          ],
+                        })}
+                      />
+                    </Td>
                   </tr>
                 ))}
-                {entries.length === 0 && <EmptyRow colSpan={5} label="No payments logged yet." />}
+                {entries.length === 0 && <EmptyRow colSpan={6} label="No payments logged yet." />}
               </tbody>
             </table>
           </TableScroll>

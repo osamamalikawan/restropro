@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { RotateCw, Pencil } from "lucide-react";
+import { RotateCw, Pencil, Trash2 } from "lucide-react";
 import { Modal, Field, inputCls, btnPrimary, btnGhost } from "@/components/ui/modal";
 import { Panel, PanelHead, TableScroll, Th, Td, EmptyRow, Badge, IconBtn, searchInputCls, addBtnCls } from "@/components/ui/panel";
 import { fmtMoney } from "@/lib/format";
@@ -48,6 +48,8 @@ export function InventoryClient() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [removeMsg, setRemoveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
   // "Import ingredients" — pick from the platform's master ingredient list
   const [importOpen, setImportOpen] = useState(false);
@@ -176,6 +178,32 @@ export function InventoryClient() {
     setModalOpen(true);
   }
 
+  /** "Remove" hides the item (nothing is deleted). The server refuses - and says why - when the item is still used in a
+   *  product recipe or in a self-made item's recipe. */
+  async function removeItem(item: Item) {
+    if (!confirm(`Remove "${item.name}" from inventory?\n\nIt will be hidden from the lists. Nothing is deleted - sales and purchase history stay as they are.`)) return;
+    setRemovingId(item.id);
+    setRemoveMsg(null);
+    try {
+      const res = await fetch("/api/inventory", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "delete", row: { id: item.id } }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRemoveMsg({ ok: false, text: d.error ?? "Could not remove the item" });
+      } else {
+        setRemoveMsg({ ok: true, text: `"${item.name}" removed.` });
+        await load();
+      }
+    } catch {
+      setRemoveMsg({ ok: false, text: "Couldn't reach the server - nothing was removed." });
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
   async function save() {
     if (!fName.trim()) {
       setError("Item name is required");
@@ -228,6 +256,12 @@ export function InventoryClient() {
         {loadError && (
           <p className="mx-5 mt-4 rounded-lg border border-crimson-500/30 bg-crimson-500/10 px-3 py-2 text-xs text-crimson-400">
             Couldn&apos;t load inventory: {loadError}
+          </p>
+        )}
+        {removeMsg && (
+          <p className={`mx-5 mt-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-xs ${removeMsg.ok ? "border-basil-500/30 bg-basil-500/10 text-basil-400" : "border-crimson-500/30 bg-crimson-500/10 text-crimson-400"}`}>
+            <span>{removeMsg.text}</span>
+            <button onClick={() => setRemoveMsg(null)} className="font-bold" aria-label="Dismiss">×</button>
           </p>
         )}
         <TableScroll>
@@ -287,6 +321,9 @@ export function InventoryClient() {
                         </IconBtn>
                         <IconBtn title="Edit" onClick={() => openEdit(i)}>
                           <Pencil className="h-3.5 w-3.5" />
+                        </IconBtn>
+                        <IconBtn title="Remove (hide) this item" onClick={() => removingId === null && removeItem(i)}>
+                          <Trash2 className="h-3.5 w-3.5" />
                         </IconBtn>
                       </div>
                     </Td>

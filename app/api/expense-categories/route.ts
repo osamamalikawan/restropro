@@ -7,11 +7,17 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
   const admin = createAdminClient();
-  let { data } = await admin
+  // in the order set on Users & Permissions (migration 0029); A-Z until that migration is run
+  let ordered = await admin
     .from("expense_categories")
     .select("id, name")
     .eq("restaurant_id", session.restaurantId)
+    .order("sort_order")
     .order("name");
+  if (ordered.error) {
+    ordered = await admin.from("expense_categories").select("id, name").eq("restaurant_id", session.restaurantId).order("name");
+  }
+  let data = ordered.data;
 
   if (!data || data.length === 0) {
     const defaults = ["Utilities", "Rent", "Maintenance", "Marketing", "Salaries", "Other"];

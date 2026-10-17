@@ -102,7 +102,7 @@ export function EditOrderModal({
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-5" onClick={onClose}>
       <div
-        className="w-full max-w-lg rounded-xl border border-line bg-surface shadow-2xl max-h-[88vh] overflow-y-auto"
+        className="w-full max-w-lg rounded-xl border border-line bg-surface shadow-2xl max-h-[88dvh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-line-soft">
